@@ -2,6 +2,7 @@
 import csv
 import re
 import logging
+import shutil
 import pandas as pd
 import openpyxl
 from datetime import datetime
@@ -668,6 +669,16 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 logger.warning("未找到“实验ID”位置，未回写任务ID")
         except Exception as exc:
             logger.warning("任务ID回写失败: %s", exc)
+
+        # 8. 将模板文件拷贝到 data/tasks/<task_id>/ 并重命名为任务ID
+        try:
+            task_dir = MODULE_ROOT / "data" / "tasks" / str(task_id)
+            task_dir.mkdir(parents=True, exist_ok=True)          # 创建任务文件夹(若已存在则忽略)
+            dest_path = task_dir / f"{task_id}{t_path.suffix}"   # 目标路径: <task_id>.xlsx
+            shutil.copy2(t_path, dest_path)                      # 拷贝并保留元数据
+            logger.info("已将模板文件拷贝至任务目录: %s", dest_path)
+        except Exception as exc:
+            logger.warning("模板文件拷贝至任务目录失败: %s", exc)
 
         return task_id
 
