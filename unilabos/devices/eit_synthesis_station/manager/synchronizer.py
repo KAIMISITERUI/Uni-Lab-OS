@@ -11,21 +11,21 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from typing import Dict, Any, List, Optional, Tuple
-from unilabos.devices.workstation.workstation_base import WorkstationBase, ResourceSynchronizer
-from unilabos.utils.log import logger
-from unilabos.ros.nodes.presets.workstation import ROS2WorkstationNode
+from ...workstation.workstation_base import WorkstationBase, ResourceSynchronizer
+from ....utils.log import logger
+from ....ros.nodes.presets.workstation import ROS2WorkstationNode
 from pylabrobot.resources import Resource, Container, ResourceHolder, Well
-from unilabos.resources import resource_tracker
-from unilabos.utils import cls_creator
-from unilabos.ros.nodes.base_device_node import ROS2DeviceNode
+from ....resources import resource_tracker
+from ....utils import cls_creator
+from ....ros.nodes.base_device_node import ROS2DeviceNode
 import uuid
 from ..controller.station_controller import SynthesisStationController
 from ..config.setting import Settings, configure_logging
 from ..config.constants import ResourceCode, TRAY_CODE_DISPLAY_NAME, TraySpec
-from unilabos.resources.eit_synthesis_station import bottle_carriers, items
-from unilabos.resources.eit_synthesis_station.decks import EIT_Synthesis_Station_Deck
-from unilabos.resources.warehouse import WareHouse
-from unilabos.resources.itemized_carrier import BottleCarrier
+from ....resources.eit_synthesis_station import bottle_carriers, items
+from ....resources.eit_synthesis_station.decks import EIT_Synthesis_Station_Deck
+from ....resources.warehouse import WareHouse
+from ....resources.itemized_carrier import BottleCarrier
 
 def normalize_layout_code(eit_code: Optional[str]) -> Optional[str]:
     if not eit_code or "-" not in eit_code:
