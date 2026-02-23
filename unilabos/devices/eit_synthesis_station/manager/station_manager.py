@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 import csv
 import re
-import shutil
 import logging
-from datetime import datetime
 import pandas as pd
 import openpyxl
+from datetime import datetime
 from openpyxl import Workbook,load_workbook
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.workbook.defined_name import DefinedName
@@ -24,6 +23,9 @@ from ..driver.exceptions import ValidationError,ApiError
 logger = logging.getLogger("StationManager")
 
 JsonDict = Dict[str, Any]
+
+# 模块根目录, 用于构建相对路径
+MODULE_ROOT = Path(__file__).resolve().parent.parent
 
 class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationController):
     """
@@ -257,7 +259,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         
         logger.info(f"化学品对齐完成并回写文件: {path}")
 
-    # ----------- 2. 上料动作 -------------
+    # ---------- 2. 上料动作 ----------
     def batch_in_tray_by_file(self, file_path: str) -> JsonDict:
         """
         功能:
@@ -303,6 +305,91 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         return resp
 
+    def batch_in_tray_with_agv_transfer(
+        self,
+        file_path: str = None,
+        *,
+        block: bool = True
+    ) -> JsonDict:
+        """
+        功能:
+            根据 batch_in_tray.xlsx 中的信息, 先使用 AGV 批量转移物料到合成工站,
+            然后让 AGV 前往充电站, 最后执行上料操作
+        参数:
+            file_path: 上料文件路径, 默认为 sheet/batch_in_tray.xlsx
+            block: 是否阻塞等待 AGV 转运完成
+        返回:
+            Dict, 包含转运、充电和上料的结果:
+                - transfer_result: Dict, AGV 转运结果
+                - charging_result: Dict, AGV 充电结果
+                - in_tray_result: Dict, 上料结果
+        """
+        # 设置默认文件路径
+        if file_path is None:
+            file_path = str(MODULE_ROOT / "sheet" / "batch_in_tray.xlsx")
+
+        # 1. 使用 AGV 批量转移物料到合成工站
+        logger.info("开始使用 AGV 批量转移物料到合成工站")
+        transfer_result = self.auto_load_trays_from_agv(
+            batch_in_file=file_path,
+            block=block
+        )
+
+        # 检查转运是否成功
+        if not transfer_result.get("success"):
+            logger.error("AGV 转运失败, 停止后续操作")
+            return {
+                "transfer_result": transfer_result,
+                "charging_result": None,
+                "in_tray_result": None,
+                "success": False,
+                "message": "AGV 转运失败"
+            }
+
+        logger.info(f"AGV 转运成功, 共转运 {transfer_result.get('transferred_trays')} 个托盘")
+
+        # 2. 让 AGV 前往充电站
+        logger.info("开始让 AGV 前往充电站")
+        charging_result = None
+        try:
+            import sys
+            from pathlib import Path
+            sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+            from eit_agv.controller.agv_controller import AGVController
+            agv_controller = AGVController()
+
+            charging_result = agv_controller.go_to_charging_station()
+            if charging_result is not None:
+                logger.info("AGV 已成功前往充电站")
+            else:
+                logger.warning("AGV 前往充电站失败, 但继续执行上料操作")
+        except Exception as e:
+            logger.error(f"AGV 前往充电站时发生异常: {e}, 但继续执行上料操作")
+
+        # 3. 执行上料操作
+        logger.info("开始执行上料操作")
+        in_tray_result = None
+        try:
+            in_tray_result = self.batch_in_tray_by_file(file_path)
+            logger.info(f"上料操作完成, 结果: {in_tray_result}")
+        except Exception as e:
+            logger.error(f"上料操作发生异常: {e}")
+            return {
+                "transfer_result": transfer_result,
+                "charging_result": charging_result,
+                "in_tray_result": None,
+                "success": False,
+                "message": f"上料操作失败: {e}"
+            }
+
+        return {
+            "transfer_result": transfer_result,
+            "charging_result": charging_result,
+            "in_tray_result": in_tray_result,
+            "success": True,
+            "message": "AGV 转运、充电和上料操作全部完成"
+        }
+
     def _generate_batch_in_tray_template(self, file_path: Path) -> None:
         """
         功能:
@@ -315,9 +402,11 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         wb = Workbook()
         ws = wb.active
         ws.title = "batch_in_tray"
-        ws.append(["position", "tray_type", "content"])
+        ws.append(["position", "tray_type", "content", "shelf_position", "storage"])
         ws.column_dimensions["B"].width = 60
         ws.column_dimensions["C"].width = 80
+        ws.column_dimensions["D"].width = 15
+        ws.column_dimensions["E"].width = 50
 
         # 位置下拉，包含 TB 列与 W-1-1~W-1-8 货位
         positions_tb = [f"TB-{row}-{col}" for row in (1, 2) for col in range(1, 5)]
@@ -383,6 +472,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         dv_tray.add("B2:B101")
 
         ws["C1"] = "content(耗材填数量; 物质填: A1|名称|2mL; B2|名称|5mg)"
+        ws["D1"] = "shelf_position"
+        ws["E1"] = "storage(格式: 物质|位置; 多个用;隔开)"
         wb.save(file_path)
         logger.info(f"已生成上料模板: {file_path}")
 
@@ -536,39 +627,21 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             resp = self.add_task(task_payload)
         except ApiError as exc:
             if getattr(exc, "code", None) == 409:
+                # 自动重命名: 在任务名称后添加当前日期时间(精确到秒)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
                 task_name = task_payload.get("task_name") or params.get("实验名称")
+                new_task_name = f"{task_name}_{timestamp}"
 
-                # 开启自动重命名时: 追加秒级时间戳后缀后重试一次
-                if self._settings.auto_rename_on_duplicate and task_name:
-                    timestamp_suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    new_task_name = f"{task_name}_{timestamp_suffix}"
-                    task_payload["task_name"] = new_task_name
+                task_payload["task_name"] = new_task_name
+                logger.info(f"任务名称重复, 自动重命名为: {new_task_name}")
 
-                    logger.warning(
-                        "任务名称 '%s' 已存在(409), 自动重命名为 '%s' 后重试",
-                        task_name,
-                        new_task_name,
-                    )
-                    try:
-                        resp = self.add_task(task_payload)   # 以新名称重新提交
-                    except ApiError as retry_exc:
-                        # 重试仍失败: 记录错误并抛出
-                        retry_msg = (
-                            f"任务重命名后上传仍失败(code={retry_exc.code}): {new_task_name}"
-                        )
-                        logger.error(retry_msg)
-                        raise ApiError(
-                            code=retry_exc.code, msg=retry_msg, payload=retry_exc.payload
-                        ) from retry_exc
-                else:
-                    # 未开启自动重命名: 直接告知用户手动修改
-                    dup_msg = (
-                        f"任务上传失败，请检查任务名称是否重复: {task_name}"
-                        if task_name
-                        else "任务名称重复，请修改任务/实验名称后重试"
-                    )
-                    logger.error(dup_msg)
-                    raise ApiError(code=exc.code, msg=dup_msg, payload=exc.payload) from exc
+                # 重试提交
+                try:
+                    resp = self.add_task(task_payload)
+                except ApiError as retry_exc:
+                    logger.error(f"重命名后任务提交仍失败: {retry_exc}")
+                    raise
             else:
                 raise
 
@@ -595,17 +668,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 logger.warning("未找到“实验ID”位置，未回写任务ID")
         except Exception as exc:
             logger.warning("任务ID回写失败: %s", exc)
-
-        # 8. 将任务文件复制到 data/tasks/{task_id}/ 文件夹，并以任务ID命名
-        try:
-            task_folder = self._settings.data_dir / "tasks" / str(task_id)
-            task_folder.mkdir(parents=True, exist_ok=True)  # 目录不存在时递归创建
-
-            dest_path = task_folder / f"{task_id}{t_path.suffix}"  # 保留原始后缀
-            shutil.copy2(t_path, dest_path)                         # copy2 保留文件元数据
-            logger.info("任务文件已复制至: %s", dest_path)
-        except Exception as exc:
-            logger.warning("任务文件复制失败: %s", exc)
 
         return task_id
 
@@ -765,14 +827,15 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         wb.save(path)
         logger.info(f"已生成任务模板: {path}")
 
-    # -------------- 4. 物料核算 -------------
-    def check_resource_for_task(self, template_path: str, chemical_db_path: str) -> JsonDict:
+    # ---------- 4. 物料核算 ----------
+    def check_resource_for_task(self, template_path: str, chemical_db_path: str, auto_generate_batch_file: bool = True) -> JsonDict:
         """
         功能:
             读取实验模板与化学品库, 构建任务 Payload, 获取站内资源并比对是否满足实验需求。
         参数:
             template_path: 实验模板文件路径(xlsx/csv)。
             chemical_db_path: 化学品库文件路径(xlsx/csv)。
+            auto_generate_batch_file: 是否自动生成上料文件, 默认为 True。
         返回:
             Dict, analyze_resource_readiness 的结果, 包含需求、库存、缺失与冗余信息。
         """
@@ -893,9 +956,537 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if self._data_manager and task_id:
             self._data_manager.save_resource_check(str(task_id), result)
 
+        # 自动生成上料文件
+        if auto_generate_batch_file and task_id:
+            self.auto_generate_batch_in_tray_from_resource_check(task_id)
+
         return result
 
-    # ------------5. Unilab 接口（待修改）-------------
+    def auto_generate_batch_in_tray_from_resource_check(self, task_id: Optional[int] = None) -> None:
+        """
+        功能:
+            根据资源核查结果自动修改上料文件, 考虑料盘规格, 优先填满一个料盘再使用下一个
+        参数:
+            task_id: 任务ID, 如果为None则自动搜索data/tasks中id最大且状态为UNSTARTED的任务
+        返回:
+            None
+        """
+        import json
+        import math
+
+        # 1. 确定任务ID
+        if task_id is None:
+            tasks_dir = MODULE_ROOT / "data/tasks"
+            if not tasks_dir.exists():
+                raise FileNotFoundError(f"任务目录不存在: {tasks_dir}")
+
+            # 获取所有任务文件夹, 按ID降序排列
+            task_folders = []
+            for folder in tasks_dir.iterdir():
+                if folder.is_dir() and folder.name.isdigit():
+                    task_folders.append(int(folder.name))
+
+            if not task_folders:
+                raise FileNotFoundError("未找到任何任务文件夹")
+
+            task_folders.sort(reverse=True)
+
+            # 查找第一个状态为UNSTARTED的任务
+            found_task = None
+            for tid in task_folders:
+                task_info_path = tasks_dir / str(tid) / "task_info.json"
+                if task_info_path.exists():
+                    with open(task_info_path, "r", encoding="utf-8") as f:
+                        task_info = json.load(f)
+                    if task_info.get("status") == "UNSTARTED":
+                        found_task = tid
+                        break
+
+            if found_task is None:
+                raise ValueError("未找到状态为UNSTARTED的任务")
+
+            task_id = found_task
+            logger.info(f"自动选择任务ID: {task_id}")
+
+        # 2. 读取resource_check.json
+        resource_check_path = MODULE_ROOT / "data" / "tasks" / str(task_id) / "resource_check.json"
+        if not resource_check_path.exists():
+            raise FileNotFoundError(f"未找到资源核查文件: {resource_check_path}")
+
+        with open(resource_check_path, "r", encoding="utf-8") as f:
+            resource_check = json.load(f)
+
+        missing_list = resource_check.get("missing", [])
+        if not missing_list:
+            logger.info("没有缺失的物资, 无需生成上料文件")
+            return
+
+        # 3. 读取chemical_list.xlsx
+        chemical_list_path = MODULE_ROOT / "sheet" / "chemical_list.xlsx"
+        if not chemical_list_path.exists():
+            raise FileNotFoundError(f"未找到化学品列表文件: {chemical_list_path}")
+
+        chem_df = pd.read_excel(chemical_list_path)
+        chem_df = chem_df.fillna("")
+
+        # 创建物质名到信息的映射
+        chemical_dict = {}
+        for _, row in chem_df.iterrows():
+            substance = str(row.get("substance", "")).strip()
+            if substance:
+                chemical_dict[substance] = {
+                    "physical_state": str(row.get("physical_state", "")).strip().lower(),
+                    "storage_location": str(row.get("storage_location", "")).strip()
+                }
+
+        # 4. 准备料盘规格信息和位置管理
+        position_list = ["TB-2-1", "TB-2-2", "TB-2-3", "TB-2-4",
+                        "TB-1-1", "TB-1-2", "TB-1-3", "TB-1-4"]
+        shelf_position_list = ["3-1", "3-2", "3-3", "3-4",
+                              "2-1", "2-2", "2-3", "2-4"]
+
+        # 料盘类型到规格的映射
+        tray_spec_map = {
+            int(ResourceCode.REAGENT_BOTTLE_TRAY_2ML): TraySpec.REAGENT_BOTTLE_TRAY_2ML,
+            int(ResourceCode.REAGENT_BOTTLE_TRAY_8ML): TraySpec.REAGENT_BOTTLE_TRAY_8ML,
+            int(ResourceCode.REAGENT_BOTTLE_TRAY_40ML): TraySpec.REAGENT_BOTTLE_TRAY_40ML,
+            int(ResourceCode.POWDER_BUCKET_TRAY_30ML): TraySpec.POWDER_BUCKET_TRAY_30ML,
+            int(ResourceCode.REACTION_TUBE_TRAY_2ML): TraySpec.REACTION_TUBE_TRAY_2ML,
+            int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML): TraySpec.TEST_TUBE_MAGNET_TRAY_2ML,
+            int(ResourceCode.REACTION_SEAL_CAP_TRAY): TraySpec.REACTION_SEAL_CAP_TRAY,
+            int(ResourceCode.FLASH_FILTER_INNER_BOTTLE_TRAY): TraySpec.FLASH_FILTER_INNER_BOTTLE_TRAY,
+            int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY): TraySpec.FLASH_FILTER_OUTER_BOTTLE_TRAY,
+            int(ResourceCode.TIP_TRAY_50UL): TraySpec.TIP_TRAY_50UL,
+            int(ResourceCode.TIP_TRAY_1ML): TraySpec.TIP_TRAY_1ML,
+            int(ResourceCode.TIP_TRAY_5ML): TraySpec.TIP_TRAY_5ML,
+        }
+
+        # 跟踪每种料盘类型的使用情况: {tray_type_code: [(position, shelf_position, current_slot_index, max_slots)]}
+        tray_usage = {}
+
+        def _get_slot_name(slot_index: int, cols: int, rows: int) -> str:
+            """
+            功能:
+                根据坑位索引生成坑位名称, 按行优先排列
+            参数:
+                slot_index: 坑位索引(从0开始)
+                cols: 列数
+                rows: 行数
+            返回:
+                坑位名称, 如 "A1", "A2", "B1" 等
+            """
+            row_idx = slot_index // cols
+            col_idx = slot_index % cols
+            row_letter = chr(ord('A') + row_idx)
+            return f"{row_letter}{col_idx + 1}"
+
+        def _allocate_slot(tray_type_code: int, tray_type_name: str) -> Tuple[str, str, str]:
+            """
+            功能:
+                为指定料盘类型分配一个坑位
+            参数:
+                tray_type_code: 料盘类型代码
+                tray_type_name: 料盘类型名称
+            返回:
+                (position, shelf_position, slot_name) 元组
+            """
+            # 获取料盘规格
+            spec = tray_spec_map.get(tray_type_code)
+            if spec is None:
+                raise ValueError(f"未找到料盘规格: {tray_type_code}")
+
+            cols, rows = spec
+            max_slots = cols * rows
+
+            # 检查是否已有该类型的料盘在使用
+            if tray_type_code not in tray_usage:
+                tray_usage[tray_type_code] = []
+
+            # 查找是否有未满的料盘
+            for tray_info in tray_usage[tray_type_code]:
+                position, shelf_position, current_slot, max_slots_in_tray = tray_info
+                if current_slot < max_slots_in_tray:
+                    # 找到未满的料盘, 分配下一个坑位
+                    slot_name = _get_slot_name(current_slot, cols, rows)
+                    tray_info[2] += 1  # 更新当前坑位索引
+                    logger.info(f"使用现有料盘 {position}, 坑位 {slot_name}")
+                    return position, shelf_position, slot_name
+
+            # 没有未满的料盘, 需要分配新位置
+            if len(tray_usage[tray_type_code]) >= len(position_list):
+                raise ValueError(f"可用位置已用完, 无法分配新料盘")
+
+            # 找到下一个可用位置
+            used_positions = set()
+            for trays in tray_usage.values():
+                for tray_info in trays:
+                    used_positions.add(tray_info[0])
+
+            new_position = None
+            new_shelf_position = None
+            for i, pos in enumerate(position_list):
+                if pos not in used_positions:
+                    new_position = pos
+                    new_shelf_position = shelf_position_list[i]
+                    break
+
+            if new_position is None:
+                raise ValueError(f"可用位置已用完, 无法分配新料盘")
+
+            # 创建新料盘记录
+            slot_name = _get_slot_name(0, cols, rows)
+            tray_usage[tray_type_code].append([new_position, new_shelf_position, 1, max_slots])
+            logger.info(f"分配新料盘 {new_position}, 类型 {tray_type_name}, 坑位 {slot_name}")
+            return new_position, new_shelf_position, slot_name
+
+        # 5. 解析missing列表并生成上料数据
+        # 使用字典来按位置分组物资: {position: {"tray_type": ..., "contents": [...], "shelf_position": ..., "storages": [...]}}
+        position_groups = {}
+
+        # 分类存储: 先处理固体、液体、耗材，按顺序生成
+        solid_items = []
+        liquid_items = []
+        consumable_items = []
+
+        # 第一遍: 分类
+        for missing_item in missing_list:
+            # 解析格式: "物质名:数量单位"
+            if ":" not in missing_item:
+                logger.warning(f"跳过格式错误的缺失项: {missing_item}")
+                continue
+
+            substance, amount_str = missing_item.split(":", 1)
+            substance = substance.strip()
+            amount_str = amount_str.strip()
+
+            # 检查是否为耗材(以"件"结尾)
+            is_consumable = amount_str.endswith("件")
+
+            if is_consumable:
+                consumable_items.append((substance, amount_str))
+            else:
+                # 获取物质信息判断固液
+                chem_info = chemical_dict.get(substance)
+                if not chem_info:
+                    logger.warning(f"在化学品列表中未找到物质: {substance}, 跳过")
+                    continue
+
+                physical_state = chem_info["physical_state"]
+                if physical_state == "solid":
+                    solid_items.append((substance, amount_str, chem_info))
+                elif physical_state == "liquid":
+                    liquid_items.append((substance, amount_str, chem_info))
+                else:
+                    logger.warning(f"物质状态未知: {physical_state}, 跳过物质 {substance}")
+
+        # 第二遍: 按顺序处理 - 固体
+        for substance, amount_str, chem_info in solid_items:
+            physical_state = chem_info["physical_state"]
+            storage_location = chem_info["storage_location"]
+
+            # 解析数量和单位
+            amount_value = 0.0
+            unit = ""
+
+            # 提取数字和单位
+            import re
+            match = re.match(r"([\d.]+)\s*(\w+)", amount_str)
+            if match:
+                amount_value = float(match.group(1))
+                unit = match.group(2).lower()
+            else:
+                logger.warning(f"无法解析数量: {amount_str}, 跳过")
+                continue
+
+            # 固体: 使用粉桶托盘
+            tray_type_code = int(ResourceCode.POWDER_BUCKET_TRAY_30ML)
+            tray_type_name = f"30 mL粉桶托盘({tray_type_code})"
+
+            # 单位转换为mg
+            if unit == "mg":
+                final_amount = amount_value
+            elif unit == "g":
+                final_amount = amount_value * 1000
+            else:
+                logger.warning(f"固体物质单位不支持: {unit}, 跳过")
+                continue
+
+            # 计算上料量: 最小100mg, 大于100mg按实际需要量的两倍取整
+            if final_amount <= 100:
+                final_amount = 100
+            else:
+                final_amount = final_amount * 2
+                # 向上取整到百位
+                final_amount = math.ceil(final_amount / 100) * 100
+
+            final_unit = "mg"
+
+            # 分配坑位
+            try:
+                position, shelf_position, slot_name = _allocate_slot(tray_type_code, tray_type_name)
+            except ValueError as e:
+                logger.warning(f"无法分配坑位: {e}, 跳过物资 {substance}")
+                break
+
+            # 处理final_amount可能是int或float的情况
+            if isinstance(final_amount, int):
+                amount_display = final_amount
+            elif isinstance(final_amount, float) and final_amount.is_integer():
+                amount_display = int(final_amount)
+            else:
+                amount_display = final_amount
+
+            # 生成单个坑位的内容: "坑位|物质名|数量单位"
+            slot_content = f"{slot_name}|{substance}|{amount_display}{final_unit}"
+
+            # 按位置分组
+            if position not in position_groups:
+                position_groups[position] = {
+                    "tray_type": tray_type_name,
+                    "contents": [],
+                    "shelf_position": shelf_position,
+                    "storages": []
+                }
+
+            position_groups[position]["contents"].append(slot_content)
+            position_groups[position]["storages"].append(f"{substance}|{storage_location if storage_location else '未知'}")
+            logger.info(f"添加固体上料项: {substance} -> {position} {slot_name}, {final_amount}{final_unit}")
+
+        # 第三遍: 处理液体
+        for substance, amount_str, chem_info in liquid_items:
+            physical_state = chem_info["physical_state"]
+            storage_location = chem_info["storage_location"]
+
+            # 解析数量和单位
+            amount_value = 0.0
+            unit = ""
+
+            # 提取数字和单位
+            import re
+            match = re.match(r"([\d.]+)\s*(\w+)", amount_str)
+            if match:
+                amount_value = float(match.group(1))
+                unit = match.group(2).lower()
+            else:
+                logger.warning(f"无法解析数量: {amount_str}, 跳过")
+                continue
+
+            # 液体: 根据量选择试剂瓶托盘
+            # 单位转换为mL
+            if unit == "ml" or unit == "mL":
+                final_amount = amount_value
+            elif unit == "μl" or unit == "ul":
+                final_amount = amount_value / 1000
+            elif unit == "l":
+                final_amount = amount_value * 1000
+            else:
+                logger.warning(f"液体物质单位不支持: {unit}, 跳过")
+                continue
+
+            # 最少1mL, 向上取整
+            final_amount = max(1, math.ceil(final_amount))
+            final_unit = "mL"
+
+            # 根据量选择瓶子规格
+            if final_amount <= 2:
+                tray_type_code = int(ResourceCode.REAGENT_BOTTLE_TRAY_2ML)
+                tray_type_name = f"2 mL试剂瓶托盘({tray_type_code})"
+            elif final_amount <= 8:
+                tray_type_code = int(ResourceCode.REAGENT_BOTTLE_TRAY_8ML)
+                tray_type_name = f"8 mL试剂瓶托盘({tray_type_code})"
+            elif final_amount <= 40:
+                tray_type_code = int(ResourceCode.REAGENT_BOTTLE_TRAY_40ML)
+                tray_type_name = f"40 mL试剂瓶托盘({tray_type_code})"
+            else:
+                logger.warning(f"液体量超过40mL, 不支持: {final_amount}mL, 跳过")
+                continue
+
+            # 分配坑位
+            try:
+                position, shelf_position, slot_name = _allocate_slot(tray_type_code, tray_type_name)
+            except ValueError as e:
+                logger.warning(f"无法分配坑位: {e}, 跳过物资 {substance}")
+                break
+
+            # 处理final_amount可能是int或float的情况
+            if isinstance(final_amount, int):
+                amount_display = final_amount
+            elif isinstance(final_amount, float) and final_amount.is_integer():
+                amount_display = int(final_amount)
+            else:
+                amount_display = final_amount
+
+            # 生成单个坑位的内容: "坑位|物质名|数量单位"
+            slot_content = f"{slot_name}|{substance}|{amount_display}{final_unit}"
+
+            # 按位置分组
+            if position not in position_groups:
+                position_groups[position] = {
+                    "tray_type": tray_type_name,
+                    "contents": [],
+                    "shelf_position": shelf_position,
+                    "storages": []
+                }
+
+            position_groups[position]["contents"].append(slot_content)
+            position_groups[position]["storages"].append(f"{substance}|{storage_location if storage_location else '未知'}")
+            logger.info(f"添加液体上料项: {substance} -> {position} {slot_name}, {final_amount}{final_unit}")
+
+        # 第四遍: 处理耗材
+        for substance, amount_str in consumable_items:
+            # 耗材处理: 解析数量
+            import re
+            match = re.match(r"([\d.]+)\s*件", amount_str)
+            if not match:
+                logger.warning(f"无法解析耗材数量: {amount_str}, 跳过")
+                continue
+
+            consumable_count = int(float(match.group(1)))
+
+            # 根据耗材名称确定托盘类型
+            tray_type_code = None
+            tray_type_name = ""
+
+            if "反应试管" in substance or "反应管" in substance or "2mL反应试管" in substance or "2mL反应管" in substance or "2 mL反应试管" in substance or "2 mL反应管" in substance:
+                tray_type_code = int(ResourceCode.REACTION_TUBE_TRAY_2ML)
+                tray_type_name = f"2 mL反应试管托盘({tray_type_code})"
+            elif "试管磁子" in substance or "反应管磁子" in substance or "2mL试管磁子" in substance or "2mL反应管磁子" in substance or "2 mL试管磁子" in substance or "2 mL反应管磁子" in substance:
+                tray_type_code = int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML)
+                tray_type_name = f"2 mL试管磁子托盘({tray_type_code})"
+            elif "密封盖" in substance or "反应密封盖" in substance:
+                tray_type_code = int(ResourceCode.REACTION_SEAL_CAP_TRAY)
+                tray_type_name = f"反应密封盖托盘({tray_type_code})"
+            elif "闪滤瓶内瓶" in substance or "内瓶" in substance:
+                tray_type_code = int(ResourceCode.FLASH_FILTER_INNER_BOTTLE_TRAY)
+                tray_type_name = f"闪滤瓶内瓶托盘({tray_type_code})"
+            elif "闪滤瓶外瓶" in substance or "外瓶" in substance:
+                tray_type_code = int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY)
+                tray_type_name = f"闪滤瓶外瓶托盘({tray_type_code})"
+            elif "50" in substance and ("tip" in substance.lower() or "吸头" in substance):
+                tray_type_code = int(ResourceCode.TIP_TRAY_50UL)
+                tray_type_name = f"50 μL Tip 头托盘({tray_type_code})"
+            elif "1ml" in substance.lower() or "1 ml" in substance.lower():
+                tray_type_code = int(ResourceCode.TIP_TRAY_1ML)
+                tray_type_name = f"1 mL Tip 头托盘({tray_type_code})"
+            elif "5ml" in substance.lower() or "5 ml" in substance.lower():
+                tray_type_code = int(ResourceCode.TIP_TRAY_5ML)
+                tray_type_name = f"5 mL Tip 头托盘({tray_type_code})"
+            else:
+                logger.warning(f"无法识别耗材类型: {substance}, 跳过")
+                continue
+
+            # 获取托盘规格，计算满盘数量
+            spec = tray_spec_map.get(tray_type_code)
+            if spec is None:
+                logger.warning(f"未找到托盘规格: {tray_type_code}, 跳过")
+                continue
+
+            cols, rows = spec
+            full_tray_capacity = cols * rows
+
+            # 分配位置
+            try:
+                position, shelf_position, slot_name = _allocate_slot(tray_type_code, tray_type_name)
+            except ValueError as e:
+                logger.warning(f"无法分配坑位: {e}, 跳过耗材 {substance}")
+                break
+
+            # 耗材的content格式: 满盘数量
+            slot_content = str(full_tray_capacity)
+
+            # 按位置分组
+            if position not in position_groups:
+                position_groups[position] = {
+                    "tray_type": tray_type_name,
+                    "contents": [],
+                    "shelf_position": shelf_position,
+                    "storages": []
+                }
+
+            position_groups[position]["contents"].append(slot_content)
+            position_groups[position]["storages"].append(f"{substance}|耗材库")
+            logger.info(f"添加耗材上料项: {substance} -> {position}, 满盘数量 {full_tray_capacity} (需求 {consumable_count})")
+
+        # 6. 合并同一位置的内容并生成最终数据
+        batch_in_data = []
+        for position in sorted(position_groups.keys()):
+            group = position_groups[position]
+            # 用分号连接同一料盘的所有坑位
+            combined_content = ";".join(group["contents"])
+            combined_storage = ";".join(group["storages"])
+            batch_in_data.append({
+                "position": position,
+                "tray_type": group["tray_type"],
+                "content": combined_content,
+                "shelf_position": group["shelf_position"],
+                "storage": combined_storage
+            })
+
+        # 7. 写入batch_in_tray.xlsx
+        if not batch_in_data:
+            logger.warning("没有生成任何上料数据")
+            return
+
+        batch_in_path = MODULE_ROOT / "sheet" / "batch_in_tray.xlsx"
+
+        # 检查模板是否存在，不存在则生成
+        if not batch_in_path.exists():
+            logger.info(f"未找到上料模板，正在生成: {batch_in_path}")
+            self._generate_batch_in_tray_template(batch_in_path)
+
+        # 读取现有模板
+        wb = load_workbook(batch_in_path)
+        ws = wb.active
+
+        # 清除现有数据（保留表头，从第2行开始清除）
+        max_row = ws.max_row
+        if max_row > 1:
+            ws.delete_rows(2, max_row - 1)
+
+        # 写入新数据（从第2行开始）
+        for idx, item in enumerate(batch_in_data, start=2):
+            ws.cell(row=idx, column=1, value=item["position"])
+            ws.cell(row=idx, column=2, value=item["tray_type"])
+            ws.cell(row=idx, column=3, value=item["content"])
+            ws.cell(row=idx, column=4, value=item["shelf_position"])
+            ws.cell(row=idx, column=5, value=item["storage"])
+
+        # 保存文件
+        wb.save(batch_in_path)
+
+        logger.info(f"已生成上料文件: {batch_in_path}, 共{len(batch_in_data)}行, 包含{sum(len(g['contents']) for g in position_groups.values())}个物资")
+        logger.info(f"请检查文件并根据需要调整")
+
+    # ---------- 5. 执行任务 ----------
+    def device_init(self, device_id=None, *, poll_interval_s: float = 1.0, timeout_s: float = 600.0):
+        return super().device_init(device_id, poll_interval_s=poll_interval_s, timeout_s=timeout_s)
+
+    def start_task(self, task_id: int | None = None, *, check_glovebox_env: bool = True, water_limit_ppm: float = 10.0, oxygen_limit_ppm: float = 10.0):
+        return super().start_task(task_id, check_glovebox_env=check_glovebox_env, water_limit_ppm=water_limit_ppm, oxygen_limit_ppm=oxygen_limit_ppm)
+
+    def wait_task_with_ops(self, task_id: int | None = None, *, poll_interval_s: float = 2.0) -> int:
+        return super().wait_task_with_ops(task_id, poll_interval_s=poll_interval_s)
+
+    # ---------- 6. 下料动作 ----------
+    def batch_out_task_and_empty_trays(self, task_id: int | None = None, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
+        return super().batch_out_task_and_empty_trays(task_id, poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)
+
+    def batch_out_task_and_chemical_trays(self, task_id: int | None = None, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
+        return super().batch_out_task_and_chemical_trays(task_id, poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)
+
+    def batch_out_task_trays(self, task_id: int | None = None, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
+        return super().batch_out_task_trays(task_id, poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)
+
+    def batch_out_empty_trays(self, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
+        return super().batch_out_empty_trays(poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)
+
+    def batch_out_tray(self, layout_list: list[dict], move_type: str = "main_out", *, task_id: int = None, poll_interval_s: float = 1.0, timeout_s: float = 900.0):
+        return super().batch_out_tray(layout_list, move_type=move_type, task_id=task_id, poll_interval_s=poll_interval_s, timeout_s=timeout_s)
+
+    def auto_unload_trays_to_agv(self, batch_out_file: Optional[str] = None, *, block: bool = True):
+        return super().auto_unload_trays_to_agv(batch_out_file, block=block)
+
+    # ---------- 7. Unilab 接口（待修改） ----------
     def submit_experiment_task(
         self,
         chemical_db_path: str,
@@ -1039,39 +1630,23 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             resp = self.add_task(task_payload)
         except ApiError as exc:
             if getattr(exc, "code", None) == 409:
+                # 自动重命名: 在任务名称后添加当前日期时间(精确到秒)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
                 task_name_val = task_payload.get("task_name") or params.get("实验名称")
-                dup_msg = (
-                    f"任务上传失败, 请检查任务名称是否重复: {task_name_val}"
-                    if task_name_val
-                    else "任务名称重复, 请修改任务或实验名称后重试"
-                )
-                logger.error(dup_msg)
-                raise ApiError(code=exc.code, msg=dup_msg, payload=exc.payload) from exc
-            raise
+                new_task_name = f"{task_name_val}_{timestamp}"
+
+                task_payload["task_name"] = new_task_name
+                logger.info(f"任务名称重复, 自动重命名为: {new_task_name}")
+
+                # 重试提交
+                try:
+                    resp = self.add_task(task_payload)
+                except ApiError as retry_exc:
+                    logger.error(f"重命名后任务提交仍失败: {retry_exc}")
+                    raise
+            else:
+                raise
 
         task_id = resp.get("task_id")
         return task_id
-
-    # -------- controller功能接口函数 --------
-    def device_init(self, device_id=None, *, poll_interval_s: float = 1.0, timeout_s: float = 600.0):
-        return super().device_init(device_id, poll_interval_s=poll_interval_s, timeout_s=timeout_s)
-
-    def start_task(self, task_id: int | None = None, *, check_glovebox_env: bool = True, water_limit_ppm: float = 10.0, oxygen_limit_ppm: float = 10.0):
-        return super().start_task(task_id, check_glovebox_env=check_glovebox_env, water_limit_ppm=water_limit_ppm, oxygen_limit_ppm=oxygen_limit_ppm)
-
-    def wait_task_with_ops(self, task_id: int | None = None, *, poll_interval_s: float = 2.0) -> int:
-        return super().wait_task_with_ops(task_id, poll_interval_s=poll_interval_s)
-
-    def batch_out_task_and_empty_trays(self, task_id: int | None = None, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
-        return super().batch_out_task_and_empty_trays(task_id, poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)
-
-    def batch_out_task_trays(self, task_id: int | None = None, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
-        return super().batch_out_task_trays(task_id, poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)
-
-    def batch_out_empty_trays(self, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
-        return super().batch_out_empty_trays(poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)
-
-    def batch_out_tray(self, layout_list: list[dict], move_type: str = "main_out", *, task_id: int = None, poll_interval_s: float = 1.0, timeout_s: float = 900.0):
-        return super().batch_out_tray(layout_list, move_type=move_type, task_id=task_id, poll_interval_s=poll_interval_s, timeout_s=timeout_s)
-
-
