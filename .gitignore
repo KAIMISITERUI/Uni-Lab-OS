@@ -250,4 +250,15 @@ ros-humble-unilabos-msgs-0.9.13-h6403a04_5.tar.bz2
 *.bz2
 test_config.py
 
+# EIT synthesis station runtime data (tasks, snapshots, operations)
+unilabos/devices/eit_synthesis_station/data/
+
+# Backup files and directories
+backup/
+*.backup
+*.backup2
+
+# Claude Code local settings
+**/.claude/settings.local.json
+
 
