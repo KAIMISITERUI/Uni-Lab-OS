@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/ProgramData/miniforge3/python.exe\" \"/d/BaiduSyncdisk/博士后/干湿闭环自动化实验室搭建/实验室建设/AGV/AGV_api/eit_agv/test_protocol.py\")"
+    ]
+  }
+}

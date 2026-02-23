@@ -1,0 +1,312 @@
+# 机械臂工位坐标配置文件
+# 位姿格式: [x, y, z, rx, ry, rz], 位置单位mm, 姿态单位rad
+# 所使用的所有距离单位均为mm，角度均为rad
+
+# 托盘抓取/放置位置
+tray_position:
+  # 托盘1抓取/放置位置
+  agv_tray_1:
+    pose: [-680.82439, 438.59979, 191.24405, -3.14153742, -1.43e-06, -0.05532694]  # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -144  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "AGV托盘1抓取/放置位置"
+
+  agv_tray_2:
+    pose: [-571.033, 435.59979, 191.24405, -3.14153742, -1.43e-06, -0.05532694]  # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -144  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "AGV托盘2抓取/放置位置"
+
+  agv_tray_3:
+    pose: [-460.858, 433.8, 191.24405, -3.14153742, -1.43e-06, -0.05532694]  # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -144  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "AGV托盘3抓取/放置位置"
+
+  agv_tray_4:
+    pose: [-351.267, 431.0, 191.24405, -3.14153742, -1.43e-06, -0.05532694]  # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -144  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "AGV托盘4抓取/放置位置"
+
+  shelf_tray_3-1:
+    pose: [-572.4238139762879, 567.0520066384888, 500.4878864949036, 
+        -3.141797858215332, 0.0015094961393980776, 3.0683617071521283]                                                                                                                                                                                         # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托3-1抓取/放置位置"
+
+  shelf_tray_3-2:
+    pose: [-464.9846793785095, 557.7191679124451, 497.3042195503998, 
+        3.118690651916504, -0.00020041100528836236, 3.068244241298437]                                                                                                                                                                                                                                                      # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托3-2抓取/放置位置"
+
+  shelf_tray_3-3:
+    pose: [-353.8863045349121, 555.1299489144898, 497.04157168319705, 
+        3.1188358488311767, 2.983999124914418e-05, 3.067132551343441] # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托3-3抓取/放置位置"
+
+  shelf_tray_3-4:
+    pose: [-243.84409014129636, 551.8187849168396, 496.7869108383942, 
+        3.1190509023895263, 0.00015545273468084648, 3.066109258801937]                                                               # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托3-4抓取/放置位置"
+
+  shelf_tray_2-1:
+    pose: [-572.0748883857727, 567.9622857217407, 333.27378684928897, 
+        -3.1410728273162842, -0.0006717232087329029, 3.072679724664688]                                                                                                                             # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托2-1抓取/放置位置"
+
+  shelf_tray_2-2:
+    pose: [-460.9162789955139, 565.220412457428, 331.155855006485, 
+        -3.140551644302368, -0.005642184571705759, 3.072384983421564]                                                                                                                         # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托2-2抓取/放置位置"
+
+  shelf_tray_2-3:
+    pose: [-349.2590171470642, 561.8800489549255, 332.7024167244721, 
+        -3.140661793685913, -0.004428783015690744, 3.0812373944830895]                                                              # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托2-3抓取/放置位置"
+
+  shelf_tray_2-4:
+    pose: [-240.10115686798093, 558.6082903985596, 332.6344972317505, 
+        -3.1405990895996094, -0.004356613548815251, 3.080938305826187]                                                                                                                             # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托2-4抓取/放置位置"
+
+  shelf_tray_1-1:
+    pose: [-571.3575464859009, 569.7464315538025, 152.78055871179583, 
+        3.1413177671661376, 0.00042926782894134536, 3.0796999597263337]                                                                                                                                                                                          # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托1-1抓取/放置位置"
+
+  shelf_tray_1-2:
+    pose: [-461.78465906524656, 566.1253897790527, 150.43250078609469, 
+        3.1411081972351074, 0.0023649526495784523, 3.0798720420610906]                                                                                                                              # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托1-2抓取/放置位置"
+
+  shelf_tray_1-3:
+    pose: [-350.64983192825315, 562.683459961853, 151.4308338825989, 
+        -3.1418906030426026, 0.00040359615500271335, 3.085044533134699]                                                                                                                            # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托1-3抓取/放置位置"
+
+  shelf_tray_1-4:
+    pose: [-240.996627248764, 557.7568976525879, 149.84839761903766, 
+        3.1339911642303466, 3.760879312828197e-05, 3.0848598146152497]                                                                                                                                                                                           # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "货架托1-4抓取/放置位置"
+
+  analysis_tray_1-1:
+    pose: [-240.996627248764, 557.7568976525879, 149.84839761903766, 
+        3.1339911642303466, 3.760879312828197e-05, 3.0848598146152497]                                                                                                                                                                                           # 过渡点位姿 (托盘上方的安全位置), 位置单位mm, 姿态单位rad
+    descend_z: -32  # 下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm
+    lift_z: 20  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.1  # 加速度百分比 (0-1)
+    description: "分析站托盘1-1抓取/放置位置"
+
+# 安全位置
+safe_positions:
+
+  # 机械臂回零位置(回零根据关节角度回零，所以必须有joints)
+  home_1:
+    pose: [-566.0403299999999, 191.43068, 376.44481, -3.14153742, -1.43e-06,-0.05532694]                                                                                                                                            # 关节角度, 单位rad
+    joints: [-0.048593830317258835, 0.06705363094806671, -2.1632132530212402, 0.5269968509674072, 1.56870436668396, 1.5804846286773682]
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.2  # 关节角加速度, 单位rad/s²
+    description: "机械臂回零位置"
+
+    # 机械臂回零位置(关节角度)
+  home_2:
+    pose: [-566.0403299999999, 191.43068, 376.44481, -3.14153742, 0.0, 3.000]                                                                             # 关节角度, 单位rad
+    joints: [-0.04862978309392929, 0.06706561148166656, -2.163177251815796, 0.5269728899002075, 1.5688121318817139, -1.4748575687408447]
+    speed: 0.2  # 运动速度百分比 (0-1)
+    acceleration: 0.2  # 关节角加速度, 单位rad/s²
+    description: "机械臂回零位置"
+
+# 全局运动参数
+global_params:
+  default_speed: 0.2  # 默认速度百分比
+  default_acceleration: 0.1  # 默认加速度百分比
+  collision_level: 3  # 碰撞检测等级(0-5)
+# 夹爪类型定义 (2种夹爪, 适配不同托盘)
+grippers:
+  gripper_type_a:
+    slot: 1                    # 快换料位编号(bg1, 对应DI3)
+    description: "A型托盘夹爪"
+  gripper_type_b:
+    slot: 2                    # 快换料位编号(bg2, 对应DI4)
+    description: "B型托盘夹爪"
+
+# 夹爪存放位置 (用于自动换爪, 需要实际标定坐标)
+gripper_storage:
+  gripper_type_a:
+    pose: [-600.0, 400.0, 200.0, -3.14159, 0.0, 0.0]  # TODO: 需要实际标定
+    descend_z: -50             # 对接下探距离, 单位mm
+    lift_z: 30                 # 脱离提升距离, 单位mm
+    speed: 0.2
+    acceleration: 0.1
+    description: "A型夹爪存放位置"
+  gripper_type_b:
+    pose: [-500.0, 400.0, 200.0, -3.14159, 0.0, 0.0]  # TODO: 需要实际标定
+    descend_z: -50
+    lift_z: 30
+    speed: 0.2
+    acceleration: 0.1
+    description: "B型夹爪存放位置"
+
+# 物料类型配置
+materials:
+
+  REACTION_TUBE_TRAY_2ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0  # 下探距离偏移(mm), 正值表示少下探, 负值表示多下探
+    lift_z_offset: 0  # 提升距离偏移(mm), 正值表示多提升, 负值表示少提升
+    description: "2 mL 反应试管托盘"
+
+  TEST_TUBE_MAGNET_TRAY_2ML:
+    gripper: gripper_type_a
+    descend_z_offset: 20
+    lift_z_offset: 0
+    description: "2 mL 试管磁子托盘"
+
+  REACTION_SEAL_CAP_TRAY:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "反应密封盖托盘"
+
+  FLASH_FILTER_INNER_BOTTLE_TRAY:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "闪滤瓶内瓶托盘"
+
+  FLASH_FILTER_OUTER_BOTTLE_TRAY:
+    gripper: gripper_type_a
+    descend_z_offset: 10
+    lift_z_offset: 0
+    description: "闪滤瓶外瓶托盘"
+
+  TIP_TRAY_50UL:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "50 μL Tip 头托盘"
+
+  TIP_TRAY_1ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "1 mL Tip 头托盘"
+
+  TIP_TRAY_5ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "5 mL Tip 头托盘"
+
+  POWDER_BUCKET_TRAY_30ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "30 mL 粉桶托盘"
+
+  REAGENT_BOTTLE_TRAY_2ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "2 mL 试剂瓶托盘"
+
+  REAGENT_BOTTLE_TRAY_8ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "8 mL 试剂瓶托盘"
+
+  REAGENT_BOTTLE_TRAY_40ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "40 mL 试剂瓶托盘"
+
+  REAGENT_BOTTLE_TRAY_125ML:
+    gripper: gripper_type_a
+    descend_z_offset: 0
+    lift_z_offset: 0
+    description: "125 mL 试剂瓶托盘"
+
+station_calibration:
+  shelf:
+    x: 1.4833790435790917
+    y: 7.606688296356245
+    z: -1.0074315731811723
+    dx: 8.495423889165465e-05
+    dy: -0.0008779040739238264
+    dz: -0.0072509908390045175
+    description: shelf工站校准偏移值
+  synthesis_station:
+    x: 0.0015843550109917448
+    y: -0.01495217819214023
+    z: 0.015148703765843763
+    dx: 4.133346557599892e-05
+    dy: 2.3901252890937032e-05
+    dz: 1.2299058139324421e-05
+    description: synthesis工站校准偏移值
+  analysis_station:
+    x: 7.128514790115364
+    y: -3.1924793528748108
+    z: -0.8447752091980121
+    dx: 0.0007963307495115757
+    dy: -0.0008183961963355545
+    dz: 0.0050272774484157595
+    description: analysis工站校准偏移值
