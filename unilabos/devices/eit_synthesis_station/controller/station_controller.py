@@ -1731,206 +1731,6 @@ class SynthesisStationController:
         self._logger.info("已解析上料信息, 包含 %s 个托盘", len(resource_req_list))
         return resource_req_list
 
-    def auto_load_trays_from_agv(
-        self,
-        batch_in_file: Optional[str] = None,
-        *,
-        block: bool = True,
-    ) -> JsonDict:
-        """
-        功能:
-            读取 batch_in_tray.xlsx 中的上料信息, 调用 AGV 的 batch_transfer_materials
-            函数将托盘从货架转运到合成工站
-        参数:
-            batch_in_file: 上料信息文件路径, 默认为 sheet/batch_in_tray.xlsx
-            block: 是否阻塞执行, True 表示等待转运完成
-        返回:
-            Dict, 包含转运结果信息:
-                - success: bool, 是否全部成功
-                - total_trays: int, 总托盘数
-                - transferred_trays: int, 成功转运的托盘数
-                - batches: List[Dict], 每批次的转运详情
-                - errors: List[str], 错误信息列表
-        """
-        from pathlib import Path
-        import openpyxl
-        import sys
-        from ..config.constants import (
-            RESOURCE_CODE_TO_MATERIAL_TYPE,
-            TB_CODE_TO_SYNTHESIS_TRAY,
-            TRAY_CODE_DISPLAY_NAME,
-        )
-
-        # 创建AGV控制器实例
-        sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-        from eit_agv.controller.agv_controller import AGVController
-        agv_controller = AGVController()
-        self._logger.info("已创建AGV控制器实例")
-
-        # 1. 确定文件路径
-        if batch_in_file is None:
-            from ..manager.station_manager import MODULE_ROOT
-            batch_in_path = MODULE_ROOT / "sheet" / "batch_in_tray.xlsx"
-        else:
-            batch_in_path = Path(batch_in_file)
-
-        # 2. 读取上料信息
-        if not batch_in_path.exists():
-            raise FileNotFoundError(f"上料信息文件不存在: {batch_in_path}")
-
-        wb = openpyxl.load_workbook(batch_in_path)
-        ws = wb.active
-
-        # 3. 解析上料信息
-        transfer_tasks_all = []
-        errors = []
-
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            # 跳过空行
-            if not row[0]:
-                continue
-
-            position = str(row[0]).strip()  # TB-x-x
-            tray_type_text = str(row[1]) if len(row) > 1 and row[1] else ""
-            shelf_position = str(row[3]) if len(row) > 3 and row[3] else ""
-
-            # 跳过没有 shelf_position 的行
-            if not shelf_position:
-                self._logger.warning(f"跳过没有 shelf_position 的行: {position}")
-                continue
-
-            # 3.1 解析托盘类型代码
-            # tray_type_text 格式: "托盘名称(代码)" 或 "托盘名称(代码) [范围]"
-            import re
-            match = re.search(r"\((\d+)\)", tray_type_text)
-            if not match:
-                error_msg = f"无法解析托盘类型代码: {tray_type_text}"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                continue
-
-            tray_type_code = int(match.group(1))
-
-            # 3.2 映射目标托盘位置: position (TB-x-x) -> synthesis_station_tray_x-x
-            target_tray = TB_CODE_TO_SYNTHESIS_TRAY.get(position)
-            if target_tray is None:
-                error_msg = f"无法映射上料位置 {position} 到合成工站托盘"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                continue
-
-            # 3.3 映射源托盘位置: shelf_position (x-x) -> shelf_tray_x-x
-            source_tray = f"shelf_tray_{shelf_position}"
-
-            # 3.4 映射物料类型
-            material_type = RESOURCE_CODE_TO_MATERIAL_TYPE.get(tray_type_code)
-            if material_type is None:
-                tray_type_name = TRAY_CODE_DISPLAY_NAME.get(tray_type_code, f"未知托盘({tray_type_code})")
-                self._logger.warning(
-                    f"未知的资源类型 {tray_type_code} ({tray_type_name}), 使用 None"
-                )
-
-            # 3.5 构建转运任务
-            task = {
-                "source_tray": source_tray,
-                "target_tray": target_tray,
-                "material_type": material_type,
-            }
-            transfer_tasks_all.append(task)
-            self._logger.info(
-                f"转运任务: {source_tray} -> {target_tray}, "
-                f"物料类型: {material_type}"
-            )
-
-        if len(transfer_tasks_all) == 0:
-            self._logger.warning("没有有效的转运任务")
-            return {
-                "success": False,
-                "total_trays": 0,
-                "transferred_trays": 0,
-                "batches": [],
-                "errors": errors,
-            }
-
-        # 3.6 检查过渡舱外门状态, 如果关闭则先开门
-        try:
-            device_status_list = self.list_device_status()
-            outer_door_status = None
-            for device in device_status_list:
-                if device.get("device_name") == "过渡舱外门":
-                    outer_door_status = device.get("status")
-                    break
-
-            if outer_door_status == "CLOSE":
-                self._logger.info("过渡舱外门状态为关闭, 正在开门...")
-                door_result = self.open_close_door("open")
-                self._logger.info(f"开门操作完成: {door_result}")
-            elif outer_door_status == "OPEN":
-                self._logger.info("过渡舱外门已打开, 无需操作")
-            else:
-                self._logger.warning(f"过渡舱外门状态未知: {outer_door_status}")
-        except Exception as e:
-            error_msg = f"检查或操作过渡舱外门时发生异常: {str(e)}"
-            self._logger.error(error_msg)
-            errors.append(error_msg)
-
-        # 4. 分批处理: AGV 一次最多转运 4 个托盘
-        batch_size = 4
-        batches_result = []
-        transferred_count = 0
-
-        for batch_index in range(0, len(transfer_tasks_all), batch_size):
-            batch_tasks = transfer_tasks_all[batch_index:batch_index + batch_size]
-            batch_num = batch_index // batch_size + 1
-
-            self._logger.info(f"开始执行第 {batch_num} 批转运, 共 {len(batch_tasks)} 个托盘")
-
-            try:
-                result = agv_controller.batch_transfer_materials(batch_tasks, block=block)
-
-                batch_result = {
-                    "batch_num": batch_num,
-                    "tasks": batch_tasks,
-                    "success": result,
-                }
-                batches_result.append(batch_result)
-
-                if result:
-                    transferred_count += len(batch_tasks)
-                    self._logger.info(f"第 {batch_num} 批转运成功")
-                else:
-                    error_msg = f"第 {batch_num} 批转运失败"
-                    self._logger.error(error_msg)
-                    errors.append(error_msg)
-                    # 立即停止后续批次
-                    break
-
-            except Exception as e:
-                error_msg = f"第 {batch_num} 批转运异常: {str(e)}"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                batches_result.append(
-                    {
-                        "batch_num": batch_num,
-                        "tasks": batch_tasks,
-                        "success": False,
-                        "error": str(e),
-                    }
-                )
-                # 立即停止后续批次
-                break
-
-        # 5. 返回结果
-        success = transferred_count == len(transfer_tasks_all) and len(errors) == 0
-
-        return {
-            "success": success,
-            "total_trays": len(transfer_tasks_all),
-            "transferred_trays": transferred_count,
-            "batches": batches_result,
-            "errors": errors,
-        }
-    
     # ---------- 下料函数 ----------
     def batch_out_tray(
         self,
@@ -2075,216 +1875,6 @@ class SynthesisStationController:
             self._data_manager.save_batch_out_tray_log(log_data)
 
         return resp
-
-    # ---------- AGV 自动下料函数 ----------
-    def auto_unload_trays_to_agv(
-        self,
-        batch_out_file: Optional[str] = None,
-        *,
-        block: bool = True,
-    ) -> JsonDict:
-        """
-        功能:
-            读取 batch_out_tray.json 中的下料信息, 调用 AGV 的 batch_transfer_materials
-            函数将托盘从合成工站转运到目标位置(shelf 或 analysis_station)
-        参数:
-            batch_out_file: 下料信息文件路径, 默认为 data/operations/batch_out_tray.json
-            block: 是否阻塞执行, True 表示等待转运完成
-        返回:
-            Dict, 包含转运结果信息:
-                - success: bool, 是否全部成功
-                - total_trays: int, 总托盘数
-                - transferred_trays: int, 成功转运的托盘数
-                - batches: List[Dict], 每批次的转运详情
-                - errors: List[str], 错误信息列表
-        """
-        from pathlib import Path
-        import json
-        import sys
-        from ..config.constants import (
-            ResourceCode,
-            RESOURCE_CODE_TO_MATERIAL_TYPE,
-            TB_CODE_TO_SYNTHESIS_TRAY,
-            SHELF_TRAY_POSITIONS,
-            ANALYSIS_STATION_TRAY_POSITIONS,
-        )
-
-        # 创建AGV控制器实例
-        sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-        from eit_agv.controller.agv_controller import AGVController
-        agv_controller = AGVController()
-        self._logger.info("已创建AGV控制器实例")
-
-        # 1. 确定文件路径
-        if batch_out_file is None:
-            if self._data_manager is None:
-                raise ValueError("数据管理器未启用, 请指定 batch_out_file 参数")
-            batch_out_path = self._data_manager.operations_dir / "batch_out_tray.json"
-        else:
-            batch_out_path = Path(batch_out_file)
-
-        # 2. 读取下料信息
-        if not batch_out_path.exists():
-            raise FileNotFoundError(f"下料信息文件不存在: {batch_out_path}")
-
-        with batch_out_path.open("r", encoding="utf-8") as f:
-            batch_out_data = json.load(f)
-
-        resources = batch_out_data.get("resources", [])
-        if len(resources) == 0:
-            self._logger.warning("下料信息为空, 无需转运")
-            return {
-                "success": True,
-                "total_trays": 0,
-                "transferred_trays": 0,
-                "batches": [],
-                "errors": [],
-            }
-
-        # 3. 构建转运任务列表
-        transfer_tasks_all = []
-        shelf_position_index = 0
-        analysis_position_index = 0
-        errors = []
-
-        for resource in resources:
-            dst_layout_code = resource.get("dst_layout_code", "")
-            resource_type = resource.get("resource_type")
-            resource_type_name = resource.get("resource_type_name", "")
-
-            # 跳过空资源
-            if resource_type is None or dst_layout_code == "":
-                continue
-
-            # 3.1 映射源托盘位置: dst_layout_code (TB-x-x) -> synthesis_station_tray_x-x
-            source_tray = TB_CODE_TO_SYNTHESIS_TRAY.get(dst_layout_code)
-            if source_tray is None:
-                error_msg = f"无法映射下料位置 {dst_layout_code} 到合成工站托盘"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                continue
-
-            # 3.2 映射物料类型: resource_type -> material_type 名称
-            material_type = RESOURCE_CODE_TO_MATERIAL_TYPE.get(resource_type)
-            if material_type is None:
-                self._logger.warning(
-                    f"未知的资源类型 {resource_type} ({resource_type_name}), 使用 None"
-                )
-
-            # 3.3 确定目标位置: 根据资源类型决定去 analysis_station 还是 shelf
-            if resource_type == int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY):
-                # 闪滤瓶外瓶托盘 -> analysis_station
-                if analysis_position_index >= len(ANALYSIS_STATION_TRAY_POSITIONS):
-                    error_msg = f"分析工站托盘位置已用尽, 无法放置 {resource_type_name}"
-                    self._logger.error(error_msg)
-                    errors.append(error_msg)
-                    continue
-                target_tray = ANALYSIS_STATION_TRAY_POSITIONS[analysis_position_index]
-                analysis_position_index += 1
-            else:
-                # 其它托盘 -> shelf
-                if shelf_position_index >= len(SHELF_TRAY_POSITIONS):
-                    error_msg = f"货架托盘位置已用尽, 无法放置 {resource_type_name}"
-                    self._logger.error(error_msg)
-                    errors.append(error_msg)
-                    continue
-                target_tray = SHELF_TRAY_POSITIONS[shelf_position_index]
-                shelf_position_index += 1
-
-            # 3.4 构建转运任务
-            task = {
-                "source_tray": source_tray,
-                "target_tray": target_tray,
-                "material_type": material_type,
-            }
-            transfer_tasks_all.append(task)
-            self._logger.info(
-                f"转运任务: {source_tray} -> {target_tray}, "
-                f"物料类型: {material_type} ({resource_type_name})"
-            )
-
-        if len(transfer_tasks_all) == 0:
-            self._logger.warning("没有有效的转运任务")
-            return {
-                "success": False,
-                "total_trays": len(resources),
-                "transferred_trays": 0,
-                "batches": [],
-                "errors": errors,
-            }
-
-        # 4. 分批处理: AGV 一次最多转运 4 个托盘
-        batch_size = 4
-        batches_result = []
-        transferred_count = 0
-
-        for batch_index in range(0, len(transfer_tasks_all), batch_size):
-            batch_tasks = transfer_tasks_all[batch_index:batch_index + batch_size]
-            batch_num = batch_index // batch_size + 1
-
-            self._logger.info(f"开始执行第 {batch_num} 批转运, 共 {len(batch_tasks)} 个托盘")
-
-            try:
-                result = agv_controller.batch_transfer_materials(batch_tasks, block=block)
-
-                batch_result = {
-                    "batch_num": batch_num,
-                    "tasks": batch_tasks,
-                    "success": result,
-                }
-                batches_result.append(batch_result)
-
-                if result:
-                    transferred_count += len(batch_tasks)
-                    self._logger.info(f"第 {batch_num} 批转运成功")
-                else:
-                    error_msg = f"第 {batch_num} 批转运失败"
-                    self._logger.error(error_msg)
-                    errors.append(error_msg)
-                    # 立即停止后续批次
-                    break
-
-            except Exception as e:
-                error_msg = f"第 {batch_num} 批转运异常: {str(e)}"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                batches_result.append(
-                    {
-                        "batch_num": batch_num,
-                        "tasks": batch_tasks,
-                        "success": False,
-                        "error": str(e),
-                    }
-                )
-                # 立即停止后续批次
-                break
-
-        # 5. 返回结果
-        success = transferred_count == len(transfer_tasks_all) and len(errors) == 0
-
-        # 6. 如果所有任务成功完成, 让AGV返回充电站
-        if success:
-            self._logger.info("所有转运任务已完成, 正在让AGV返回充电站")
-            try:
-                charge_result = agv_controller.go_to_charging_station(block=block)
-                if charge_result is not None:
-                    self._logger.info("AGV已成功返回充电站")
-                else:
-                    error_msg = "AGV返回充电站失败"
-                    self._logger.warning(error_msg)
-                    errors.append(error_msg)
-            except Exception as e:
-                error_msg = f"AGV返回充电站异常: {str(e)}"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-
-        return {
-            "success": success,
-            "total_trays": len(resources),
-            "transferred_trays": transferred_count,
-            "batches": batches_result,
-            "errors": errors,
-        }
 
     def get_task_tray_mapping(self, task_id: int) -> JsonDict:
         """
@@ -2543,133 +2133,6 @@ class SynthesisStationController:
         )
 
         # 构造新的 layout_list 格式，附上 task_id
-        layout_list = [{"layout_code": code, "task_id": target_task_id} for code in sorted(target_codes)]
-        resp = self.batch_out_tray(
-            layout_list,
-            move_type=move_type,
-            task_id=target_task_id,
-            poll_interval_s=poll_interval_s,
-            timeout_s=timeout_s
-        )
-
-        return resp
-
-    def batch_out_task_and_chemical_trays(self, task_id: Optional[int] = None, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out") -> JsonDict:
-        """
-        功能:
-            下料指定或自动选择的已完成任务涉及的物料托盘, 以及该任务中使用过的药品所在的托盘
-        参数:
-            task_id: 任务 id, None 时自动选择最近完成的任务
-            poll_interval_s: 轮询空闲状态的时间间隔(秒)
-            ignore_missing: True 时忽略未在资源列表中的托盘并记录 warning, False 时抛错终止
-            timeout_s: 等待空闲的超时时间(秒)
-            move_type: 下料方式, 默认 "main_out"
-        返回:
-            Dict, 执行 batch_out_tray 的接口响应
-        """
-
-        self.wait_idle(stage="等待任务结束", poll_interval_s=poll_interval_s, timeout_s=timeout_s)
-
-        target_task_id = task_id
-        if target_task_id is None:
-            tasks_resp = self.get_task_list(sort="desc", offset=0, limit=50)
-            task_list = tasks_resp.get("task_list") or tasks_resp.get("result", {}).get("task_list") or tasks_resp.get("data", {}).get("task_list")
-            completed_ids: List[int] = []
-            if isinstance(task_list, list):
-                for item in task_list:
-                    cur_id = item.get("task_id")
-                    cur_status = item.get("status")
-                    if isinstance(cur_id, int) and cur_status == int(TaskStatus.COMPLETED):
-                        completed_ids.append(cur_id)
-            if len(completed_ids) == 0:
-                raise ValidationError("未找到下料的已完成任务")
-            target_task_id = max(completed_ids)
-            self._logger.info("未传入 task_id, 自动选择最近完成的任务: %s", target_task_id)
-
-        self._logger.info("准备下料任务物料托盘和药品托盘")
-
-        # 获取任务物料托盘
-        mapping = self.get_task_tray_mapping(target_task_id)
-        reaction_trays = mapping.get("reaction_trays") or []
-        sampling_trays = mapping.get("sampling_trays") or []
-
-        # 获取任务中使用的化学品名称
-        task_info_resp = self.get_task_info(target_task_id)
-        task_data = task_info_resp.get("result") or task_info_resp.get("data") or task_info_resp
-        units = task_data.get("layout_list") or task_data.get("unit_list") or []
-
-        used_chemicals: set[str] = set()
-        if isinstance(units, list):
-            for unit in units:
-                process_json = unit.get("process_json") or {}
-                substance = str(process_json.get("substance") or "").strip()
-                if substance:
-                    used_chemicals.add(substance)
-
-        self._logger.info("任务 %s 使用的化学品: %s", target_task_id, sorted(used_chemicals))
-
-        # 获取资源信息, 找到这些化学品所在的托盘
-        resource_rows = self.get_resource_info()
-        chemical_trays: set[str] = set()
-
-        for row in resource_rows:
-            layout_code = str(row.get("layout_code") or "").strip()
-            substance_details = row.get("substance_details") or []
-
-            if isinstance(substance_details, list):
-                for detail in substance_details:
-                    substance = str(detail.get("substance") or "").strip()
-                    if substance in used_chemicals:
-                        chemical_trays.add(layout_code)
-                        break  # 找到一个匹配的化学品就添加该托盘
-
-        self._logger.info("任务 %s 使用的化学品所在托盘: %s", target_task_id, sorted(chemical_trays))
-
-        # 合并所有托盘
-        skip_prefixes = ("MSB", "MS", "AS", "TS")
-
-        def _is_excluded_code(code: Any) -> bool:
-            if code is None:
-                return False
-            text = str(code).strip().upper()
-            return any(text.startswith(prefix) for prefix in skip_prefixes)
-
-        raw_task_tray_codes = {(code or "").strip() for code in reaction_trays if (code or "").strip()}
-        raw_task_tray_codes |= {(code or "").strip() for code in sampling_trays if (code or "").strip()}
-        raw_task_tray_codes |= chemical_trays
-
-        excluded_codes = {code for code in raw_task_tray_codes if _is_excluded_code(code)}
-        if excluded_codes:
-            self._logger.info("按前缀规则忽略托盘: %s", sorted(excluded_codes))
-
-        task_tray_codes = {code for code in raw_task_tray_codes if code not in excluded_codes}
-        target_codes = {str(code).strip() for code in task_tray_codes if str(code).strip()}
-
-        if not target_codes:
-            raise ValidationError(f"任务 {target_task_id} 未找到需要下料的物料托盘或药品托盘位置")
-
-        existing_codes = {str(row.get("layout_code") or "").strip() for row in resource_rows if row.get("layout_code")}
-        missing_codes = sorted(code for code in target_codes if code not in existing_codes)
-
-        if missing_codes:
-            if ignore_missing:
-                self._logger.warning("下料位置未在资源列表, 已忽略: %s", missing_codes)
-                target_codes = {code for code in target_codes if code not in missing_codes}
-            else:
-                raise ValidationError(f"下料位置不存在: {missing_codes}")
-
-        if not target_codes:
-            raise ValidationError("可执行下料的位置为空, 请检查输入或资源列表")
-
-        self._logger.info(
-            "准备批量下料任务物料托盘和药品托盘 task_id=%s  任务托盘=%s  药品托盘=%s  实际下料位置=%s",
-            target_task_id,
-            sorted(set(reaction_trays) | set(sampling_trays)),
-            sorted(chemical_trays),
-            sorted(target_codes),
-        )
-
-        # 构造新的 layout_list 格式, 附上 task_id
         layout_list = [{"layout_code": code, "task_id": target_task_id} for code in sorted(target_codes)]
         resp = self.batch_out_tray(
             layout_list,
@@ -3411,11 +2874,10 @@ class SynthesisStationController:
             col_to_row_map[col_item["col_idx"]] = curr_row
             curr_row += 1
 
-        ROW_IDX_REACTION = curr_row + 1  # 反应搅拌
-        ROW_IDX_INT_STD = curr_row + 2   # 添加内标
-        ROW_IDX_STIR_AFTER = curr_row + 4   # 内标后搅拌
-        ROW_IDX_DILUTION = curr_row + 3  # 稀释移液操作行
-        ROW_IDX_FILTER = curr_row + 5    # 闪滤操作行
+        ROW_IDX_REACTION = curr_row + 1
+        ROW_IDX_INT_STD = curr_row + 2
+        ROW_IDX_STIR_AFTER = curr_row + 3
+        ROW_IDX_FILTER = curr_row + 4
 
         layout_list: List[Dict[str, Any]] = []
         common_fields = {
@@ -3532,28 +2994,14 @@ class SynthesisStationController:
                 # 内标未配置时不做内标后搅拌.
                 self._logger.debug("内标种类为空, 跳过内标后搅拌 exp=%s", exp_idx + 1)
 
-            # 稀释移液操作: 稀释液种类 + 稀释量(μL)
             dil_name = str(params.get("稀释液种类", "")).strip()
             if dil_name != "":
-                self._add_dilution_unit(
-                    layout_list,
-                    common_fields,
-                    unit_column,
-                    ROW_IDX_DILUTION,
-                    dil_name,
-                    chemical_db,
-                    params,
-                )
-
-            # 闪滤操作: 闪滤液种类 + 闪滤液用量(μL) + 取样量(μL)
-            filter_name = str(params.get("闪滤液种类", "")).strip()
-            if filter_name != "":
                 self._add_filter_unit(
                     layout_list,
                     common_fields,
                     unit_column,
                     ROW_IDX_FILTER,
-                    filter_name,
+                    dil_name,
                     chemical_db,
                     params,
                 )
@@ -3936,60 +3384,11 @@ class SynthesisStationController:
         })
         layout_list.append(unit_dict)
 
-    def _add_dilution_unit(self, layout_list, common_fields, col, row, diluent_name, db, params):
-        """
-        功能:
-            添加稀释移液操作单元.
-        参数:
-            layout_list: List[Dict], 任务布局列表.
-            common_fields: Dict, 通用字段模板.
-            col: int, 单元所在列号.
-            row: int, 单元所在行号.
-            diluent_name: str, 稀释液名称.
-            db: Dict, 化学品信息字典.
-            params: Dict, 实验参数.
-        返回:
-            无.
-        """
-        if diluent_name not in db:
-            return
+    def _add_filter_unit(self, layout_list, common_fields, col, row, diluent_name, db, params):
+        """功能: 添加过滤"""
+        if diluent_name not in db: return
         chem_id = db[diluent_name]['chemical_id']
         dilution_vol_ul = float(params.get("稀释量(μL)", 0))
-        if dilution_vol_ul <= 0:
-            return
-
-        unit_dict = common_fields.copy()
-        unit_dict.update({
-            "unit_type": "exp_pipetting",
-            "unit_column": col, "unit_row": row, "unit_id": f"unit-{uuid.uuid4().hex[:8]}",
-            "process_json": {
-                "custom": {"unit": "mL", "unitOptions": ["mL", "µL", "L"]},
-                "substance": diluent_name,
-                "chemical_id": chem_id,
-                "add_volume": round(dilution_vol_ul / 1000, 3)
-            }
-        })
-        layout_list.append(unit_dict)
-
-    def _add_filter_unit(self, layout_list, common_fields, col, row, filter_liquid_name, db, params):
-        """
-        功能:
-            添加闪滤操作单元.
-        参数:
-            layout_list: List[Dict], 任务布局列表.
-            common_fields: Dict, 通用字段模板.
-            col: int, 单元所在列号.
-            row: int, 单元所在行号.
-            filter_liquid_name: str, 闪滤液名称.
-            db: Dict, 化学品信息字典.
-            params: Dict, 实验参数.
-        返回:
-            无.
-        """
-        if filter_liquid_name not in db:
-            return
-        chem_id = db[filter_liquid_name]['chemical_id']
-        filter_vol_ul = float(params.get("闪滤液用量(μL)", 0))
         sample_vol_ul = float(params.get("取样量(μL)", 0))
 
         unit_dict = common_fields.copy()
@@ -3997,8 +3396,8 @@ class SynthesisStationController:
             "unit_type": "exp_filtering_sample",
             "unit_column": col, "unit_row": row, "unit_id": f"unit-{uuid.uuid4().hex[:8]}",
             "process_json": {
-                "single_press_num": 6, "substance": filter_liquid_name, "chemical_id": chem_id,
-                "add_volume": filter_vol_ul / 1000, "sampling_volume": sample_vol_ul / 1000
+                "single_press_num": 6, "substance": diluent_name, "chemical_id": chem_id,
+                "add_volume": dilution_vol_ul/1000, "sampling_volume": sample_vol_ul/1000 
             }
         })
         layout_list.append(unit_dict)
@@ -4506,3 +3905,76 @@ class SynthesisStationController:
             self._logger.warning("资源核查未通过, 缺失项 %s", missing_items)
 
         return result
+
+if __name__ == "__main__":
+
+    settings = Settings.from_env()
+    configure_logging(settings.log_level)
+    logger = logging.getLogger("station_controller.main")
+
+    controller = SynthesisStationController()
+
+    #设备输初始化
+    controller.device_init()
+
+    #获取资源列表
+    resource_info = controller.get_resource_info()
+
+    # #获取工站内设备所有信息
+    # device_info = controller.list_device_status()
+    # print(device_info)
+    
+    # #获取工站化合物库信息：
+    # chemical_info = controller.get_all_chemical_list()
+    # print(chemical_info)
+    # output_csv = controller.export_chemical_list_to_csv(chemical_info, Path("station_chemical_list.csv"))
+
+    # #从csv文件中新增化合物
+    # controller.sync_chemicals_from_csv(Path("add_chemical_list.csv"), overwrite=False)
+
+    # 删除特定ID的化合物
+    # controller.delete_chemical(363)
+
+    # #获取手套箱内气体氛围的情况
+    # device_info = controller.get_glovebox_env()
+    # print(device_info)
+
+    # #批量下料测试
+    # out_resp = controller.batch_out_tray(["N-4", "W-2-1","W-2-5","W-3-2"])
+
+    # # 批量上料测试
+    # resource_req_list = controller.build_batch_in_tray_payload_from_sheet("batch_in_tray.xlsx")
+    # out_path = Path("resource_req_list.json")
+    # out_path.write_text(json.dumps(resource_req_list, ensure_ascii=False, indent=2), encoding="utf-8")
+    # result = controller.batch_in_tray(resource_req_list)
+
+    #————————————————————————化合物库对齐————————————————————————
+
+    # #检查化学品列表的合理性
+    # controller.check_chemical_list_file("chemical_list.xlsx")
+
+    # # 对齐化合物库和站内化学品列表
+    # controller.align_chemicals_from_file("chemical_list.xlsx")
+
+    #————————————————————————创建任务————————————————————————
+
+    # #获取所有任务信息
+    # result = controller.get_all_tasks()
+    # out_path = Path("task_list.json")
+    # out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # #从表格中创建任务
+    # result = controller.create_task_from_template("reeaction_template.xlsx")
+    # result2 = controller.add_task(result)
+    # print(result2)
+    # # controller.delete_task(571)
+
+    # out_path = Path("reaction_template.json")
+    # out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 复位 W-1-1 和 W-1-2
+    # controller.control_w1_shelf("W-1-1", "home")
+
+
+
+
