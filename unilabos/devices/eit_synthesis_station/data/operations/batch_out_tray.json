@@ -1,0 +1,68 @@
+{
+  "start_time": "2026-02-08T11:37:44.554169",
+  "end_time": "2026-02-08T11:39:39.255271",
+  "resources": [
+    {
+      "layout_code": "W-2-2",
+      "count": 1,
+      "resource_type": 201000502,
+      "resource_type_name": "8 mL试剂瓶托盘",
+      "substance_details": [
+        {
+          "slot": 0,
+          "well": "A1",
+          "substance": "乙醇",
+          "value": "5mL"
+        }
+      ],
+      "task_id": 709,
+      "dst_layout_code": "TB-2-1"
+    },
+    {
+      "layout_code": "W-2-5",
+      "count": 18,
+      "resource_type": 201000726,
+      "resource_type_name": "2 mL反应试管托盘",
+      "substance_details": [
+        {
+          "slot": 0,
+          "well": "A1",
+          "cur_volume": "0.5mL",
+          "cur_weight": "0"
+        },
+        {
+          "slot": 1,
+          "well": "A2",
+          "cur_volume": "0.5mL",
+          "cur_weight": "0"
+        },
+        {
+          "slot": 2,
+          "well": "A3",
+          "cur_volume": "0.5mL",
+          "cur_weight": "0"
+        },
+        {
+          "slot": 3,
+          "well": "A4",
+          "cur_volume": "0.5mL",
+          "cur_weight": "0"
+        },
+        {
+          "slot": 4,
+          "well": "A5",
+          "cur_volume": "0.5mL",
+          "cur_weight": "0"
+        },
+        {
+          "slot": 5,
+          "well": "A6",
+          "cur_volume": "0.5mL",
+          "cur_weight": "0"
+        }
+      ],
+      "task_id": 709,
+      "dst_layout_code": "TB-2-2"
+    }
+  ]
+}
