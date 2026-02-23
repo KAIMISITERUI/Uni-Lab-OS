@@ -145,45 +145,6 @@ eit_synthesis_station:
           title: batch_out_empty_trays参数
           type: object
         type: UniLabJsonCommand
-      batch_out_task_and_empty_trays:
-        feedback: {}
-        goal: {}
-        goal_default:
-          ignore_missing: true
-          move_type: main_out
-          poll_interval_s: 1.0
-          task_id: null
-          timeout_s: 900.0
-        handles: {}
-        result: {}
-        schema:
-          description: ''
-          properties:
-            feedback: {}
-            goal:
-              properties:
-                ignore_missing:
-                  default: true
-                  type: boolean
-                move_type:
-                  default: main_out
-                  type: string
-                poll_interval_s:
-                  default: 1.0
-                  type: number
-                task_id:
-                  type: string
-                timeout_s:
-                  default: 900.0
-                  type: number
-              required: []
-              type: object
-            result: {}
-          required:
-          - goal
-          title: batch_out_task_and_empty_trays参数
-          type: object
-        type: UniLabJsonCommand
       batch_out_task_and_chemical_trays:
         feedback: {}
         goal: {}
@@ -221,6 +182,45 @@ eit_synthesis_station:
           required:
           - goal
           title: batch_out_task_and_chemical_trays参数
+          type: object
+        type: UniLabJsonCommand
+      batch_out_task_and_empty_trays:
+        feedback: {}
+        goal: {}
+        goal_default:
+          ignore_missing: true
+          move_type: main_out
+          poll_interval_s: 1.0
+          task_id: null
+          timeout_s: 900.0
+        handles: {}
+        result: {}
+        schema:
+          description: ''
+          properties:
+            feedback: {}
+            goal:
+              properties:
+                ignore_missing:
+                  default: true
+                  type: boolean
+                move_type:
+                  default: main_out
+                  type: string
+                poll_interval_s:
+                  default: 1.0
+                  type: number
+                task_id:
+                  type: string
+                timeout_s:
+                  default: 900.0
+                  type: number
+              required: []
+              type: object
+            result: {}
+          required:
+          - goal
+          title: batch_out_task_and_empty_trays参数
           type: object
         type: UniLabJsonCommand
       batch_out_task_trays:

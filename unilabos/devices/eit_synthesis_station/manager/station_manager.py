@@ -2,6 +2,7 @@
 import csv
 import re
 import logging
+from datetime import datetime
 import pandas as pd
 import openpyxl
 from openpyxl import Workbook,load_workbook
@@ -536,15 +537,39 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             if getattr(exc, "code", None) == 409:
                 task_name = task_payload.get("task_name") or params.get("实验名称")
 
-                dup_msg = (
-                    f"任务上传失败，请检查任务名称是否重复: {task_name}"
-                    if task_name
-                    else "任务名称重复，请修改任务/实验名称后重试"
-                )
-                logger.error(dup_msg)
-                # 重新抛出带提示的 ApiError
-                raise ApiError(code=exc.code, msg=dup_msg, payload=exc.payload) from exc
-            raise
+                # 开启自动重命名时: 追加秒级时间戳后缀后重试一次
+                if self._settings.auto_rename_on_duplicate and task_name:
+                    timestamp_suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    new_task_name = f"{task_name}_{timestamp_suffix}"
+                    task_payload["task_name"] = new_task_name
+
+                    logger.warning(
+                        "任务名称 '%s' 已存在(409), 自动重命名为 '%s' 后重试",
+                        task_name,
+                        new_task_name,
+                    )
+                    try:
+                        resp = self.add_task(task_payload)   # 以新名称重新提交
+                    except ApiError as retry_exc:
+                        # 重试仍失败: 记录错误并抛出
+                        retry_msg = (
+                            f"任务重命名后上传仍失败(code={retry_exc.code}): {new_task_name}"
+                        )
+                        logger.error(retry_msg)
+                        raise ApiError(
+                            code=retry_exc.code, msg=retry_msg, payload=retry_exc.payload
+                        ) from retry_exc
+                else:
+                    # 未开启自动重命名: 直接告知用户手动修改
+                    dup_msg = (
+                        f"任务上传失败，请检查任务名称是否重复: {task_name}"
+                        if task_name
+                        else "任务名称重复，请修改任务/实验名称后重试"
+                    )
+                    logger.error(dup_msg)
+                    raise ApiError(code=exc.code, msg=dup_msg, payload=exc.payload) from exc
+            else:
+                raise
 
         # 6. 提交任务信息到工站
         task_id = resp.get("task_id")

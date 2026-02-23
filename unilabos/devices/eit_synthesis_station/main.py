@@ -14,7 +14,7 @@ if __name__ == "__main__":
 
     # 0. 设定文件名称
     ROOT = Path(__file__).resolve().parent
-    task_tpl = ROOT / "sheet" / "task_reaction.xlsx"
+    task_tpl = ROOT / "sheet" / "reaction_template.xlsx"
     chem_db = ROOT / "sheet" / "chemical_list.xlsx"
     template_in = ROOT / "sheet" / "batch_in_tray.xlsx"
 
@@ -82,5 +82,13 @@ if __name__ == "__main__":
     #---------------工作流-------------------
 
     # 1. 提交任务工作流
+
+    manager.align_chemicals_with_file(chem_db)
+
+    manager.create_task_by_file(str(task_tpl), str(chem_db))
+
+    manager.check_resource_for_task(str(task_tpl), str(chem_db))
+
+
     
     
