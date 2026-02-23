@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import csv
 import re
+import shutil
 import logging
 from datetime import datetime
 import pandas as pd
@@ -594,6 +595,17 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 logger.warning("未找到“实验ID”位置，未回写任务ID")
         except Exception as exc:
             logger.warning("任务ID回写失败: %s", exc)
+
+        # 8. 将任务文件复制到 data/tasks/{task_id}/ 文件夹，并以任务ID命名
+        try:
+            task_folder = self._settings.data_dir / "tasks" / str(task_id)
+            task_folder.mkdir(parents=True, exist_ok=True)  # 目录不存在时递归创建
+
+            dest_path = task_folder / f"{task_id}{t_path.suffix}"  # 保留原始后缀
+            shutil.copy2(t_path, dest_path)                         # copy2 保留文件元数据
+            logger.info("任务文件已复制至: %s", dest_path)
+        except Exception as exc:
+            logger.warning("任务文件复制失败: %s", exc)
 
         return task_id
 

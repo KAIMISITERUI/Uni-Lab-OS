@@ -14,7 +14,7 @@ if __name__ == "__main__":
 
     # 0. 设定文件名称
     ROOT = Path(__file__).resolve().parent
-    task_tpl = ROOT / "sheet" / "reaction_template.xlsx"
+    task_tpl = ROOT / "sheet" / "backup" /"reaction_template_4.xlsx"
     chem_db = ROOT / "sheet" / "chemical_list.xlsx"
     template_in = ROOT / "sheet" / "batch_in_tray.xlsx"
 
