@@ -14,7 +14,7 @@ if __name__ == "__main__":
 
     # 0. 设定文件名称
     ROOT = Path(__file__).resolve().parent
-    task_tpl = ROOT / "sheet" / "backup" /"reaction_template_4.xlsx"
+    task_tpl = ROOT / "sheet" / "reaction_template.xlsx"
     chem_db = ROOT / "sheet" / "chemical_list.xlsx"
     template_in = ROOT / "sheet" / "batch_in_tray.xlsx"
 
@@ -89,6 +89,17 @@ if __name__ == "__main__":
 
     manager.check_resource_for_task(str(task_tpl), str(chem_db))
 
+    # 2. agv上料+开始任务+agv下料
 
+    manager.batch_in_tray_with_agv_transfer()
+
+    manager.check_resource_for_task(str(task_tpl), str(chem_db))
+
+    manager.start_task()
+
+    manager.wait_task_with_ops()
     
+    manager.batch_out_task_and_empty_trays()
+
+    manager.auto_unload_trays_to_agv()
     

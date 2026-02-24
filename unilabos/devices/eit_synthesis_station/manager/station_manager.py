@@ -20,6 +20,7 @@ from ..config.constants import ResourceCode, TRAY_CODE_DISPLAY_NAME, TraySpec
 from .synchronizer import EITSynthesisWorkstation
 
 from ..driver.exceptions import ValidationError,ApiError
+from ..utils.file_utils import safe_excel_write, safe_workbook_save
 
 logger = logging.getLogger("StationManager")
 
@@ -179,7 +180,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if target_path.suffix.lower() == ".csv":
             out_df.to_csv(target_path, index=False, encoding="utf-8-sig")
         else:
-            out_df.to_excel(target_path, index=False)
+            safe_excel_write(out_df, target_path, index=False)
             self._beautify_excel_database(target_path)  # 保存后再美化
 
         logger.info("化合物库去重完成，输出文件: %s", target_path.resolve())
@@ -223,7 +224,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             col_width = min(col_width, MAX_WIDTH)
             ws.column_dimensions[col_cells[0].column_letter].width = col_width
 
-        wb.save(file_path)
+        safe_workbook_save(wb, file_path)
 
     def align_chemicals_with_file(self, file_path: str, auto_delete: bool = True) -> None:
         """
@@ -255,7 +256,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if path.suffix == '.csv':
             new_df.to_csv(path, index=False, encoding="utf-8-sig")
         else:
-            new_df.to_excel(path, index=False)
+            safe_excel_write(new_df, path, index=False)
             self._beautify_excel_database(path)  # 保存后再美化
         
         logger.info(f"化学品对齐完成并回写文件: {path}")
@@ -475,7 +476,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         ws["C1"] = "content(耗材填数量; 物质填: A1|名称|2mL; B2|名称|5mg)"
         ws["D1"] = "shelf_position"
         ws["E1"] = "storage(格式: 物质|位置; 多个用;隔开)"
-        wb.save(file_path)
+        safe_workbook_save(wb, file_path)
         logger.info(f"已生成上料模板: {file_path}")
 
     # ---------- 3. 任务生成文件处理 ----------
@@ -663,7 +664,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                     break
 
             if updated:
-                wb.save(t_path)
+                safe_workbook_save(wb, t_path)
                 logger.info("已将任务ID写入模板文件: %s", t_path)
             else:
                 logger.warning("未找到“实验ID”位置，未回写任务ID")
@@ -835,7 +836,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         for col_letter, w in widths_map.items():
             ws.column_dimensions[col_letter].width = w
 
-        wb.save(path)
+        safe_workbook_save(wb, path)
         logger.info(f"已生成任务模板: {path}")
 
     # ---------- 4. 物料核算 ----------
@@ -1463,7 +1464,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             ws.cell(row=idx, column=5, value=item["storage"])
 
         # 保存文件
-        wb.save(batch_in_path)
+        safe_workbook_save(wb, batch_in_path)
 
         logger.info(f"已生成上料文件: {batch_in_path}, 共{len(batch_in_data)}行, 包含{sum(len(g['contents']) for g in position_groups.values())}个物资")
         logger.info(f"请检查文件并根据需要调整")
