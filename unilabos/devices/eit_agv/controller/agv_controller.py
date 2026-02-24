@@ -601,17 +601,17 @@ class AGVController:
 
         try:
             # 连接到AGV查询端口
-            logger.info("正在连接到AGV查询端口...")
+            logger.debug("正在连接到AGV查询端口...")
             agv_driver.connect()
-            logger.info("连接成功")
+            logger.debug("连接成功")
 
             # 查询机器人位置
-            logger.info("正在查询机器人位置...")
+            logger.debug("正在查询机器人位置...")
             location_info = agv_driver.query_robot_location()
 
             # 获取当前站点名称
             current_station_id = location_info.get("current_station", "")
-            logger.info(f"查询到当前站点ID: {current_station_id}")
+            logger.debug(f"查询到当前站点ID: {current_station_id}")
 
             # 根据STATION_POSITIONS映射成位置name
             if current_station_id in STATION_POSITIONS:
@@ -639,7 +639,7 @@ class AGVController:
         finally:
             # 关闭AGV连接
             agv_driver.close()
-            logger.info("AGV连接已关闭")
+            logger.debug("AGV连接已关闭")
 
     def query_battery_status(self, simple=True):
         """
@@ -665,9 +665,9 @@ class AGVController:
 
         try:
             # 连接到AGV查询端口
-            logger.info("正在连接到AGV查询端口...")
+            logger.debug("正在连接到AGV查询端口...")
             agv_driver.connect()
-            logger.info("连接成功")
+            logger.debug("连接成功")
 
             # 查询电池状态
             logger.info("正在查询电池状态...")
@@ -692,7 +692,7 @@ class AGVController:
         finally:
             # 关闭AGV连接
             agv_driver.close()
-            logger.info("AGV连接已关闭")
+            logger.debug("AGV连接已关闭")
 
     def navigate_to_station(self, station_id):
         """
@@ -766,7 +766,7 @@ class AGVController:
         if home_result is None:
             logger.error("机械臂回零失败, 取消AGV导航命令发送")
             return None
-        logger.info(f"机械臂回零完成: {home_result}")
+        logger.debug(f"机械臂回零完成: {home_result}")
 
         # 步骤2: 发送AGV导航命令到目标工站
         logger.info("步骤2: 发送AGV导航命令到目标工站")
@@ -790,12 +790,12 @@ class AGVController:
 
         try:
             # 连接到AGV导航端口
-            logger.info("正在连接到AGV导航端口...")
+            logger.debug("正在连接到AGV导航端口...")
             agv_driver.connect_navigation()
-            logger.info("连接成功")
+            logger.debug("连接成功")
 
             # 调用异步导航函数发送命令
-            logger.info(f"正在发送导航命令到目标工站: {station_id}...")
+            logger.debug(f"正在发送导航命令到目标工站: {station_id}...")
             result = agv_driver.send_navigate_command(target_id=station_id)
 
             # 检查导航响应
@@ -812,7 +812,7 @@ class AGVController:
         finally:
             # 关闭AGV连接
             agv_driver.close()
-            logger.info("AGV连接已关闭")
+            logger.debug("AGV连接已关闭")
 
     def safe_navigate_to_station(self, station_id):
         """
@@ -1893,7 +1893,7 @@ class AGVController:
                     agv_tray = agv_tray_names[task_idx]
                     task_to_agv_tray[task_idx] = agv_tray
 
-                    logger.info(f"\n任务{task_idx+1}: 从{source_tray}取料")
+                    logger.info(f"任务{task_idx+1}: 从{source_tray}取料")
                     success = self.pick_tray_with_material(source_tray, material_type, block)
                     if not success:
                         logger.error(f"从{source_tray}取出物料失败")
@@ -1908,9 +1908,7 @@ class AGVController:
                     logger.info(f"任务{task_idx+1}: 成功放置到AGV货架, 已完成{len(task_to_agv_tray)}/{len(transfer_tasks)}个取料")
 
             # 阶段2: 从AGV货架取料并放置到各目标站点
-            logger.info("\n" + "=" * 60)
             logger.info("阶段2: 从AGV货架取料并放置到目标站点")
-            logger.info("=" * 60)
 
             for station_id, task_indices in target_stations.items():
                 logger.info(f"\n处理目标站点: {station_id}")
@@ -1942,7 +1940,7 @@ class AGVController:
                     material_type = task.get("material_type")
                     agv_tray = task_to_agv_tray[task_idx]
 
-                    logger.info(f"\n任务{task_idx+1}: 从AGV货架{agv_tray}取料")
+                    logger.info(f"任务{task_idx+1}: 从AGV货架{agv_tray}取料")
                     success = self.pick_tray_with_material(agv_tray, material_type, block)
                     if not success:
                         logger.error(f"从{agv_tray}取出物料失败")
@@ -1956,9 +1954,7 @@ class AGVController:
 
                     logger.info(f"任务{task_idx+1}: 成功放置到目标位置")
 
-            logger.info("\n" + "=" * 60)
             logger.info(f"批量物料转运完成, 共完成{len(transfer_tasks)}个任务")
-            logger.info("=" * 60)
             return True
 
         except Exception as e:
@@ -2007,7 +2003,7 @@ class AGVController:
         # 显示任务信息
         logger.info(f"转运任务列表:")
         for idx, task in enumerate(transfer_tasks, 1):
-            logger.info(f"  任务{idx}: {task['source_tray']} <-> {task['target_tray']}, 物料类型: {task.get('material_type', '未指定')}")
+            logger.info(f"任务{idx}: {task['source_tray']} <-> {task['target_tray']}, 物料类型: {task.get('material_type', '未指定')}")
 
         completed_cycles = 0
 

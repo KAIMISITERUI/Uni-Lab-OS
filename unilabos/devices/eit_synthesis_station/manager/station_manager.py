@@ -13,7 +13,7 @@ from openpyxl.styles import Font, Alignment, NamedStyle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# 引入底层的控制器 
+# 引入底层的控制器
 from ..controller.station_controller import SynthesisStationController
 from ..config.setting import Settings, configure_logging
 from ..config.constants import ResourceCode, TRAY_CODE_DISPLAY_NAME, TraySpec
@@ -1359,13 +1359,13 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             tray_type_code = None
             tray_type_name = ""
 
-            if "反应试管" in substance or "反应管" in substance or "2mL反应试管" in substance or "2mL反应管" in substance or "2 mL反应试管" in substance or "2 mL反应管" in substance:
+            if ("反应试管" in substance or "反应管" in substance or "2mL反应试管" in substance or "2mL反应管" in substance or "2 mL反应试管" in substance or "2 mL反应管" in substance) and "磁子" not in substance:
                 tray_type_code = int(ResourceCode.REACTION_TUBE_TRAY_2ML)
                 tray_type_name = f"2 mL反应试管托盘({tray_type_code})"
             elif "试管磁子" in substance or "反应管磁子" in substance or "2mL试管磁子" in substance or "2mL反应管磁子" in substance or "2 mL试管磁子" in substance or "2 mL反应管磁子" in substance:
                 tray_type_code = int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML)
                 tray_type_name = f"2 mL试管磁子托盘({tray_type_code})"
-            elif "密封盖" in substance or "反应密封盖" in substance:
+            elif "密封盖" in substance or "反应密封盖" in substance or "反应盖板" in substance:
                 tray_type_code = int(ResourceCode.REACTION_SEAL_CAP_TRAY)
                 tray_type_name = f"反应密封盖托盘({tray_type_code})"
             elif "闪滤瓶内瓶" in substance or "内瓶" in substance:
@@ -1662,3 +1662,30 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         task_id = resp.get("task_id")
         return task_id
+
+    # ---------- 分析站对接 ----------
+    def run_analysis(self, task_id: Optional[str] = None) -> Dict:
+        """
+        功能:
+            读取指定合成任务(或最新任务)的 xlsx 配置, 自动生成分析任务 CSV
+            并通过 AnalysisStationController 提交至对应仪器(当前已实现 GC_MS).
+        参数:
+            task_id: 合成任务 ID 字符串, 为 None 时自动选取编号最大的最近任务.
+        返回:
+            Dict: 各仪器提交结果, 格式示例:
+                {
+                    "gc_ms":      {"success": bool, "return_info": str},
+                    "uplc_qtof":  {"success": bool, "return_info": str},
+                    "hplc":       {"success": bool, "return_info": str},
+                }
+        """
+        # 延迟绝对导入，避免模块级相对导入越界问题
+        # 运行目录为 devices/，eit_analysis_station 可直接作为顶层包访问
+        from eit_analysis_station.controller.analysis_controller import AnalysisStationController
+
+        # 创建分析站控制器实例，使用其默认配置
+        analysis_ctrl = AnalysisStationController()
+
+        logger.info("启动分析任务提交流程, task_id=%s", task_id)
+        results = analysis_ctrl.run_analysis(task_id=task_id)
+        return results

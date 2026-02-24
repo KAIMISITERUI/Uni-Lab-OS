@@ -594,7 +594,7 @@ class PositionManager:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 yaml_handler.dump(config, f)
 
-            logger.info(f"成功保存工站 {station_name} 的校准偏移值到配置文件")
+            logger.debug(f"成功保存工站 {station_name} 的校准偏移值到配置文件")
 
         except Exception as e:
             logger.error(f"保存校准偏移值失败: {e}")

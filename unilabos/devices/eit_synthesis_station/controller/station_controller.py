@@ -1315,7 +1315,7 @@ class SynthesisStationController:
         返回:
             List[Dict]: 更新后的数据列表 (包含回填的 ID)
         """
-        
+
         self._logger.info("开始执行化学品库对齐操作")
 
         if not rows:
@@ -2089,7 +2089,12 @@ class SynthesisStationController:
         """
         功能:
             读取 batch_out_tray.json 中的下料信息, 调用 AGV 的 batch_transfer_materials
-            函数将托盘从合成工站转运到目标位置(shelf 或 analysis_station)
+            函数将托盘从合成工站转运到目标位置.
+            转运顺序规则:
+              - 闪滤瓶外瓶托盘(检测物料)始终排在任务列表最前面, 优先进入前几批
+              - 同一批次内, 分析工站任务也排在货架任务前面, AGV 在同一趟行程中先
+                卸货到分析工站再卸货到货架
+              - 每批最多携带 4 个托盘, 任意批次失败则立即中止后续批次
         参数:
             batch_out_file: 下料信息文件路径, 默认为 data/operations/batch_out_tray.json
             block: 是否阻塞执行, True 表示等待转运完成
@@ -2144,8 +2149,10 @@ class SynthesisStationController:
                 "errors": [],
             }
 
-        # 3. 构建转运任务列表
-        transfer_tasks_all = []
+        # 3. 构建转运任务列表, 分析工站任务单独收集后拼在最前面,
+        #    保证跨批次优先分配给前几批, 批次内也保持分析站先于货架
+        analysis_tasks: list = []   # 闪滤瓶外瓶托盘 -> 分析工站
+        shelf_tasks: list = []      # 其余托盘       -> 货架
         shelf_position_index = 0
         analysis_position_index = 0
         errors = []
@@ -2174,9 +2181,9 @@ class SynthesisStationController:
                     f"未知的资源类型 {resource_type} ({resource_type_name}), 使用 None"
                 )
 
-            # 3.3 确定目标位置: 根据资源类型决定去 analysis_station 还是 shelf
+            # 3.3 按物料类型分流: 闪滤瓶外瓶托盘 -> 分析工站, 其余 -> 货架
             if resource_type == int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY):
-                # 闪滤瓶外瓶托盘 -> analysis_station
+                # 检测物料(闪滤瓶外瓶托盘) -> 分析工站
                 if analysis_position_index >= len(ANALYSIS_STATION_TRAY_POSITIONS):
                     error_msg = f"分析工站托盘位置已用尽, 无法放置 {resource_type_name}"
                     self._logger.error(error_msg)
@@ -2184,8 +2191,17 @@ class SynthesisStationController:
                     continue
                 target_tray = ANALYSIS_STATION_TRAY_POSITIONS[analysis_position_index]
                 analysis_position_index += 1
+                analysis_tasks.append({
+                    "source_tray": source_tray,
+                    "target_tray": target_tray,
+                    "material_type": material_type,
+                })
+                self._logger.info(
+                    f"[分析工站] 任务: {source_tray} -> {target_tray}, "
+                    f"物料类型: {material_type} ({resource_type_name})"
+                )
             else:
-                # 其它托盘 -> shelf
+                # 其它托盘 -> 货架
                 if shelf_position_index >= len(SHELF_TRAY_POSITIONS):
                     error_msg = f"货架托盘位置已用尽, 无法放置 {resource_type_name}"
                     self._logger.error(error_msg)
@@ -2193,18 +2209,20 @@ class SynthesisStationController:
                     continue
                 target_tray = SHELF_TRAY_POSITIONS[shelf_position_index]
                 shelf_position_index += 1
+                shelf_tasks.append({
+                    "source_tray": source_tray,
+                    "target_tray": target_tray,
+                    "material_type": material_type,
+                })
+                self._logger.info(
+                    f"[货架] 任务: {source_tray} -> {target_tray}, "
+                    f"物料类型: {material_type} ({resource_type_name})"
+                )
 
-            # 3.4 构建转运任务
-            task = {
-                "source_tray": source_tray,
-                "target_tray": target_tray,
-                "material_type": material_type,
-            }
-            transfer_tasks_all.append(task)
-            self._logger.info(
-                f"转运任务: {source_tray} -> {target_tray}, "
-                f"物料类型: {material_type} ({resource_type_name})"
-            )
+        # 分析工站任务置于列表头部, 确保:
+        #   - 托盘数 <= 4 时, 同批次内先卸分析站再卸货架
+        #   - 托盘数 > 4 时, 分析工站托盘优先进入前几批
+        transfer_tasks_all = analysis_tasks + shelf_tasks
 
         if len(transfer_tasks_all) == 0:
             self._logger.warning("没有有效的转运任务")
@@ -2216,7 +2234,13 @@ class SynthesisStationController:
                 "errors": errors,
             }
 
-        # 4. 分批处理: AGV 一次最多转运 4 个托盘
+        self._logger.info(
+            f"转运任务汇总: 分析工站 {len(analysis_tasks)} 个, "
+            f"货架 {len(shelf_tasks)} 个, 合计 {len(transfer_tasks_all)} 个"
+        )
+
+        # 4. 分批处理: AGV 一次最多转运 4 个托盘,
+        #    同一批次内分析工站任务已排在前面, AGV 将先卸货到分析站再卸货到货架
         batch_size = 4
         batches_result = []
         transferred_count = 0
@@ -2419,11 +2443,33 @@ class SynthesisStationController:
         target_codes = {*(task_tray_codes or []), *empty_codes}
         target_codes = {str(code).strip() for code in target_codes if str(code).strip()}
 
+        # 提前获取资源列表, 供磁子托盘特殊处理与后续校验共用
+        resource_rows = self.get_resource_info()
+        existing_codes = {str(row.get("layout_code") or "").strip() for row in resource_rows if row.get("layout_code")}
+
+        # 对 2 mL 试管磁子托盘进行特殊处理: 磁子数量不等于满载量(24)即视为已使用, 纳入下料
+        magnet_type = int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML)
+        magnet_full_count = TraySpec.TEST_TUBE_MAGNET_TRAY_2ML[0] * TraySpec.TEST_TUBE_MAGNET_TRAY_2ML[1]  # 6*4=24
+        used_magnet_codes: set[str] = set()
+        for row in resource_rows:
+            if row.get("resource_type") == magnet_type:
+                row_count = row.get("count")
+                if isinstance(row_count, int) and row_count != magnet_full_count:
+                    layout_code = str(row.get("layout_code") or "").strip()
+                    if layout_code and not _is_excluded_code(layout_code):
+                        used_magnet_codes.add(layout_code)
+
+        if used_magnet_codes:
+            self._logger.info(
+                "检测到已使用的磁子托盘(磁子数量不等于 %s), 纳入下料: %s",
+                magnet_full_count,
+                sorted(used_magnet_codes),
+            )
+            target_codes |= used_magnet_codes
+
         if not target_codes:
             raise ValidationError(f"任务 {target_task_id} 未找到需要下料的托盘位置")
 
-        resource_rows = self.get_resource_info()
-        existing_codes = {str(row.get("layout_code") or "").strip() for row in resource_rows if row.get("layout_code")}
         missing_codes = sorted(code for code in target_codes if code not in existing_codes)
 
         if missing_codes:
@@ -3042,7 +3088,7 @@ class SynthesisStationController:
 
         return None
 
-    def wait_task_with_ops(self, task_id: Optional[int] = None, *, poll_interval_s: float = 2.0) -> int:
+    def wait_task_with_ops(self, task_id: Optional[int] = None, *, poll_interval_s: float = 5.0) -> int:
         """
         功能:
             轮询指定或自动选取的运行中任务直至完成, 并按新增步骤增量输出操作进度
@@ -4490,15 +4536,19 @@ class SynthesisStationController:
                         prompt_msg = check_result.get("prompt_msg", {})
                         resource_type = prompt_msg.get("resource_type", "未知资源")
                         number = prompt_msg.get("number", 0)
-                        
-                        self._logger.error("二次校验失败: %s, 资源类型: %s, 缺少数量: %s", msg, resource_type, number)
-                        
-                        # 更新结果状态为未通过
-                        result["ready"] = False
-                        result["secondary_check_failed"] = True
-                        result["secondary_check_message"] = f"二次校验失败: {resource_type} 缺少 {number}"
-                        
-                        return result
+
+                        # 缺少数量为0时视为校验通过
+                        if number == 0:
+                            self._logger.info("二次校验返回1200但缺少数量为0, 视为通过, 资源类型: %s", resource_type)
+                        else:
+                            self._logger.error("二次校验失败: %s, 资源类型: %s, 缺少数量: %s", msg, resource_type, number)
+
+                            # 更新结果状态为未通过
+                            result["ready"] = False
+                            result["secondary_check_failed"] = True
+                            result["secondary_check_message"] = f"二次校验失败: {resource_type} 缺少 {number}"
+
+                            return result
                     else:
                         # 其他错误码
                         self._logger.warning("二次校验返回异常代码: %d, 消息: %s", code, check_result.get("msg", ""))

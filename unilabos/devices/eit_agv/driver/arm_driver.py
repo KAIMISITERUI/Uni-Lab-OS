@@ -40,7 +40,7 @@ class ArmDriver:
         self.max_joint_acceleration = 3.93  # 最大关节角加速度 rad/s²
         self.max_linear_velocity = 2  # 最大末端线速度 m/s
         self.max_linear_acceleration = 2  # 最大末端线加速度 m/s²
-        logger.info("AGV机械臂驱动初始化完成")
+        logger.debug("AGV机械臂驱动初始化完成")
 
     # ==================== 连接管理 ====================
 
@@ -54,7 +54,7 @@ class ArmDriver:
         result = self.robot.open()
         if result == 0:
             self.is_connected = True
-            logger.info("机械臂连接成功")
+            logger.debug("机械臂连接成功")
             return True
         else:
             self.is_connected = False
@@ -71,7 +71,7 @@ class ArmDriver:
         result = self.robot.close()
         if result == 0:
             self.is_connected = False
-            logger.info("机械臂断开连接成功")
+            logger.debug("机械臂断开连接成功")
             return True
         else:
             logger.error("机械臂断开连接失败")
@@ -742,7 +742,7 @@ class ArmDriver:
         返回:
             阻塞执行返回任务状态, 非阻塞执行返回任务ID
         """
-        logger.info("张开夹爪")
+        logger.debug("张开夹爪")
         return self.robot.set_standard_digital_out(2, True, block)
 
     def close_gripper(self, block=True):
@@ -754,7 +754,7 @@ class ArmDriver:
         返回:
             阻塞执行返回任务状态, 非阻塞执行返回任务ID
         """
-        logger.info("闭合夹爪")
+        logger.debug("闭合夹爪")
         return self.robot.set_standard_digital_out(2, False, block)
 
     # ==================== 夹爪状态检测 ====================
@@ -1086,7 +1086,7 @@ class ArmDriver:
         返回:
             float, number类型系统变量的值
         """
-        logger.info(f"获取系统变量(double): {name}")
+        logger.debug(f"获取系统变量(double): {name}")
         return self.robot.get_system_value_double(name)
 
     def get_system_value_lists(self, name):
@@ -1098,7 +1098,7 @@ class ArmDriver:
         返回:
             list, pose_list或joint_list类型系统变量的值
         """
-        logger.info(f"获取系统变量(lists): {name}")
+        logger.debug(f"获取系统变量(lists): {name}")
         return self.robot.get_system_value_lists(name)
 
 

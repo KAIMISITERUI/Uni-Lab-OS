@@ -83,11 +83,11 @@ if __name__ == "__main__":
 
     # 1. 提交任务工作流
 
-    manager.align_chemicals_with_file(chem_db)
+    # manager.align_chemicals_with_file(chem_db)
 
-    manager.create_task_by_file(str(task_tpl), str(chem_db))
+    # manager.create_task_by_file(str(task_tpl), str(chem_db))
 
-    manager.check_resource_for_task(str(task_tpl), str(chem_db))
+    # manager.check_resource_for_task(str(task_tpl), str(chem_db))
 
     # 2. agv上料+开始任务+agv下料
 
@@ -98,10 +98,11 @@ if __name__ == "__main__":
     manager.start_task()
 
     manager.wait_task_with_ops()
-    
+
     manager.batch_out_task_and_empty_trays()
 
     manager.auto_unload_trays_to_agv()
 
-    
-    
+    # 3. 根据合成任务自动生成分析 CSV 并提交 GC_MS（自动选取最新任务）
+
+    manager.run_analysis()
