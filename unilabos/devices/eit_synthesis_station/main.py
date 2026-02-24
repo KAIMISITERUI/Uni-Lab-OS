@@ -102,4 +102,6 @@ if __name__ == "__main__":
     manager.batch_out_task_and_empty_trays()
 
     manager.auto_unload_trays_to_agv()
+
+    
     

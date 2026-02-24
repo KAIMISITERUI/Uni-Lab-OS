@@ -221,8 +221,7 @@ SHELF_TRAY_POSITIONS = [
 
 # 分析工站托盘位置列表
 ANALYSIS_STATION_TRAY_POSITIONS = [
-    "analysis_station_tray_1-1",
-    "analysis_station_tray_1-2",
+    "analysis_station_tray_1-2"
 ]
 
 
