@@ -1148,7 +1148,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             # 创建新料盘记录
             slot_name = _get_slot_name(0, cols, rows)
             tray_usage[tray_type_code].append([new_position, new_shelf_position, 1, max_slots])
-            logger.info(f"分配新料盘 {new_position}, 类型 {tray_type_name}, 坑位 {slot_name}")
+            logger.info(f"分配新料盘 {new_position}, 类型 {tray_type_name}")
             return new_position, new_shelf_position, slot_name
 
         # 5. 解析missing列表并生成上料数据

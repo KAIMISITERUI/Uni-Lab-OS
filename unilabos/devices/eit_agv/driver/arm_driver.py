@@ -40,7 +40,7 @@ class ArmDriver:
         self.max_joint_acceleration = 3.93  # 最大关节角加速度 rad/s²
         self.max_linear_velocity = 2  # 最大末端线速度 m/s
         self.max_linear_acceleration = 2  # 最大末端线加速度 m/s²
-        logger.info("机械臂驱动初始化完成")
+        logger.info("AGV机械臂驱动初始化完成")
 
     # ==================== 连接管理 ====================
 
@@ -224,16 +224,16 @@ class ArmDriver:
         if adjusted_joints[5] > 1.7:
             # j6超过上限, 减去2π
             adjusted_joints[5] -= 2 * math.pi
-            logger.info(f"j6角度超过上限, 调整前: {joints_list[5]:.3f} rad, 调整后: {adjusted_joints[5]:.3f} rad")
+            logger.debug(f"j6角度超过上限, 调整前: {joints_list[5]:.3f} rad, 调整后: {adjusted_joints[5]:.3f} rad")
         elif adjusted_joints[5] < -4.3:
             # j6低于下限, 加上2π
             adjusted_joints[5] += 2 * math.pi
-            logger.info(f"j6角度低于下限, 调整前: {joints_list[5]:.3f} rad, 调整后: {adjusted_joints[5]:.3f} rad")
+            logger.debug(f"j6角度低于下限, 调整前: {joints_list[5]:.3f} rad, 调整后: {adjusted_joints[5]:.3f} rad")
 
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_joint_velocity
         actual_a = a * self.max_joint_acceleration
-        logger.info(f"关节运动到目标位置: {adjusted_joints}, 速度: {v:.1%} ({actual_v:.3f} rad/s), 加速度: {a:.1%} ({actual_a:.3f} rad/s²)")
+        logger.debug(f"关节运动到目标位置: {adjusted_joints}, 速度: {v:.1%} ({actual_v:.3f} rad/s), 加速度: {a:.1%} ({actual_a:.3f} rad/s²)")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.movej2(adjusted_joints, actual_v, actual_a, r, block, op, def_acc)
 
@@ -261,7 +261,7 @@ class ArmDriver:
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_joint_velocity
         actual_a = a * self.max_joint_acceleration
-        logger.info(f"关节运动到目标位姿: {pose}mm, 速度: {v:.1%} ({actual_v:.3f} rad/s), 加速度: {a:.1%} ({actual_a:.3f} rad/s²)")
+        logger.debug(f"关节运动到目标位姿: {pose}mm, 速度: {v:.1%} ({actual_v:.3f} rad/s), 加速度: {a:.1%} ({actual_a:.3f} rad/s²)")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.movej_pose2(pose_m, actual_v, actual_a, r_m, q_near, tool, wobj, block, op, def_acc)
 
@@ -289,7 +289,7 @@ class ArmDriver:
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_linear_velocity
         actual_a = a * self.max_linear_acceleration
-        logger.info(f"直线运动到目标位姿: {pose}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
+        logger.debug(f"直线运动到目标位姿: {pose}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.movel(pose_m, actual_v, actual_a, r_m, q_near, tool, wobj, block, op, def_acc)
 
@@ -325,7 +325,7 @@ class ArmDriver:
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_linear_velocity
         actual_a = a * self.max_linear_acceleration
-        logger.info(f"圆弧运动: p1={p1}mm, p2={p2}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²), 模式: {mode}")
+        logger.debug(f"圆弧运动: p1={p1}mm, p2={p2}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²), 模式: {mode}")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.movec(p1_m, p2_m, actual_v, actual_a, r_m, mode, q_near, tool, wobj, block, op, def_acc, arc_rad_m)
 
@@ -358,7 +358,7 @@ class ArmDriver:
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_linear_velocity
         actual_a = a * self.max_linear_acceleration
-        logger.info(f"圆周运动: p1={p1}mm, p2={p2}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²), 模式: {mode}")
+        logger.debug(f"圆周运动: p1={p1}mm, p2={p2}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²), 模式: {mode}")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.move_circle(p1_m, p2_m, actual_v, actual_a, rad_m, mode, q_near, tool, wobj, block, op, def_acc)
 
@@ -385,7 +385,7 @@ class ArmDriver:
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_linear_velocity
         actual_a = a * self.max_linear_acceleration
-        logger.info(f"沿工具坐标系移动: {pose_offset}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
+        logger.debug(f"沿工具坐标系移动: {pose_offset}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.tcp_move(pose_offset_m, actual_v, actual_a, r_m, tool, block, op, def_acc)
 
@@ -414,7 +414,7 @@ class ArmDriver:
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_linear_velocity
         actual_a = a * self.max_linear_acceleration
-        logger.info(f"沿工具坐标系移动(两点法): p1={p1}mm, p2={p2}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
+        logger.debug(f"沿工具坐标系移动(两点法): p1={p1}mm, p2={p2}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.tcp_move_2p(p1_m, p2_m, actual_v, actual_a, r_m, tool, wobj, block, op, def_acc)
 
@@ -441,7 +441,7 @@ class ArmDriver:
         # 将百分比转换为实际速度和加速度值
         actual_v = v * self.max_linear_velocity
         actual_a = a * self.max_linear_acceleration
-        logger.info(f"沿工件坐标系移动: {pose_offset}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
+        logger.debug(f"沿工件坐标系移动: {pose_offset}mm, 速度: {v:.1%} ({actual_v:.3f} m/s), 加速度: {a:.1%} ({actual_a:.3f} m/s²)")
         op = self.create_op()  # 创建完整的Op对象，这个必须有
         return self.robot.wobj_move(pose_offset_m, actual_v, actual_a, r_m, wobj, block, op, def_acc)
 
@@ -456,7 +456,7 @@ class ArmDriver:
         返回:
             阻塞执行返回任务状态, 非阻塞执行返回任务ID
         """
-        logger.info(f"运行程序脚本: {program_name}")
+        logger.debug(f"运行程序脚本: {program_name}")
         return self.robot.run_program(program_name, block)
 
     def stop(self, block=True):

@@ -302,7 +302,7 @@ class PositionManager:
             self.global_params = config.get('global_params', {})
 
             logger.info(f"成功加载坐标配置: {self.config_file}")
-            logger.info(f"位置类别数: {len(self.positions)}, 轨迹数: {len(self.trajectories)}, "
+            logger.debug(f"位置类别数: {len(self.positions)}, 轨迹数: {len(self.trajectories)}, "
                        f"工具数: {len(self.tools)}, 工件坐标系数: {len(self.workobjects)}, "
                        f"夹爪数: {len(self.grippers)}, 物料类型数: {len(self.materials)}")
 

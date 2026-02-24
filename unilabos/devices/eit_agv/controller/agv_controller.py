@@ -96,8 +96,8 @@ class AGVController:
         current_joints = self.arm.get_joints_position()
         current_joint6 = current_joints[5]  # 第6个关节(索引为5)
 
-        logger.info(f"当前位姿: {current_pose}")
-        logger.info(f"当前Y坐标: {current_y}mm, 当前关节6: {current_joint6:.4f}")
+        logger.debug(f"当前位姿: {current_pose}")
+        logger.debug(f"当前Y坐标: {current_y}mm, 当前关节6: {current_joint6:.4f}")
 
         # 获取所有safe_positions中的home坐标
         if 'safe_positions' not in self.position_manager.positions:
@@ -116,7 +116,7 @@ class AGVController:
                 return None
             selected_home_name = home_name
             selected_home_position = safe_positions[home_name]
-            logger.info(f"使用指定的home位置: {selected_home_name}")
+            logger.debug(f"使用指定的home位置: {selected_home_name}")
         else:
             # 筛选出所有home开头的位置
             home_positions = {name: pos for name, pos in safe_positions.items() if name.startswith('home')}
@@ -139,7 +139,7 @@ class AGVController:
                 home_joint6 = home_pos.joints[5]
                 distance = abs(current_joint6 - home_joint6)
 
-                logger.info(f"{home_name_iter}: joint6={home_joint6:.4f}, 关节6差异={distance:.4f}")
+                logger.debug(f"{home_name_iter}: joint6={home_joint6:.4f}, 关节6差异={distance:.4f}")
 
                 if distance < min_distance:
                     min_distance = distance
@@ -150,7 +150,7 @@ class AGVController:
                 logger.error("未找到合适的home位置")
                 return None
 
-            logger.info(f"选择最接近的home位置: {selected_home_name}, 关节6差异={min_distance:.4f}")
+            logger.debug(f"选择最接近的home位置: {selected_home_name}, 关节6差异={min_distance:.4f}")
 
         safe_position = selected_home_position
         speed = safe_position.speed
@@ -160,7 +160,7 @@ class AGVController:
             # 根据当前Y坐标判断返回路径
             if current_y > 450:
                 # Y > 450, 机械臂伸出车体, 先将Y轴向安全姿态运动250mm
-                logger.info("Y > 450, 机械臂伸出车体, 先将Y轴向安全姿态运动250mm")
+                logger.debug("Y > 450, 机械臂伸出车体, 先将Y轴向安全姿态运动250mm")
 
                 # 步骤1: Y轴向安全姿态方向移动250mm
                 pose_step1 = [
@@ -177,10 +177,10 @@ class AGVController:
                     a=acceleration,
                     block=block
                 )
-                logger.info(f"Y轴向安全姿态运动250mm完成: {result}")
+                logger.debug(f"Y轴向安全姿态运动250mm完成: {result}")
             else:
                 # Y <= 450, 车内坐标, 先回Z到home点
-                logger.info("Y <= 450, 车内坐标, 先回Z到home点")
+                logger.debug("Y <= 450, 车内坐标, 先回Z到home点")
 
                 # 步骤1: 先运动Z到home的Z值
                 pose_step1 = [
@@ -197,7 +197,7 @@ class AGVController:
                     a=acceleration,
                     block=block
                 )
-                logger.info(f"Z轴运动到home完成: {result}")
+                logger.debug(f"Z轴运动到home完成: {result}")
 
                 # 步骤2: 调整姿态到安全姿态 (使用关节运动避免多圈问题)
                 current_pose = self.arm.get_tcp_pose()
@@ -222,10 +222,10 @@ class AGVController:
                     a=acceleration,
                     block=block
                 )
-                logger.info(f"姿态调整完成(关节运动): {result}")
+                logger.debug(f"姿态调整完成(关节运动): {result}")
 
             # 步骤3: 运动到home位置(只使用关节运动)
-            logger.info(f"运动到home位置: {selected_home_name}")
+            logger.debug(f"运动到home位置: {selected_home_name}")
             result = self.arm.move_to_joints(
                 joints_list=safe_position.joints,
                 v=speed,
@@ -234,9 +234,9 @@ class AGVController:
             )
 
             if block:
-                logger.info(f"机械臂回零完成, 结果: {result}")
+                logger.debug(f"机械臂回零完成, 结果: {result}")
             else:
-                logger.info(f"机械臂回零指令已发送, 任务ID: {result}")
+                logger.debug(f"机械臂回零指令已发送, 任务ID: {result}")
 
             return result
 
@@ -283,16 +283,16 @@ class AGVController:
                     for station_name in config['station_calibration'].keys():
                         if tray_name.startswith(station_name):
                             matched_station = station_name
-                            logger.info(f"托盘 {tray_name} 匹配到站点 {station_name}, 尝试获取校准偏移量")
+                            logger.debug(f"托盘 {tray_name} 匹配到站点 {station_name}, 尝试获取校准偏移量")
 
                             # 获取该站点的校准偏移量
                             station_offset = self.position_manager.get_calibration_offset(station_name)
                             if station_offset is not None:
-                                logger.info(f"找到站点 {station_name} 的校准偏移量: x={station_offset['x']:.6f}, y={station_offset['y']:.6f}, z={station_offset['z']:.6f}, dx={station_offset['dx']:.6f}, dy={station_offset['dy']:.6f}, dz={station_offset['dz']:.6f}")
+                                logger.debug(f"找到站点 {station_name} 的校准偏移量: x={station_offset['x']:.6f}, y={station_offset['y']:.6f}, z={station_offset['z']:.6f}, dx={station_offset['dx']:.6f}, dy={station_offset['dy']:.6f}, dz={station_offset['dz']:.6f}")
                             break
 
                     if matched_station is None:
-                        logger.info(f"托盘 {tray_name} 未匹配到任何站点校准配置, 使用原始坐标")
+                        logger.debug(f"托盘 {tray_name} 未匹配到任何站点校准配置, 使用原始坐标")
             except Exception as e:
                 logger.warning(f"读取站点校准配置失败: {e}, 使用原始坐标")
 
@@ -300,17 +300,17 @@ class AGVController:
 
         try:
             # 步骤1: 运动到安全姿态
-            logger.info("步骤1: 运动到安全姿态")
+            logger.debug("步骤1: 运动到安全姿态")
             result = self.arm_go_home(block=block)
-            logger.info(f"安全姿态运动完成: {result}")
+            logger.debug(f"安全姿态运动完成: {result}")
 
             # 步骤2: 张开夹爪
-            logger.info("步骤2: 张开夹爪")
+            logger.debug("步骤2: 张开夹爪")
             self.arm.open_gripper(block=True)
-            logger.info("夹爪已张开")
+            logger.debug("夹爪已张开")
 
             # 步骤3: 运动到过渡点 (先rx,ry,rz, 然后z, 最后xy且速度减半)
-            logger.info("步骤3: 运动到过渡点")
+            logger.debug("步骤3: 运动到过渡点")
             # 获取抓取点位姿(配置文件中存储的是抓取点)
             grasp_pose = tray_position.pose.copy()
             # 获取下探距离, 用于计算过渡点
@@ -318,7 +318,7 @@ class AGVController:
             # 计算过渡点: 过渡点z = 抓取点z - descend_z (descend_z为负值, 所以减去它等于加上绝对值)
             transition_pose = grasp_pose.copy()
             transition_pose[2] = grasp_pose[2] - config_descend_z
-            logger.info(f"抓取点z={grasp_pose[2]:.2f}, descend_z={config_descend_z}, 过渡点z={transition_pose[2]:.2f}")
+            logger.debug(f"抓取点z={grasp_pose[2]:.2f}, descend_z={config_descend_z}, 过渡点z={transition_pose[2]:.2f}")
 
             # 如果有站点偏移量, 则应用到过渡点位姿
             if station_offset is not None:
@@ -328,12 +328,12 @@ class AGVController:
                 transition_pose[3] += station_offset['dx']
                 transition_pose[4] += station_offset['dy']
                 transition_pose[5] += station_offset['dz']
-                logger.info(f"应用站点偏移量后的过渡点位姿: {transition_pose}")
+                logger.debug(f"应用站点偏移量后的过渡点位姿: {transition_pose}")
 
             # 应用过渡点Z偏移量(用于物料高度补偿)
             if transition_z_offset != 0:
                 transition_pose[2] += transition_z_offset
-                logger.info(f"应用过渡点Z偏移量{transition_z_offset}mm后的过渡点位姿: {transition_pose}")
+                logger.debug(f"应用过渡点Z偏移量{transition_z_offset}mm后的过渡点位姿: {transition_pose}")
 
             # 3.1: 先运动rx,ry,rz到位 (使用关节运动避免多圈问题)
             current_pose = self.arm.get_tcp_pose()
@@ -358,22 +358,22 @@ class AGVController:
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"姿态调整完成(关节运动): {result}")
+            logger.debug(f"姿态调整完成(关节运动): {result}")
 
             # 3.2: 根据目标点Y坐标判断运动策略
             if transition_pose[1] < 450:
                 # Y < 450, 在车内, xyz直接同时运动到位
-                logger.info("目标点在车内(Y<450), xyz直接运动到位")
+                logger.debug("目标点在车内(Y<450), xyz直接运动到位")
                 result = self.arm.move_linear(
                     pose=transition_pose,
                     v=tray_position.speed,
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"过渡点运动完成: {result}")
+                logger.debug(f"过渡点运动完成: {result}")
             else:
                 # Y >= 450, 在车外, 先运动到y=400, 然后y前伸
-                logger.info("目标点在车外(Y>=450), 先运动到y=400")
+                logger.debug("目标点在车外(Y>=450), 先运动到y=400")
                 current_pose = self.arm.get_tcp_pose()
                 intermediate_pose = [
                     transition_pose[0],
@@ -389,20 +389,20 @@ class AGVController:
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"运动到y=450完成: {result}")
+                logger.debug(f"运动到y=450完成: {result}")
 
                 # 然后y前伸到目标点
-                logger.info("y前伸到目标点")
+                logger.debug("y前伸到目标点")
                 result = self.arm.move_linear(
                     pose=transition_pose,
                     v=tray_position.speed * 0.2,
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"过渡点运动完成: {result}")
+                logger.debug(f"过渡点运动完成: {result}")
 
             # 步骤4: 下探到抓取点位置 (只有Z轴变化)
-            logger.info("步骤4: 下探到抓取点位置")
+            logger.debug("步骤4: 下探到抓取点位置")
             # 计算抓取点位姿(应用站点偏移量)
             target_grasp_pose = grasp_pose.copy()
             if station_offset is not None:
@@ -419,18 +419,18 @@ class AGVController:
             # 应用物料高度偏移到抓取点(与过渡点保持一致的偏移)
             if transition_z_offset != 0:
                 target_grasp_pose[2] += transition_z_offset
-                logger.info(f"应用物料高度偏移{transition_z_offset}mm到抓取点")
-            logger.info(f"目标抓取点位姿: {target_grasp_pose}")
+                logger.debug(f"应用物料高度偏移{transition_z_offset}mm到抓取点")
+            logger.debug(f"目标抓取点位姿: {target_grasp_pose}")
             result = self.arm.move_linear(
                 pose=target_grasp_pose,
                 v=tray_position.speed * 0.2,
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"下探完成: {result}")
+            logger.debug(f"下探完成: {result}")
 
             # 步骤5: 夹紧夹爪并检查是否夹紧
-            logger.info("步骤5: 夹紧夹爪")
+            logger.debug("步骤5: 夹紧夹爪")
             self.arm.close_gripper(block=True)
 
             # 根据配置决定是否进行夹持检测
@@ -443,17 +443,17 @@ class AGVController:
                     # 张开夹爪并返回失败
                     self.arm.open_gripper(block=True)
                     return False
-                logger.info("夹爪夹紧成功")
+                logger.debug("夹爪夹紧成功")
             else:
-                logger.info("夹持检测已禁用, 跳过检测")
+                logger.debug("夹持检测已禁用, 跳过检测")
 
             # 步骤6: 提升一定距离 (只有Z轴变化)
-            logger.info("步骤6: 提升托盘")
+            logger.debug("步骤6: 提升托盘")
             # 如果未传入lift_z参数, 则从配置文件读取
             if lift_z is None:
                 lift_z = tray_position.lift_z if hasattr(tray_position, 'lift_z') else 0.1
             current_pose = self.arm.get_tcp_pose()
-            logger.info(f"当前位姿: {current_pose}, 提升距离: {lift_z}mm")
+            logger.debug(f"当前位姿: {current_pose}, 提升距离: {lift_z}mm")
             lift_pose = [
                 current_pose[0],
                 current_pose[1],
@@ -462,19 +462,19 @@ class AGVController:
                 current_pose[4],
                 current_pose[5]
             ]
-            logger.info(f"目标位姿: {lift_pose}")
+            logger.debug(f"目标位姿: {lift_pose}")
             result = self.arm.move_linear(
                 pose=lift_pose,
                 v=tray_position.speed * 0.5,
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"提升完成: {result}")
+            logger.debug(f"提升完成: {result}")
 
             # 步骤7: 回到home位置
-            logger.info("步骤7: 回到home位置")
+            logger.debug("步骤7: 回到home位置")
             result = self.arm_go_home(block=block)
-            logger.info(f"回到home位置完成: {result}")
+            logger.debug(f"回到home位置完成: {result}")
 
             logger.info(f"取托盘流程完成: {tray_name}")
             return True
@@ -498,14 +498,14 @@ class AGVController:
             dict或None, 成功时返回校准偏移值字典{"x": float, "y": float, "z": float, "dx": float, "dy": float, "dz": float}, 失败时返回None
         """
         # 查询当前站点
-        logger.info("正在查询当前站点...")
+        logger.debug("正在查询当前站点...")
         station_info = self.query_current_station()
         if station_info is None:
             logger.error("查询当前站点失败, 无法执行点位校准")
             return None
 
         station_name = station_info["station_name"]
-        logger.info(f"当前站点: {station_info['station_id']} - {station_name} ({station_info['description']})")
+        logger.debug(f"当前站点: {station_info['station_id']} - {station_name} ({station_info['description']})")
 
         # 自动连接机械臂
         if not self._ensure_connected():
@@ -525,15 +525,15 @@ class AGVController:
             return None
 
         program_name = calibration_programs[station_name]
-        logger.info(f"开始执行工站点位校准: {station_name}, 程序: {program_name}")
+        logger.debug(f"开始执行工站点位校准: {station_name}, 程序: {program_name}")
 
         try:
             # 运行校准程序
             result = self.arm.run_program(program_name, block=block)
-            logger.info(f"校准程序运行结果: {result}")
+            logger.debug(f"校准程序运行结果: {result}")
 
             # 等待机械臂运动完成
-            logger.info("等待机械臂运动完成...")
+            logger.debug("等待机械臂运动完成...")
             import time
             max_wait_time = 120  # 最大等待时间120秒
             check_interval = 0.5  # 每0.5秒检查一次
@@ -550,10 +550,10 @@ class AGVController:
             if elapsed_time >= max_wait_time:
                 logger.warning(f"等待超时({max_wait_time}秒), 机械臂可能仍在运动")
             else:
-                logger.info(f"机械臂运动完成, 耗时: {elapsed_time:.1f}秒")
+                logger.debug(f"机械臂运动完成, 耗时: {elapsed_time:.1f}秒")
 
             # 获取校准偏移值(从系统变量读取, 单位为m)
-            logger.info("正在读取校准偏移值...")
+            logger.debug("正在读取校准偏移值...")
             g_pose_x = self.arm.get_system_value_double("g_pose_x")
             g_pose_y = self.arm.get_system_value_double("g_pose_y")
             g_pose_z = self.arm.get_system_value_double("g_pose_z")
@@ -571,11 +571,11 @@ class AGVController:
                 "dz": g_pose_dz   # rad保持不变
             }
 
-            logger.info(f"校准偏移值(mm坐标系): {calibration_offset}")
+            logger.debug(f"校准偏移值(mm坐标系): {calibration_offset}")
 
             # 保存偏移值到配置文件
             self.position_manager.save_calibration_offset(station_name, calibration_offset)
-            logger.info(f"工站 {station_name} 校准完成, 偏移值已保存到配置文件")
+            logger.debug(f"工站 {station_name} 校准完成, 偏移值已保存到配置文件")
 
             return calibration_offset
 
@@ -722,20 +722,20 @@ class AGVController:
 
         try:
             # 连接到AGV导航端口
-            logger.info("正在连接到AGV导航端口...")
+            logger.debug("正在连接到AGV导航端口...")
             agv_driver.connect_navigation()
-            logger.info("连接成功")
+            logger.debug("连接成功")
 
             # 调用导航函数移动到目标工站
-            logger.info(f"正在导航到目标工站: {station_id}...")
+            logger.debug(f"正在导航到目标工站: {station_id}...")
             result = agv_driver.navigate_to_target(target_id=station_id)
 
             # 检查导航响应
             if result.get("ret_code") == 0:
-                logger.info(f"导航指令发送成功, 响应: {result}")
+                logger.debug(f"导航指令发送成功, 响应: {result}")
                 # 更新当前工站
                 self.current_station = station_id
-                logger.info(f"当前工站已设置为: {station_id}")
+                logger.debug(f"当前工站已设置为: {station_id}")
                 return result
             else:
                 logger.error(f"导航指令发送失败, 错误码: {result.get('ret_code')}, 错误信息: {result.get('err_msg', '未知错误')}")
@@ -747,7 +747,7 @@ class AGVController:
         finally:
             # 关闭AGV连接
             agv_driver.close()
-            logger.info("AGV连接已关闭")
+            logger.debug("AGV连接已关闭")
 
     def safe_send_navigate_command(self, station_id):
         """
@@ -826,15 +826,15 @@ class AGVController:
         logger.info(f"开始安全移动到工站: {station_id}")
 
         # 步骤1: 机械臂回零到home_1
-        logger.info("步骤1: 执行机械臂回零操作(home_1)")
+        logger.debug("步骤1: 执行机械臂回零操作(home_1)")
         home_result = self.arm_go_home(block=True, home_name="home_1")
         if home_result is None:
             logger.error("机械臂回零失败, 取消AGV移动")
             return None
-        logger.info(f"机械臂回零完成: {home_result}")
+        logger.debug(f"机械臂回零完成: {home_result}")
 
         # 步骤2: AGV移动到目标工站
-        logger.info("步骤2: AGV移动到目标工站")
+        logger.debug("步骤2: AGV移动到目标工站")
         result = self.navigate_to_station(station_id)
 
         return result
@@ -1059,34 +1059,34 @@ class AGVController:
                     for station_name in config['station_calibration'].keys():
                         if tray_name.startswith(station_name):
                             matched_station = station_name
-                            logger.info(f"托盘 {tray_name} 匹配到站点 {station_name}, 尝试获取校准偏移量")
+                            logger.debug(f"托盘 {tray_name} 匹配到站点 {station_name}, 尝试获取校准偏移量")
 
                             # 获取该站点的校准偏移量
                             station_offset = self.position_manager.get_calibration_offset(station_name)
                             if station_offset is not None:
-                                logger.info(f"找到站点 {station_name} 的校准偏移量: x={station_offset['x']:.6f}, y={station_offset['y']:.6f}, z={station_offset['z']:.6f}, dx={station_offset['dx']:.6f}, dy={station_offset['dy']:.6f}, dz={station_offset['dz']:.6f}")
+                                logger.debug(f"找到站点 {station_name} 的校准偏移量: x={station_offset['x']:.6f}, y={station_offset['y']:.6f}, z={station_offset['z']:.6f}, dx={station_offset['dx']:.6f}, dy={station_offset['dy']:.6f}, dz={station_offset['dz']:.6f}")
                             break
 
                     if matched_station is None:
-                        logger.info(f"托盘 {tray_name} 未匹配到任何站点校准配置, 使用原始坐标")
+                        logger.debug(f"托盘 {tray_name} 未匹配到任何站点校准配置, 使用原始坐标")
             except Exception as e:
                 logger.warning(f"读取站点校准配置失败: {e}, 使用原始坐标")
 
-        logger.info(f"开始执行运动到抓取点位流程: {tray_name}")
+        logger.debug(f"开始执行运动到抓取点位流程: {tray_name}")
 
         try:
             # 步骤1: 运动到安全姿态
-            logger.info("步骤1: 运动到安全姿态")
+            logger.debug("步骤1: 运动到安全姿态")
             result = self.arm_go_home(block=block)
-            logger.info(f"安全姿态运动完成: {result}")
+            logger.debug(f"安全姿态运动完成: {result}")
 
             # 步骤2: 张开夹爪
-            logger.info("步骤2: 张开夹爪")
+            logger.debug("步骤2: 张开夹爪")
             self.arm.open_gripper(block=True)
-            logger.info("夹爪已张开")
+            logger.debug("夹爪已张开")
 
             # 步骤3: 运动到过渡点 (先rx,ry,rz, 然后z, 最后xy且速度减半)
-            logger.info("步骤3: 运动到过渡点")
+            logger.debug("步骤3: 运动到过渡点")
             # 获取抓取点位姿(配置文件中存储的是抓取点)
             grasp_pose = tray_position.pose.copy()
             # 获取下探距离, 用于计算过渡点
@@ -1094,7 +1094,7 @@ class AGVController:
             # 计算过渡点: 过渡点z = 抓取点z - descend_z (descend_z为负值, 所以减去它等于加上绝对值)
             transition_pose = grasp_pose.copy()
             transition_pose[2] = grasp_pose[2] - config_descend_z
-            logger.info(f"抓取点z={grasp_pose[2]:.2f}, descend_z={config_descend_z}, 过渡点z={transition_pose[2]:.2f}")
+            logger.debug(f"抓取点z={grasp_pose[2]:.2f}, descend_z={config_descend_z}, 过渡点z={transition_pose[2]:.2f}")
 
             # 如果有站点偏移量, 则应用到过渡点位姿
             if station_offset is not None:
@@ -1104,7 +1104,7 @@ class AGVController:
                 transition_pose[3] += station_offset['dx']
                 transition_pose[4] += station_offset['dy']
                 transition_pose[5] += station_offset['dz']
-                logger.info(f"应用站点偏移量后的过渡点位姿: {transition_pose}")
+                logger.debug(f"应用站点偏移量后的过渡点位姿: {transition_pose}")
 
             # 3.1: 先运动rx,ry,rz到位 (使用关节运动避免多圈问题)
             current_pose = self.arm.get_tcp_pose()
@@ -1129,22 +1129,22 @@ class AGVController:
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"姿态调整完成(关节运动): {result}")
+            logger.debug(f"姿态调整完成(关节运动): {result}")
 
             # 3.2: 根据目标点Y坐标判断运动策略
             if transition_pose[1] < 450:
                 # Y < 450, 在车内, xyz直接同时运动到位
-                logger.info("目标点在车内(Y<450), xyz直接运动到位")
+                logger.debug("目标点在车内(Y<450), xyz直接运动到位")
                 result = self.arm.move_linear(
                     pose=transition_pose,
                     v=tray_position.speed,
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"过渡点运动完成: {result}")
+                logger.debug(f"过渡点运动完成: {result}")
             else:
                 # Y >= 450, 在车外, 先运动到y=400, 然后y前伸
-                logger.info("目标点在车外(Y>=450), 先运动到y=400")
+                logger.debug("目标点在车外(Y>=450), 先运动到y=400")
                 current_pose = self.arm.get_tcp_pose()
                 intermediate_pose = [
                     transition_pose[0],
@@ -1160,20 +1160,20 @@ class AGVController:
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"运动到y=450完成: {result}")
+                logger.debug(f"运动到y=450完成: {result}")
 
                 # 然后y前伸到目标点
-                logger.info("y前伸到目标点")
+                logger.debug("y前伸到目标点")
                 result = self.arm.move_linear(
                     pose=transition_pose,
                     v=tray_position.speed * 0.5,
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"过渡点运动完成: {result}")
+                logger.debug(f"过渡点运动完成: {result}")
 
             # 步骤4: 下探到抓取点位置 (只有Z轴变化)
-            logger.info("步骤4: 下探到抓取点位置")
+            logger.debug("步骤4: 下探到抓取点位置")
             # 计算抓取点位姿(应用站点偏移量)
             target_grasp_pose = grasp_pose.copy()
             if station_offset is not None:
@@ -1183,16 +1183,16 @@ class AGVController:
                 target_grasp_pose[3] += station_offset['dx']
                 target_grasp_pose[4] += station_offset['dy']
                 target_grasp_pose[5] += station_offset['dz']
-            logger.info(f"目标抓取点位姿: {target_grasp_pose}")
+            logger.debug(f"目标抓取点位姿: {target_grasp_pose}")
             result = self.arm.move_linear(
                 pose=target_grasp_pose,
                 v=tray_position.speed * 0.5,
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"下探完成: {result}")
+            logger.debug(f"下探完成: {result}")
 
-            logger.info(f"运动到抓取点位流程完成: {tray_name}")
+            logger.debug(f"运动到抓取点位流程完成: {tray_name}")
             return True
 
         except Exception as e:
@@ -1222,7 +1222,7 @@ class AGVController:
             logger.error("机械臂连接失败, 无法执行放托盘动作")
             return False
 
-        # 获取托盘位置配置
+        # 获放托盘位置配置
         tray_position = self.position_manager.get_position('tray_position', tray_name)
         if tray_position is None:
             logger.error(f"未找到托盘位置配置: tray_position.{tray_name}")
@@ -1260,12 +1260,12 @@ class AGVController:
 
         try:
             # 步骤1: 运动到安全姿态
-            logger.info("步骤1: 运动到安全姿态")
+            logger.debug("步骤1: 运动到安全姿态")
             result = self.arm_go_home(block=block)
-            logger.info(f"安全姿态运动完成: {result}")
+            logger.debug(f"安全姿态运动完成: {result}")
 
             # 步骤2: 运动到过渡点 (先rx,ry,rz, 然后z, 最后xy且速度减半)
-            logger.info("步骤2: 运动到过渡点")
+            logger.debug("步骤2: 运动到过渡点")
             # 获取抓取点位姿(配置文件中存储的是抓取点)
             grasp_pose = tray_position.pose.copy()
             # 获取下探距离, 用于计算过渡点
@@ -1273,7 +1273,7 @@ class AGVController:
             # 计算过渡点: 过渡点z = 抓取点z - descend_z (descend_z为负值, 所以减去它等于加上绝对值)
             transition_pose = grasp_pose.copy()
             transition_pose[2] = grasp_pose[2] - config_descend_z
-            logger.info(f"抓取点z={grasp_pose[2]:.2f}, descend_z={config_descend_z}, 过渡点z={transition_pose[2]:.2f}")
+            logger.debug(f"抓取点z={grasp_pose[2]:.2f}, descend_z={config_descend_z}, 过渡点z={transition_pose[2]:.2f}")
 
             # 如果有站点偏移量, 则应用到过渡点位姿
             if station_offset is not None:
@@ -1283,12 +1283,12 @@ class AGVController:
                 transition_pose[3] += station_offset['dx']
                 transition_pose[4] += station_offset['dy']
                 transition_pose[5] += station_offset['dz']
-                logger.info(f"应用站点偏移量后的过渡点位姿: {transition_pose}")
+                logger.debug(f"应用站点偏移量后的过渡点位姿: {transition_pose}")
 
             # 应用过渡点Z偏移量(用于物料高度补偿)
             if transition_z_offset != 0:
                 transition_pose[2] += transition_z_offset
-                logger.info(f"应用过渡点Z偏移量{transition_z_offset}mm后的过渡点位姿: {transition_pose}")
+                logger.debug(f"应用过渡点Z偏移量{transition_z_offset}mm后的过渡点位姿: {transition_pose}")
 
             # 2.1: 先运动rx,ry,rz到位 (使用关节运动避免多圈问题)
             current_pose = self.arm.get_tcp_pose()
@@ -1313,22 +1313,22 @@ class AGVController:
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"姿态调整完成(关节运动): {result}")
+            logger.debug(f"姿态调整完成(关节运动): {result}")
 
             # 2.2: 根据目标点Y坐标判断运动策略
             if transition_pose[1] < 450:
                 # Y < 450, 在车内, xyz直接同时运动到位
-                logger.info("目标点在车内(Y<450), xyz直接运动到位")
+                logger.debug("目标点在车内(Y<450), xyz直接运动到位")
                 result = self.arm.move_linear(
                     pose=transition_pose,
                     v=tray_position.speed,
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"过渡点运动完成: {result}")
+                logger.debug(f"过渡点运动完成: {result}")
             else:
                 # Y >= 450, 在车外, 先运动到y=400, 然后y前伸
-                logger.info("目标点在车外(Y>=450), 先运动到y=400")
+                logger.debug("目标点在车外(Y>=450), 先运动到y=400")
                 current_pose = self.arm.get_tcp_pose()
                 intermediate_pose = [
                     transition_pose[0],
@@ -1344,7 +1344,7 @@ class AGVController:
                     a=tray_position.acceleration,
                     block=block
                 )
-                logger.info(f"运动到y=450完成: {result}")
+                logger.debug(f"运动到y=400完成: {result}")
 
                 # 然后y前伸到目标点
                 logger.info("y前伸到目标点")
@@ -1357,7 +1357,7 @@ class AGVController:
                 logger.info(f"过渡点运动完成: {result}")
 
             # 步骤3: 下探到抓取点位置 (只有Z轴变化)
-            logger.info("步骤3: 下探到抓取点位置")
+            logger.debug("步骤3: 下探到抓取点位置")
             # 计算抓取点位姿(应用站点偏移量)
             target_grasp_pose = grasp_pose.copy()
             if station_offset is not None:
@@ -1374,18 +1374,18 @@ class AGVController:
             # 应用物料高度偏移到抓取点(与过渡点保持一致的偏移)
             if transition_z_offset != 0:
                 target_grasp_pose[2] += transition_z_offset
-                logger.info(f"应用物料高度偏移{transition_z_offset}mm到抓取点")
-            logger.info(f"目标抓取点位姿: {target_grasp_pose}")
+                logger.debug(f"应用物料高度偏移{transition_z_offset}mm到抓取点")
+            logger.debug(f"目标抓取点位姿: {target_grasp_pose}")
             result = self.arm.move_linear(
                 pose=target_grasp_pose,
                 v=tray_position.speed * 0.1,
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"下探完成: {result}")
+            logger.debug(f"下探完成: {result}")
 
             # 步骤4: 松开夹爪并检查是否松开
-            logger.info("步骤4: 松开夹爪")
+            logger.debug("步骤4: 松开夹爪")
             self.arm.open_gripper(block=True)
 
             # 等待夹爪稳定并检查状态
@@ -1395,15 +1395,15 @@ class AGVController:
             if not self.arm.is_gripper_opened():
                 logger.error("夹爪未松开")
                 return False
-            logger.info("夹爪松开成功")
+            logger.debug("夹爪松开成功")
 
             # 步骤5: 提升一定距离 (只有Z轴变化)
-            logger.info("步骤5: 提升")
+            logger.debug("步骤5: 提升")
             # 如果未传入lift_z参数, 则从配置文件读取
             if lift_z is None:
                 lift_z = tray_position.lift_z if hasattr(tray_position, 'lift_z') else 0.1
             current_pose = self.arm.get_tcp_pose()
-            logger.info(f"当前位姿: {current_pose}, 提升距离: {lift_z}mm")
+            logger.debug(f"当前位姿: {current_pose}, 提升距离: {lift_z}mm")
             lift_pose = [
                 current_pose[0],
                 current_pose[1],
@@ -1412,19 +1412,19 @@ class AGVController:
                 current_pose[4],
                 current_pose[5]
             ]
-            logger.info(f"目标位姿: {lift_pose}")
+            logger.debug(f"目标位姿: {lift_pose}")
             result = self.arm.move_linear(
                 pose=lift_pose,
                 v=tray_position.speed * 0.5,
                 a=tray_position.acceleration,
                 block=block
             )
-            logger.info(f"提升完成: {result}")
+            logger.debug(f"提升完成: {result}")
 
             # 步骤6: 回到home位置
-            logger.info("步骤6: 回到home位置")
+            logger.debug("步骤6: 回到home位置")
             result = self.arm_go_home(block=block)
-            logger.info(f"回到home位置完成: {result}")
+            logger.debug(f"回到home位置完成: {result}")
 
             logger.info(f"放托盘流程完成: {tray_name}")
             return True
@@ -1858,12 +1858,10 @@ class AGVController:
 
         try:
             # 阶段1: 从各源站点取料并放到AGV货架
-            logger.info("=" * 60)
             logger.info("阶段1: 从源站点取料并放到AGV货架")
-            logger.info("=" * 60)
 
             for station_id, task_indices in source_stations.items():
-                logger.info(f"\n处理源站点: {station_id}")
+                logger.info(f"处理源站点: {station_id}")
 
                 # AGV移动到源站点
                 logger.info(f"AGV移动到站点: {station_id}")

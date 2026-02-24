@@ -1315,6 +1315,9 @@ class SynthesisStationController:
         返回:
             List[Dict]: 更新后的数据列表 (包含回填的 ID)
         """
+        
+        self._logger.info("开始执行化学品库对齐操作")
+
         if not rows:
             return []
 
