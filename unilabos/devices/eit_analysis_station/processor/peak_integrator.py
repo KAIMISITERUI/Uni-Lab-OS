@@ -136,7 +136,7 @@ class PeakIntegrator:
                 )
                 corrected = peak_intensities - baseline
                 corrected = np.maximum(corrected, 0)  # 负值置零
-                area = float(np.trapz(corrected, peak_times))
+                area = float(np.trapz(corrected, peak_times * 60.0))  # 时间转为秒, 面积单位与传统色谱软件一致
             else:
                 area = 0.0
 

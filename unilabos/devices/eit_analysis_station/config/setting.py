@@ -14,6 +14,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass
@@ -81,18 +82,32 @@ class Settings:
     nist_path: Path = field(default_factory=lambda: Path(r"D:\NIST23\MSSEARCH"))
     nist_max_hits: int = 5               # 每个质谱返回的最大匹配数
     nist_search_timeout: float = 120.0   # NIST 搜索等待超时(秒)
+    nist_avg_scans: int = 3              # NIST 质谱提取时以 apex 为中心的平均扫描数
 
     # ---------- 峰检测与积分参数 ----------
     peak_smoothing_window: int = 11        # Savitzky-Golay 平滑窗口 (奇数)
     peak_prominence: float = 5000.0        # TIC 峰检测最小 prominence
     peak_min_distance: int = 5             # 相邻峰最小距离 (数据点数)
-    peak_width_rel_height: float = 0.95    # 峰宽计算的相对高度 (0-1)
+    peak_width_rel_height: float = 0.99    # 峰宽计算的相对高度 (0-1)
     fid_peak_prominence: float = 0.5       # FID 峰检测最小 prominence (FID 信号较小)
     fid_peak_min_distance: int = 50        # FID 相邻峰最小距离 (FID 采样率更高)
+
+    # ---------- 峰过滤参数 ----------
+    peak_rt_min: Optional[float] = 4      # 保留时间下限 (min), TIC/FID 共用, None 不过滤
+    peak_rt_max: Optional[float] = 10      # 保留时间上限 (min), TIC/FID 共用, None 不过滤
+    tic_area_min: Optional[float] = 100000     # TIC 峰面积下限, None 不过滤
+    tic_area_max: Optional[float] = None     # TIC 峰面积上限, None 不过滤
+    fid_area_min: Optional[float] = 0.01     # FID 峰面积下限, None 不过滤
+    fid_area_max: Optional[float] = None     # FID 峰面积上限, None 不过滤
 
     # ---------- 积分报告输出目录 ----------
     report_dir: Path = field(
         default_factory=lambda: Path(__file__).parent.parent / "data"
+    )
+
+    # ---------- 化合物结构图全局缓存目录 (跨任务共享) ----------
+    structure_cache_dir: Path = field(
+        default_factory=lambda: Path(__file__).parent.parent / "data" / "structure_cache"
     )
 
     @staticmethod
@@ -132,6 +147,16 @@ class Settings:
             val = os.getenv(key)
             return Path(val) if val else default
 
+        def _opt_float(key: str, default: Optional[float] = None) -> Optional[float]:
+            """从环境变量读取可选浮点值, 未设置时返回 default."""
+            val = os.getenv(key)
+            if val is None or val.strip() == "":
+                return default
+            try:
+                return float(val)
+            except ValueError:
+                return default
+
         return Settings(
             gc_ms_host=_str("ANALYSIS_GC_MS_HOST", defaults.gc_ms_host),
             gc_ms_port=_int("ANALYSIS_GC_MS_PORT", defaults.gc_ms_port),
@@ -155,9 +180,17 @@ class Settings:
             fid_peak_prominence=_float("ANALYSIS_FID_PEAK_PROMINENCE", defaults.fid_peak_prominence),
             fid_peak_min_distance=_int("ANALYSIS_FID_PEAK_MIN_DISTANCE", defaults.fid_peak_min_distance),
             report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
+            structure_cache_dir=_path("ANALYSIS_STRUCTURE_CACHE_DIR", defaults.structure_cache_dir),
             nist_path=_path("ANALYSIS_NIST_PATH", defaults.nist_path),
             nist_max_hits=_int("ANALYSIS_NIST_MAX_HITS", defaults.nist_max_hits),
             nist_search_timeout=_float("ANALYSIS_NIST_SEARCH_TIMEOUT", defaults.nist_search_timeout),
+            nist_avg_scans=_int("ANALYSIS_NIST_AVG_SCANS", defaults.nist_avg_scans),
+            peak_rt_min=_opt_float("ANALYSIS_PEAK_RT_MIN", defaults.peak_rt_min),
+            peak_rt_max=_opt_float("ANALYSIS_PEAK_RT_MAX", defaults.peak_rt_max),
+            tic_area_min=_opt_float("ANALYSIS_TIC_AREA_MIN", defaults.tic_area_min),
+            tic_area_max=_opt_float("ANALYSIS_TIC_AREA_MAX", defaults.tic_area_max),
+            fid_area_min=_opt_float("ANALYSIS_FID_AREA_MIN", defaults.fid_area_min),
+            fid_area_max=_opt_float("ANALYSIS_FID_AREA_MAX", defaults.fid_area_max),
         )
 
 

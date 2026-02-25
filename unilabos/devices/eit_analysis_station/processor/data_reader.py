@@ -167,6 +167,72 @@ class GCMSDataReader:
         nonzero = spectrum > 0
         return mz_values[nonzero], spectrum[nonzero]
 
+    def read_ms_spectra_at_peak(
+        self,
+        d_dir: Path,
+        start_time: float,
+        end_time: float,
+        avg_scans: int = 3,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        功能:
+            读取峰边界范围内 TIC 强度最高的质谱 (apex), 并对附近扫描取平均以提升信噪比.
+            相比 read_ms_spectra_at_rt 只取最近单次扫描, 本方法:
+            1. 在 [start_time, end_time] 内找到 TIC 最大的扫描 (真正的 apex).
+            2. 以 apex 为中心, 平均 avg_scans 个扫描, 降低噪声.
+        参数:
+            d_dir: .D 目录路径.
+            start_time: 峰起始时间 (min).
+            end_time: 峰结束时间 (min).
+            avg_scans: 以 apex 为中心的平均扫描数 (奇数, 默认 3).
+        返回:
+            Tuple[np.ndarray, np.ndarray]: (m/z 数组, 平均强度数组).
+        """
+        import rainbow as rb
+
+        datadir = rb.read(str(d_dir))
+        ms_file = datadir.get_file("data.ms")
+        if ms_file is None:
+            raise FileNotFoundError(f"未找到 data.ms: {d_dir}")
+
+        scan_times = ms_file.xlabels  # shape: (n_scans,)
+
+        # 找到峰边界内的扫描索引范围
+        mask = (scan_times >= start_time) & (scan_times <= end_time)
+        boundary_indices = np.where(mask)[0]
+
+        if len(boundary_indices) == 0:
+            # 降级: 使用原始最近扫描方法
+            logger.warning(
+                "峰范围 [%.3f, %.3f] 内无扫描, 降级为最近扫描",
+                start_time, end_time,
+            )
+            mid_rt = (start_time + end_time) / 2.0
+            return self.read_ms_spectra_at_rt(d_dir, mid_rt)
+
+        # 计算范围内每个扫描的 TIC, 找到最大值 (apex)
+        tic_in_range = ms_file.data[boundary_indices].sum(axis=1)
+        apex_local_idx = int(np.argmax(tic_in_range))
+        apex_idx = boundary_indices[apex_local_idx]
+
+        # 以 apex 为中心取 avg_scans 个扫描做平均
+        half = avg_scans // 2
+        avg_start = max(0, apex_idx - half)
+        avg_end = min(ms_file.data.shape[0], apex_idx + half + 1)
+
+        avg_spectrum = ms_file.data[avg_start:avg_end].mean(axis=0)  # shape: (n_mz,)
+        mz_values = ms_file.ylabels  # shape: (n_mz,)
+
+        # 过滤零强度离子
+        nonzero = avg_spectrum > 0
+
+        logger.debug(
+            "峰 apex 扫描: idx=%d, RT=%.3f, 平均 %d 个扫描 [%d:%d]",
+            apex_idx, scan_times[apex_idx], avg_end - avg_start, avg_start, avg_end,
+        )
+
+        return mz_values[nonzero], avg_spectrum[nonzero]
+
     def read_sample_info(self, d_dir: Path) -> Dict:
         """
         功能:

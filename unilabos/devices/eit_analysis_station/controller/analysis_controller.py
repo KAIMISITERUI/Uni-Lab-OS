@@ -15,6 +15,7 @@ import csv
 import json
 import logging
 import io
+import re
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -23,10 +24,25 @@ import openpyxl
 
 from ..config.setting import Settings, configure_logging
 from ..driver.zhida_driver import ZhidaClient
+from ..processor.chromatogram_plotter import ChromatogramPlotter
 from ..processor.data_reader import GCMSDataReader
-from ..processor.peak_integrator import PeakIntegrator
+from ..processor.peak_integrator import PeakIntegrator, PeakResult
 from ..processor.nist_matcher import NISTMatcher
 from ..processor.report_generator import ReportGenerator, SampleResult
+
+
+def _natural_sort_key(path: Path) -> list:
+    """
+    功能:
+        自然排序键函数, 将路径名中的连续数字段转换为 int 排序,
+        非数字段按小写字符串排序, 实现 725-1 < 725-2 < 725-10 的效果.
+    参数:
+        path: 文件或目录路径.
+    返回:
+        list: 混合类型排序键列表.
+    """
+    parts = re.split(r'(\d+)', path.stem)
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
 
 
 class AnalysisStationController:
@@ -489,7 +505,7 @@ class AnalysisStationController:
         remote_data_dir = self._settings.gc_ms_data_dir
         if remote_data_dir.exists():
             # 匹配 <task_id>-<num>.D 格式
-            for d_dir in sorted(remote_data_dir.glob(f"{task_id}-*.D")):
+            for d_dir in sorted(remote_data_dir.glob(f"{task_id}-*.D"), key=_natural_sort_key):
                 if d_dir.is_dir():
                     d_dirs.append(d_dir)
 
@@ -500,7 +516,7 @@ class AnalysisStationController:
         # 备选: 在本地 data/<task_id>/ 目录下查找
         local_data_dir = self._settings.data_dir / task_id
         if local_data_dir.exists():
-            for d_dir in sorted(local_data_dir.glob("*.D")):
+            for d_dir in sorted(local_data_dir.glob("*.D"), key=_natural_sort_key):
                 if d_dir.is_dir():
                     d_dirs.append(d_dir)
 
@@ -511,13 +527,56 @@ class AnalysisStationController:
 
         return d_dirs
 
-    def _process_single_sample(self, d_dir: Path, nist: NISTMatcher) -> SampleResult:
+    def _filter_peaks(
+        self,
+        peaks: List[PeakResult],
+        area_min: Optional[float] = None,
+        area_max: Optional[float] = None,
+    ) -> List[PeakResult]:
         """
         功能:
-            处理单个 .D 目录: 读取 TIC/FID, 积分, NIST 匹配.
+            按保留时间范围和面积阈值过滤峰列表, 过滤后重新计算面积百分比.
+        参数:
+            peaks: 积分后的峰列表.
+            area_min: 峰面积下限, None 表示不过滤.
+            area_max: 峰面积上限, None 表示不过滤.
+        返回:
+            List[PeakResult]: 过滤后的峰列表.
+        """
+        filtered = peaks
+
+        # 保留时间范围过滤 (TIC/FID 共用)
+        if self._settings.peak_rt_min is not None:
+            filtered = [p for p in filtered if p.retention_time >= self._settings.peak_rt_min]
+        if self._settings.peak_rt_max is not None:
+            filtered = [p for p in filtered if p.retention_time <= self._settings.peak_rt_max]
+
+        # 面积范围过滤 (TIC/FID 分别传入不同阈值)
+        if area_min is not None:
+            filtered = [p for p in filtered if p.area >= area_min]
+        if area_max is not None:
+            filtered = [p for p in filtered if p.area <= area_max]
+
+        # 重新计算面积百分比
+        if len(filtered) < len(peaks):
+            total_area = sum(p.area for p in filtered)
+            if total_area > 0:
+                for p in filtered:
+                    p.area_percent = (p.area / total_area) * 100.0
+            self._logger.info("峰过滤: %d -> %d 个峰", len(peaks), len(filtered))
+
+        return filtered
+
+    def _process_single_sample(
+        self, d_dir: Path, nist: NISTMatcher, report_dir: Optional[Path] = None,
+    ) -> SampleResult:
+        """
+        功能:
+            处理单个 .D 目录: 读取 TIC/FID, 积分, NIST 匹配, 生成色谱图.
         参数:
             d_dir: .D 目录路径.
             nist: NISTMatcher 实例 (由外部传入, 保持状态复用).
+            report_dir: 报告输出目录, 用于保存色谱图. None 则不生成图.
         返回:
             SampleResult: 该样品的完整积分结果.
         """
@@ -534,6 +593,10 @@ class AnalysisStationController:
             acq_time=acq_time,
         )
 
+        # 缓存色谱数据, 供后续绘图复用
+        tic_times = tic_intensities = None
+        fid_times = fid_intensities = None
+
         # TIC 积分
         try:
             tic_times, tic_intensities = reader.read_tic(d_dir)
@@ -544,6 +607,11 @@ class AnalysisStationController:
                 width_rel_height=self._settings.peak_width_rel_height,
             )
             result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
+            result.tic_peaks = self._filter_peaks(
+                result.tic_peaks,
+                area_min=self._settings.tic_area_min,
+                area_max=self._settings.tic_area_max,
+            )
             self._logger.info("样品 %s TIC 积分: %d 个峰", sample_name, len(result.tic_peaks))
         except Exception as e:
             self._logger.error("样品 %s TIC 积分失败: %s", sample_name, e)
@@ -558,6 +626,11 @@ class AnalysisStationController:
                 width_rel_height=self._settings.peak_width_rel_height,
             )
             result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
+            result.fid_peaks = self._filter_peaks(
+                result.fid_peaks,
+                area_min=self._settings.fid_area_min,
+                area_max=self._settings.fid_area_max,
+            )
             self._logger.info("样品 %s FID 积分: %d 个峰", sample_name, len(result.fid_peaks))
         except Exception as e:
             self._logger.error("样品 %s FID 积分失败: %s", sample_name, e)
@@ -565,16 +638,19 @@ class AnalysisStationController:
         # NIST 化合物匹配 (优先使用 NIST MS Search 自动化)
         try:
             if nist.nist_available and result.tic_peaks:
-                # 提取各 TIC 峰的保留时间, 通过 NIST 搜索匹配
-                peak_rts = [p.retention_time for p in result.tic_peaks]
+                # 提取各 TIC 峰的质谱并通过 NIST 搜索匹配
                 result.compound_matches = nist.match_peaks_with_nist(
-                    d_dir, peak_rts, reader
+                    d_dir, result.tic_peaks, reader,
+                    avg_scans=self._settings.nist_avg_scans,
                 )
                 if result.compound_matches:
                     self._logger.info(
                         "样品 %s NIST 自动匹配: %d 个峰有匹配结果",
                         sample_name, len(result.compound_matches)
                     )
+                # 记录 NIST 结果文件副本路径
+                if hasattr(nist, '_saved_srcreslt') and nist._saved_srcreslt is not None:
+                    result.nist_result_path = nist._saved_srcreslt
             else:
                 # 降级: 从 MassHunter 已有报告中提取
                 result.compound_matches = nist.match_from_qual_results(d_dir)
@@ -583,6 +659,44 @@ class AnalysisStationController:
                 self._logger.info("样品 %s 无可用的 NIST 定性结果", sample_name)
         except Exception as e:
             self._logger.error("样品 %s NIST 匹配失败: %s", sample_name, e)
+
+        # 生成色谱图 (TIC + FID)
+        if report_dir is not None:
+            plotter = ChromatogramPlotter()
+            plot_dir = report_dir / "plots"
+
+            # TIC 色谱图
+            if tic_times is not None and result.tic_peaks:
+                try:
+                    tic_plot = plot_dir / f"{sample_name}_tic.png"
+                    result.tic_plot_path = plotter.plot_chromatogram(
+                        tic_times, tic_intensities, result.tic_peaks,
+                        compound_matches=result.compound_matches or None,
+                        title=f"TIC Chromatogram - {sample_name}",
+                        ylabel="TIC Intensity",
+                        output_path=tic_plot,
+                        rt_min=self._settings.peak_rt_min,
+                        rt_max=self._settings.peak_rt_max,
+                    )
+                except Exception as e:
+                    self._logger.error("样品 %s TIC 色谱图生成失败: %s", sample_name, e)
+
+            # FID 色谱图
+            if fid_times is not None and result.fid_peaks:
+                try:
+                    fid_plot = plot_dir / f"{sample_name}_fid.png"
+                    result.fid_plot_path = plotter.plot_chromatogram(
+                        fid_times, fid_intensities, result.fid_peaks,
+                        compound_matches=None,  # FID 不标注化合物
+                        title=f"FID Chromatogram - {sample_name}",
+                        ylabel="FID Signal",
+                        output_path=fid_plot,
+                        rt_min=self._settings.peak_rt_min,
+                        rt_max=self._settings.peak_rt_max,
+                        y_range_min=100,  # FID 信号较小, 确保 Y 轴最小范围
+                    )
+                except Exception as e:
+                    self._logger.error("样品 %s FID 色谱图生成失败: %s", sample_name, e)
 
         return result
 
@@ -619,27 +733,51 @@ class AnalysisStationController:
                 search_timeout=self._settings.nist_search_timeout,
             )
 
+            # 本地报告目录 (色谱图也保存在此)
+            local_report_dir = self._settings.report_dir / resolved_id
+
             # 逐样品处理
             sample_results: List[SampleResult] = []
             for d_dir in d_dirs:
                 self._logger.info("处理样品: %s", d_dir.name)
-                sr = self._process_single_sample(d_dir, nist)
+                sr = self._process_single_sample(d_dir, nist, report_dir=local_report_dir)
                 sample_results.append(sr)
+
+            # 收集所有唯一 CAS 号, 批量获取化合物结构图
+            structure_images = {}
+            all_cas_numbers = set()
+            for sr in sample_results:
+                for match_list in sr.compound_matches.values():
+                    for m in match_list:
+                        if m.cas_number:
+                            all_cas_numbers.add(m.cas_number)
+
+            if all_cas_numbers:
+                try:
+                    from ..processor.structure_fetcher import StructureFetcher
+                    fetcher = StructureFetcher(
+                        task_cache_dir=local_report_dir / "structures",
+                        global_cache_dir=self._settings.structure_cache_dir,
+                    )
+                    structure_images = fetcher.fetch_batch(list(all_cas_numbers))
+                except Exception as e:
+                    self._logger.warning("化合物结构图获取失败, 报告将不含结构图: %s", e)
 
             # 生成 Excel 报告
             generator = ReportGenerator()
 
             # 保存到本地数据目录
-            local_report_dir = self._settings.report_dir / resolved_id
             report_path = generator.generate_task_report(
-                resolved_id, sample_results, local_report_dir
+                resolved_id, sample_results, local_report_dir,
+                structure_images=structure_images,
             )
 
             # 同步到合成任务目录
             syn_dir = self._settings.synthesis_tasks_dir / resolved_id
             if syn_dir.is_dir():
                 syn_report = generator.generate_task_report(
-                    resolved_id, sample_results, syn_dir
+                    resolved_id, sample_results, syn_dir,
+                    structure_images=structure_images,
                 )
                 self._logger.info("报告已同步至合成任务目录: %s", syn_report)
 

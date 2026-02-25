@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 功能:
@@ -15,6 +15,7 @@
 import logging
 import os
 import re
+import shutil
 import subprocess
 import struct
 import time
@@ -179,6 +180,228 @@ class NISTMatcher:
             if path.exists():
                 path.unlink()
                 logger.debug("已清理: %s", path)
+
+    def _normalize_max_hits(self) -> int:
+        """
+        功能:
+            归一化 max_hits 配置值, 确保用于 NIST 配置同步的命中数量至少为 1.
+        参数:
+            无.
+        返回:
+            int, 归一化后的命中数量.
+        """
+        normalized_hits = self._max_hits
+        if normalized_hits < 1:
+            logger.warning(
+                "NIST 命中数量配置无效: max_hits=%s, 已强制修正为 1",
+                self._max_hits,
+            )
+            normalized_hits = 1
+        return normalized_hits
+
+    @staticmethod
+    def _find_section_range(
+        lines: List[str],
+        section_name: str,
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        功能:
+            在 INI 行列表中定位指定 section 的起止下标.
+            返回区间为左闭右开形式 [start, end).
+        参数:
+            lines: INI 文件按行拆分后的文本列表.
+            section_name: 目标 section 名称, 不包含方括号.
+        返回:
+            Tuple[Optional[int], Optional[int]]:
+                section 起始行下标和结束行下标.
+                当 section 不存在时, 两个值均为 None.
+        """
+        section_start: Optional[int] = None
+        section_end: Optional[int] = None
+
+        for line_index, raw_line in enumerate(lines):
+            stripped_line = raw_line.strip()
+            if not stripped_line.startswith("["):
+                continue
+            if not stripped_line.endswith("]"):
+                continue
+
+            current_section = stripped_line[1:-1].strip()
+            if section_start is None:
+                if current_section == section_name:
+                    section_start = line_index
+                continue
+
+            section_end = line_index
+            break
+
+        if section_start is None:
+            return None, None
+        if section_end is None:
+            section_end = len(lines)
+        return section_start, section_end
+
+    def _set_ini_key_value(
+        self,
+        lines: List[str],
+        section_name: str,
+        key_name: str,
+        key_value: int,
+    ) -> Tuple[List[str], bool, bool]:
+        """
+        功能:
+            在指定 section 中精确写入 key=value.
+            1. key 存在时更新值.
+            2. key 不存在时追加到 section 末尾.
+            3. section 不存在时不改动内容.
+        参数:
+            lines: INI 文件按行拆分后的文本列表.
+            section_name: 目标 section 名称.
+            key_name: 目标 key 名称.
+            key_value: 目标 key 值.
+        返回:
+            Tuple[List[str], bool, bool]:
+                更新后的行列表, 是否发生变更, section 是否存在.
+        """
+        section_start, section_end = self._find_section_range(lines, section_name)
+        if section_start is None:
+            return lines, False, False
+        if section_end is None:
+            return lines, False, False
+
+        target_value = str(key_value)
+        for line_index in range(section_start + 1, section_end):
+            raw_line = lines[line_index]
+            stripped_line = raw_line.strip()
+
+            if not stripped_line:
+                continue
+            if stripped_line.startswith(";"):
+                continue
+            if stripped_line.startswith("#"):
+                continue
+            if "=" not in raw_line:
+                continue
+
+            left_part, _, right_part = raw_line.partition("=")
+            if left_part.strip() != key_name:
+                continue
+
+            current_value = right_part.strip()
+            if current_value == target_value:
+                return lines, False, True
+
+            leading_spaces = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            lines[line_index] = f"{leading_spaces}{key_name}={target_value}"
+            return lines, True, True
+
+        lines.insert(section_end, f"{key_name}={target_value}")
+        return lines, True, True
+
+    def _sync_single_ini_hits(self, ini_path: Path, normalized_hits: int) -> None:
+        """
+        功能:
+            将单个 INI 文件中与命中条数相关的配置同步为指定值.
+            同步目标:
+            1. [Search Options] Hits to Print.
+            2. [REPORT] First Hits Number.
+        参数:
+            ini_path: 目标 INI 文件路径.
+            normalized_hits: 归一化后的命中数量.
+        返回:
+            无.
+        """
+        if not ini_path.exists():
+            logger.warning("NIST 配置文件不存在, 跳过同步: %s", ini_path)
+            return
+
+        try:
+            ini_text = ini_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            logger.warning("读取 NIST 配置文件失败, 已跳过: %s, 错误: %s", ini_path, exc)
+            return
+
+        line_ending = "\n"
+        if "\r\n" in ini_text:
+            line_ending = "\r\n"
+        keep_trailing_newline = ini_text.endswith("\n") or ini_text.endswith("\r")
+
+        ini_lines = ini_text.splitlines()
+        has_changed = False
+
+        ini_lines, search_changed, search_section_exists = self._set_ini_key_value(
+            lines=ini_lines,
+            section_name="Search Options",
+            key_name="Hits to Print",
+            key_value=normalized_hits,
+        )
+        if search_section_exists is False:
+            logger.warning(
+                "NIST 配置文件缺少 [Search Options], 跳过键 Hits to Print: %s",
+                ini_path,
+            )
+        if search_changed:
+            has_changed = True
+
+        ini_lines, report_changed, report_section_exists = self._set_ini_key_value(
+            lines=ini_lines,
+            section_name="REPORT",
+            key_name="First Hits Number",
+            key_value=normalized_hits,
+        )
+        if report_section_exists is False:
+            logger.warning(
+                "NIST 配置文件缺少 [REPORT], 跳过键 First Hits Number: %s",
+                ini_path,
+            )
+        if report_changed:
+            has_changed = True
+
+        if has_changed is False:
+            logger.debug("NIST 配置文件无需更新: %s", ini_path)
+            return
+
+        new_text = line_ending.join(ini_lines)
+        if keep_trailing_newline:
+            new_text = f"{new_text}{line_ending}"
+
+        try:
+            ini_path.write_text(new_text, encoding="utf-8")
+            logger.info("已同步 NIST 命中配置: %s, hits=%d", ini_path.name, normalized_hits)
+        except Exception as exc:
+            logger.warning("写入 NIST 配置文件失败, 已跳过: %s, 错误: %s", ini_path, exc)
+
+    def _update_ini_hits(self) -> None:
+        """
+        功能:
+            同步 NIST 命中条数配置到多个 INI 文件.
+            同步目标文件:
+            1. nistms.INI.
+            2. settings_EI.INI.
+            3. settings_MSMS.INI.
+            4. settings_PEP.INI.
+            同步目标键:
+            1. [Search Options] Hits to Print.
+            2. [REPORT] First Hits Number.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        if self._nist_path is None:
+            logger.warning("NIST 路径不可用, 跳过命中条数配置同步")
+            return
+
+        normalized_hits = self._normalize_max_hits()
+        ini_names = [
+            "nistms.INI",
+            "settings_EI.INI",
+            "settings_MSMS.INI",
+            "settings_PEP.INI",
+        ]
+        for ini_name in ini_names:
+            ini_path = self._nist_path / ini_name
+            self._sync_single_ini_hits(ini_path=ini_path, normalized_hits=normalized_hits)
 
     def _launch_nist_search(self) -> bool:
         """
@@ -350,6 +573,9 @@ class NISTMatcher:
         # 清理旧结果
         self._cleanup_result_files()
 
+        # 确保 NIST 返回足够数量的匹配结果
+        self._update_ini_hits()
+
         # 启动搜索并等待
         if not self._launch_nist_search():
             logger.warning("NIST 搜索未完成, 尝试读取已有结果")
@@ -383,21 +609,21 @@ class NISTMatcher:
     def match_peaks_with_nist(
         self,
         d_dir: Path,
-        peak_retention_times: List[float],
+        peak_results: List["PeakResult"],
         reader: "GCMSDataReader",
-        tolerance: float = 0.02,
-    ) -> Dict[float, CompoundMatch]:
+        avg_scans: int = 3,
+    ) -> Dict[float, List[CompoundMatch]]:
         """
         功能:
-            对 .D 目录中指定保留时间的峰逐一提取质谱并通过 NIST 搜索.
-            每个峰取最匹配的第一个 Hit 作为结果.
+            对 .D 目录中指定峰逐一提取 apex 质谱并通过 NIST 搜索.
+            使用峰边界范围内 TIC 最大的扫描, 并平均周围扫描以提升信噪比.
         参数:
             d_dir: .D 目录路径.
-            peak_retention_times: 需要匹配的峰保留时间列表 (min).
-            reader: GCMSDataReader 实例, 用于提取指定 RT 处的质谱.
-            tolerance: 保留时间容差 (min).
+            peak_results: 峰检测积分结果列表 (含 start_time/end_time/retention_time).
+            reader: GCMSDataReader 实例.
+            avg_scans: 以 apex 为中心的平均扫描数.
         返回:
-            Dict[float, CompoundMatch]: 保留时间 -> 最佳匹配结果.
+            Dict[float, List[CompoundMatch]]: 保留时间 -> 前2个匹配结果列表.
         """
         if not self.nist_available:
             logger.info("NIST 不可用, 跳过峰匹配")
@@ -407,19 +633,19 @@ class NISTMatcher:
         spectra: List[Tuple[str, np.ndarray, np.ndarray]] = []
         rt_name_map: Dict[str, float] = {}
 
-        for rt in peak_retention_times:
+        for peak in peak_results:
             try:
-                mz_values, intensities = reader.read_ms_spectra_at_rt(
-                    d_dir, rt, tolerance
+                mz_values, intensities = reader.read_ms_spectra_at_peak(
+                    d_dir, peak.start_time, peak.end_time, avg_scans
                 )
                 if len(mz_values) == 0:
                     continue
                 # 用 RT 作为标识名
-                name = f"RT_{rt:.3f}"
+                name = f"RT_{peak.retention_time:.3f}"
                 spectra.append((name, mz_values, intensities))
-                rt_name_map[name] = rt
+                rt_name_map[name] = peak.retention_time
             except Exception as e:
-                logger.warning("提取 RT=%.3f 处质谱失败: %s", rt, e)
+                logger.warning("提取 RT=%.3f 处质谱失败: %s", peak.retention_time, e)
 
         if not spectra:
             logger.info("无有效质谱数据, 跳过 NIST 搜索")
@@ -430,12 +656,23 @@ class NISTMatcher:
         # 批量搜索
         all_results = self.search_spectra(spectra, work_dir=d_dir.parent)
 
-        # 映射回保留时间, 取每个峰的第一个 Hit
-        matches: Dict[float, CompoundMatch] = {}
+        # 保存 NIST 结果文件副本, 避免后续样品搜索覆盖
+        self._saved_srcreslt: Optional[Path] = None
+        if self._srcreslt_path.exists():
+            saved_path = d_dir.parent / f"SRCRESLT_{d_dir.stem}.TXT"
+            try:
+                shutil.copy2(str(self._srcreslt_path), str(saved_path))
+                self._saved_srcreslt = saved_path
+                logger.debug("NIST 结果已备份: %s", saved_path)
+            except Exception as e:
+                logger.warning("备份 SRCRESLT.TXT 失败: %s", e)
+
+        # 映射回保留时间, 取每个峰的前2个 Hit
+        matches: Dict[float, List[CompoundMatch]] = {}
         for name, hits in all_results.items():
             if name in rt_name_map and hits:
                 rt = rt_name_map[name]
-                matches[rt] = hits[0]  # 取最佳匹配
+                matches[rt] = hits[:2]  # 保留前2个匹配结果
 
         logger.info("NIST 峰匹配完成: %d/%d 个峰有匹配结果",
                      len(matches), len(spectra))
@@ -445,7 +682,7 @@ class NISTMatcher:
     # 降级方案: MassHunter 报告文件
     # ------------------------------------------------------------------
 
-    def match_from_qual_results(self, d_dir: Path) -> Dict[float, CompoundMatch]:
+    def match_from_qual_results(self, d_dir: Path) -> Dict[float, List[CompoundMatch]]:
         """
         功能:
             从 MassHunter 定性结果中提取化合物匹配信息.
@@ -456,10 +693,10 @@ class NISTMatcher:
         参数:
             d_dir: .D 目录路径.
         返回:
-            Dict[float, CompoundMatch]: 保留时间 -> 化合物匹配结果.
+            Dict[float, List[CompoundMatch]]: 保留时间 -> 化合物匹配结果列表.
                 返回空字典表示无可用的定性结果.
         """
-        results: Dict[float, CompoundMatch] = {}
+        results: Dict[float, List[CompoundMatch]] = {}
 
         # 策略1: 尝试读取 MassHunter 导出的报告文件
         report_files = list(d_dir.glob("*.report.csv")) + list(d_dir.glob("Report*.csv"))
@@ -479,7 +716,7 @@ class NISTMatcher:
 
         return results
 
-    def _parse_masshunter_report_csv(self, csv_path: Path) -> Dict[float, CompoundMatch]:
+    def _parse_masshunter_report_csv(self, csv_path: Path) -> Dict[float, List[CompoundMatch]]:
         """
         功能:
             解析 MassHunter 导出的 CSV 格式报告文件.
@@ -487,11 +724,11 @@ class NISTMatcher:
         参数:
             csv_path: CSV 报告文件路径.
         返回:
-            Dict[float, CompoundMatch]: 保留时间 -> 化合物匹配结果.
+            Dict[float, List[CompoundMatch]]: 保留时间 -> 化合物匹配结果列表.
         """
         import csv
 
-        results: Dict[float, CompoundMatch] = {}
+        results: Dict[float, List[CompoundMatch]] = {}
 
         try:
             with csv_path.open("r", encoding="utf-8", errors="replace") as f:
@@ -508,13 +745,13 @@ class NISTMatcher:
                     formula = self._extract_str_from_row(row, ["Formula", "Molecular Formula"])
                     mw = self._extract_float_from_row(row, ["MW", "Molecular Weight", "Mol. Weight"])
 
-                    results[rt] = CompoundMatch(
+                    results[rt] = [CompoundMatch(
                         compound_name=name or "",
                         cas_number=cas or "",
                         match_score=score or 0.0,
                         formula=formula or "",
                         mw=mw or 0.0,
-                    )
+                    )]
 
         except Exception as e:
             logger.warning("解析 MassHunter 报告文件失败: %s - %s", csv_path, e)
@@ -543,18 +780,18 @@ class NISTMatcher:
     def find_closest_match(
         self,
         target_rt: float,
-        matches: Dict[float, CompoundMatch],
+        matches: Dict[float, List[CompoundMatch]],
         tolerance: float = 0.05,
-    ) -> Optional[CompoundMatch]:
+    ) -> Optional[List[CompoundMatch]]:
         """
         功能:
-            在已有的化合物匹配字典中, 按保留时间查找最接近的匹配.
+            在已有的化合物匹配字典中, 按保留时间查找最接近的匹配列表.
         参数:
             target_rt: 目标保留时间 (min).
-            matches: 保留时间 -> 化合物匹配字典.
+            matches: 保留时间 -> 化合物匹配列表字典.
             tolerance: 保留时间容差 (min).
         返回:
-            Optional[CompoundMatch]: 最接近的匹配, 超出容差返回 None.
+            Optional[List[CompoundMatch]]: 最接近的匹配列表, 超出容差返回 None.
         """
         if not matches:
             return None
@@ -564,3 +801,4 @@ class NISTMatcher:
             return matches[closest_rt]
 
         return None
+
