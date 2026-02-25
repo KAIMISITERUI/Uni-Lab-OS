@@ -1479,6 +1479,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
     def wait_task_with_ops(self, task_id: int | None = None, *, poll_interval_s: float = 2.0) -> int:
         return super().wait_task_with_ops(task_id, poll_interval_s=poll_interval_s)
 
+    def export_task_report(self, task_id: int, file_type: str = "excel") -> Path:
+        return super().export_task_report(task_id, file_type=file_type)
+
     # ---------- 6. 下料动作 ----------
     def batch_out_task_and_empty_trays(self, task_id: int | None = None, *, poll_interval_s: float = 1.0, ignore_missing: bool = True, timeout_s: float = 900.0, move_type: str = "main_out"):
         return super().batch_out_task_and_empty_trays(task_id, poll_interval_s=poll_interval_s, ignore_missing=ignore_missing, timeout_s=timeout_s, move_type=move_type)

@@ -3088,6 +3088,34 @@ class SynthesisStationController:
 
         return None
 
+    def export_task_report(self, task_id: int, file_type: str = "excel") -> Path:
+        """
+        功能:
+            导出指定任务的报告并保存到该任务的数据目录中
+        参数:
+            task_id: int, 任务id
+            file_type: str, 文件类型, 默认 "excel"
+        返回:
+            Path, 保存的报告文件路径
+        """
+        # 确定任务数据目录
+        task_dir = self._settings.data_dir / "tasks" / str(task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+
+        # 调用底层API获取报告二进制内容
+        content = self._call_with_relogin(
+            self._client.export_task_report, [task_id], file_type
+        )
+
+        # 根据文件类型确定后缀
+        ext_map = {"excel": ".xlsx", "csv": ".csv", "pdf": ".pdf"}
+        ext = ext_map.get(file_type, ".xlsx")
+        report_path = task_dir / f"task_report_{task_id}{ext}"
+
+        report_path.write_bytes(content)
+        self._logger.info("任务 %s 报告已保存: %s", task_id, report_path)
+        return report_path
+
     def wait_task_with_ops(self, task_id: Optional[int] = None, *, poll_interval_s: float = 5.0) -> int:
         """
         功能:
@@ -3170,6 +3198,13 @@ class SynthesisStationController:
             status = self._extract_task_status(info)
             if status == int(TaskStatus.COMPLETED):
                 self._logger.info("任务 %s 已完成", target_task_id)
+
+                # 自动导出任务报告并保存到任务目录
+                try:
+                    report_path = self.export_task_report(int(target_task_id))
+                    self._logger.info("任务 %s 报告已自动保存: %s", target_task_id, report_path)
+                except Exception as exc:
+                    self._logger.warning("任务 %s 报告导出失败: %s", target_task_id, exc)
 
                 # 自动更新任务状态为完成
                 if self._data_manager:

@@ -43,6 +43,9 @@ if __name__ == "__main__":
     # 8. 查询任务物料，并执行下料操作, 同时下料空托盘
     # manager.batch_out_task_and_empty_trays()
 
+    # 9. 导出任务报告(指定任务id, 保存到 data/tasks/<task_id>/ 目录)
+    manager.export_task_report(task_id=725)
+
     #---------------工站状态查询-------------------
 
     # 1. 查询站内所有物料信息
@@ -91,18 +94,18 @@ if __name__ == "__main__":
 
     # 2. agv上料+开始任务+agv下料
 
-    manager.batch_in_tray_with_agv_transfer()
+    # manager.batch_in_tray_with_agv_transfer()
 
-    manager.check_resource_for_task(str(task_tpl), str(chem_db))
+    # manager.check_resource_for_task(str(task_tpl), str(chem_db))
 
-    manager.start_task()
+    # manager.start_task()
 
-    manager.wait_task_with_ops()
+    # manager.wait_task_with_ops()
 
-    manager.batch_out_task_and_empty_trays()
+    # manager.batch_out_task_and_empty_trays()
 
-    manager.auto_unload_trays_to_agv()
+    # manager.auto_unload_trays_to_agv()
 
     # 3. 根据合成任务自动生成分析 CSV 并提交 GC_MS（自动选取最新任务）
 
-    manager.run_analysis()
+    # manager.run_analysis()
