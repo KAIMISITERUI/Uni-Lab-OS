@@ -1911,7 +1911,7 @@ class AGVController:
             logger.info("阶段2: 从AGV货架取料并放置到目标站点")
 
             for station_id, task_indices in target_stations.items():
-                logger.info(f"\n处理目标站点: {station_id}")
+                logger.debug(f"\n处理目标站点: {station_id}")
 
                 # AGV移动到目标站点
                 logger.info(f"AGV移动到站点: {station_id}")

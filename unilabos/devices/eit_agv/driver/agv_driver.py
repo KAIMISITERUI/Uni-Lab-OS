@@ -203,7 +203,7 @@ class AGVDriver:
         s.settimeout(self.cfg.timeout_s)
         s.connect((self.cfg.host, self.cfg.port))
         self._sock = s
-        logger.info("已连接到查询端口 %s:%s", self.cfg.host, self.cfg.port)
+        logger.debug("已连接到查询端口 %s:%s", self.cfg.host, self.cfg.port)
 
     def connect_navigation(self) -> None:
         """
@@ -216,7 +216,7 @@ class AGVDriver:
         s.settimeout(self.cfg.timeout_s)
         s.connect((self.cfg.host, self.cfg.port_navigation))
         self._sock_nav = s
-        logger.info("已连接到导航端口 %s:%s", self.cfg.host, self.cfg.port_navigation)
+        logger.debug("已连接到导航端口 %s:%s", self.cfg.host, self.cfg.port_navigation)
 
     def close(self) -> None:
         """

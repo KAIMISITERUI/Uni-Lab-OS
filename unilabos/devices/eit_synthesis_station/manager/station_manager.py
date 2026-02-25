@@ -650,24 +650,36 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         # 6. 提交任务信息到工站
         task_id = resp.get("task_id")
 
-        # 7. 回写任务ID到模板(实验ID)
+        # 7. 回写任务ID和任务名称到模板
         try:
             task_id_int = int(task_id)
-            updated = False
+            id_updated = False
+            name_updated = False
+            # 获取实际提交的任务名称(可能经过重命名)
+            final_task_name = task_payload.get("task_name")
+
             for r in range(1, ws.max_row + 1):
                 key_val = ws.cell(r, 1).value
                 if key_val is None:
                     continue
-                if str(key_val).strip() == "实验ID":
+                key_str = str(key_val).strip()
+                # 回写实验ID
+                if key_str == "实验ID":
                     ws.cell(r, 2, value=task_id_int)
-                    updated = True
-                    break
+                    id_updated = True
+                # 回写任务名称(重命名后同步更新模板)
+                if key_str == "实验名称" and final_task_name is not None:
+                    ws.cell(r, 2, value=final_task_name)
+                    name_updated = True
 
-            if updated:
+            if id_updated or name_updated:
                 safe_workbook_save(wb, t_path)
-                logger.info("已将任务ID写入模板文件: %s", t_path)
+                if id_updated:
+                    logger.info("已将任务ID写入模板文件: %s", t_path)
+                if name_updated:
+                    logger.info("已将任务名称同步写入模板文件: %s", final_task_name)
             else:
-                logger.warning("未找到“实验ID”位置，未回写任务ID")
+                logger.warning("未找到'实验ID'位置, 未回写任务ID")
         except Exception as exc:
             logger.warning("任务ID回写失败: %s", exc)
 
