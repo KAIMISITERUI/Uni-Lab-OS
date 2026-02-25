@@ -15,6 +15,7 @@ import csv
 import json
 import logging
 import io
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -22,6 +23,10 @@ import openpyxl
 
 from ..config.setting import Settings, configure_logging
 from ..driver.zhida_driver import ZhidaClient
+from ..processor.data_reader import GCMSDataReader
+from ..processor.peak_integrator import PeakIntegrator
+from ..processor.nist_matcher import NISTMatcher
+from ..processor.report_generator import ReportGenerator, SampleResult
 
 
 class AnalysisStationController:
@@ -463,3 +468,343 @@ class AnalysisStationController:
 
         self._logger.info("分析任务提交完毕, 结果: %s", results)
         return results
+
+    # ------------------------------------------------------------------
+    # GC_MS 结果处理(积分 + 定性 + 报告)
+    # ------------------------------------------------------------------
+
+    def _enumerate_d_dirs(self, task_id: str) -> List[Path]:
+        """
+        功能:
+            枚举指定任务下所有 .D 结果目录.
+            先在仪器侧网络目录查找, 再在本地 data 目录查找.
+        参数:
+            task_id: 任务 ID.
+        返回:
+            List[Path]: 找到的 .D 目录列表, 按样品编号排序.
+        """
+        d_dirs: List[Path] = []
+
+        # 优先查找仪器侧网络目录
+        remote_data_dir = self._settings.gc_ms_data_dir
+        if remote_data_dir.exists():
+            # 匹配 <task_id>-<num>.D 格式
+            for d_dir in sorted(remote_data_dir.glob(f"{task_id}-*.D")):
+                if d_dir.is_dir():
+                    d_dirs.append(d_dir)
+
+        if d_dirs:
+            self._logger.info("从仪器侧目录找到 %d 个 .D 文件: %s", len(d_dirs), remote_data_dir)
+            return d_dirs
+
+        # 备选: 在本地 data/<task_id>/ 目录下查找
+        local_data_dir = self._settings.data_dir / task_id
+        if local_data_dir.exists():
+            for d_dir in sorted(local_data_dir.glob("*.D")):
+                if d_dir.is_dir():
+                    d_dirs.append(d_dir)
+
+        if d_dirs:
+            self._logger.info("从本地目录找到 %d 个 .D 文件: %s", len(d_dirs), local_data_dir)
+        else:
+            self._logger.warning("未找到任务 %s 的 .D 结果目录", task_id)
+
+        return d_dirs
+
+    def _process_single_sample(self, d_dir: Path, nist: NISTMatcher) -> SampleResult:
+        """
+        功能:
+            处理单个 .D 目录: 读取 TIC/FID, 积分, NIST 匹配.
+        参数:
+            d_dir: .D 目录路径.
+            nist: NISTMatcher 实例 (由外部传入, 保持状态复用).
+        返回:
+            SampleResult: 该样品的完整积分结果.
+        """
+        reader = GCMSDataReader()
+
+        # 读取样品元数据
+        sample_info = reader.read_sample_info(d_dir)
+        sample_name = sample_info.get("sample_name", d_dir.stem)
+        acq_time = sample_info.get("acq_time", "")
+
+        result = SampleResult(
+            sample_name=sample_name,
+            d_dir=d_dir,
+            acq_time=acq_time,
+        )
+
+        # TIC 积分
+        try:
+            tic_times, tic_intensities = reader.read_tic(d_dir)
+            tic_integrator = PeakIntegrator(
+                smoothing_window=self._settings.peak_smoothing_window,
+                prominence=self._settings.peak_prominence,
+                min_distance=self._settings.peak_min_distance,
+                width_rel_height=self._settings.peak_width_rel_height,
+            )
+            result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
+            self._logger.info("样品 %s TIC 积分: %d 个峰", sample_name, len(result.tic_peaks))
+        except Exception as e:
+            self._logger.error("样品 %s TIC 积分失败: %s", sample_name, e)
+
+        # FID 积分
+        try:
+            fid_times, fid_intensities = reader.read_fid(d_dir)
+            fid_integrator = PeakIntegrator(
+                smoothing_window=self._settings.peak_smoothing_window,
+                prominence=self._settings.fid_peak_prominence,
+                min_distance=self._settings.fid_peak_min_distance,
+                width_rel_height=self._settings.peak_width_rel_height,
+            )
+            result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
+            self._logger.info("样品 %s FID 积分: %d 个峰", sample_name, len(result.fid_peaks))
+        except Exception as e:
+            self._logger.error("样品 %s FID 积分失败: %s", sample_name, e)
+
+        # NIST 化合物匹配 (优先使用 NIST MS Search 自动化)
+        try:
+            if nist.nist_available and result.tic_peaks:
+                # 提取各 TIC 峰的保留时间, 通过 NIST 搜索匹配
+                peak_rts = [p.retention_time for p in result.tic_peaks]
+                result.compound_matches = nist.match_peaks_with_nist(
+                    d_dir, peak_rts, reader
+                )
+                if result.compound_matches:
+                    self._logger.info(
+                        "样品 %s NIST 自动匹配: %d 个峰有匹配结果",
+                        sample_name, len(result.compound_matches)
+                    )
+            else:
+                # 降级: 从 MassHunter 已有报告中提取
+                result.compound_matches = nist.match_from_qual_results(d_dir)
+
+            if not result.compound_matches:
+                self._logger.info("样品 %s 无可用的 NIST 定性结果", sample_name)
+        except Exception as e:
+            self._logger.error("样品 %s NIST 匹配失败: %s", sample_name, e)
+
+        return result
+
+    def process_gc_ms_results(self, task_id: Optional[str] = None) -> Dict:
+        """
+        功能:
+            GC-MS 运行完成后的结果处理入口:
+            1. 定位任务目录, 找到所有 .D 结果文件.
+            2. 逐个读取 TIC/FID 数据并积分.
+            3. 读取/匹配 NIST 定性结果.
+            4. 按任务汇总生成 Excel 报告.
+        参数:
+            task_id: 任务 ID 字符串, None 表示自动选取最新任务.
+        返回:
+            Dict: {"success": bool, "return_info": str, "report_path": str}.
+        """
+        try:
+            # 定位任务(取 resolved_id, task_dir 不直接使用)
+            _, resolved_id = self._find_task_dir(task_id)
+            self._logger.info("开始处理任务 %s 的 GC-MS 结果", resolved_id)
+
+            # 枚举 .D 目录
+            d_dirs = self._enumerate_d_dirs(resolved_id)
+            if not d_dirs:
+                return {
+                    "success": False,
+                    "return_info": f"任务 {resolved_id} 未找到 .D 结果目录",
+                }
+
+            # 初始化 NIST 匹配器 (复用同一实例)
+            nist = NISTMatcher(
+                nist_path=self._settings.nist_path,
+                max_hits=self._settings.nist_max_hits,
+                search_timeout=self._settings.nist_search_timeout,
+            )
+
+            # 逐样品处理
+            sample_results: List[SampleResult] = []
+            for d_dir in d_dirs:
+                self._logger.info("处理样品: %s", d_dir.name)
+                sr = self._process_single_sample(d_dir, nist)
+                sample_results.append(sr)
+
+            # 生成 Excel 报告
+            generator = ReportGenerator()
+
+            # 保存到本地数据目录
+            local_report_dir = self._settings.report_dir / resolved_id
+            report_path = generator.generate_task_report(
+                resolved_id, sample_results, local_report_dir
+            )
+
+            # 同步到合成任务目录
+            syn_dir = self._settings.synthesis_tasks_dir / resolved_id
+            if syn_dir.is_dir():
+                syn_report = generator.generate_task_report(
+                    resolved_id, sample_results, syn_dir
+                )
+                self._logger.info("报告已同步至合成任务目录: %s", syn_report)
+
+            # 统计摘要
+            total_tic_peaks = sum(len(sr.tic_peaks) for sr in sample_results)
+            total_fid_peaks = sum(len(sr.fid_peaks) for sr in sample_results)
+            msg = (
+                f"任务 {resolved_id} 结果处理完成: "
+                f"{len(sample_results)} 个样品, "
+                f"TIC 共 {total_tic_peaks} 个峰, "
+                f"FID 共 {total_fid_peaks} 个峰, "
+                f"报告: {report_path}"
+            )
+            self._logger.info(msg)
+
+            return {
+                "success": True,
+                "return_info": msg,
+                "report_path": str(report_path),
+            }
+
+        except Exception as exc:
+            msg = f"结果处理失败: {exc}"
+            self._logger.error(msg)
+            return {"success": False, "return_info": msg}
+
+    def poll_and_process(
+        self, task_id: Optional[str] = None, poll_interval: float = 30.0
+    ) -> Dict:
+        """
+        功能:
+            轮询 GC-MS 状态, 运行完成后自动触发结果处理.
+            1. 循环调用 ZhidaClient.get_status() 检查状态.
+            2. 当状态从 RunSample 变为 Idle 时触发 process_gc_ms_results.
+        参数:
+            task_id: 任务 ID 字符串, None 表示自动选取最新任务.
+            poll_interval: 轮询间隔(秒), 默认 30 秒.
+        返回:
+            Dict: process_gc_ms_results 的返回值.
+        """
+        client = ZhidaClient(
+            host=self._settings.gc_ms_host,
+            port=self._settings.gc_ms_port,
+            timeout=self._settings.gc_ms_timeout,
+        )
+
+        self._logger.info(
+            "开始轮询 GC-MS 状态, 间隔 %.0f 秒, 等待运行完成...", poll_interval
+        )
+
+        prev_status = ""
+        try:
+            while True:
+                status = client.get_status()
+
+                if status != prev_status:
+                    self._logger.info("GC-MS 状态变更: %s -> %s", prev_status, status)
+                    prev_status = status
+
+                # 运行完成: 从 RunSample 变为 Idle
+                if status == "Idle" and prev_status in ("RunSample", "Idle"):
+                    # 首次进入 Idle 时直接处理, 或从 RunSample 变为 Idle
+                    self._logger.info("GC-MS 运行完成, 开始处理结果...")
+                    return self.process_gc_ms_results(task_id)
+
+                if status in ("Error", "Offline"):
+                    msg = f"GC-MS 状态异常: {status}, 停止轮询"
+                    self._logger.error(msg)
+                    return {"success": False, "return_info": msg}
+
+                time.sleep(poll_interval)
+
+        except KeyboardInterrupt:
+            self._logger.info("轮询被用户中断")
+            return {"success": False, "return_info": "轮询被用户中断"}
+
+
+# ------------------------------------------------------------------
+# 交互式测试入口
+# ------------------------------------------------------------------
+
+def _print_result(result: Dict) -> None:
+    """
+    功能:
+        格式化打印函数返回结果.
+    参数:
+        result: 函数返回的字典.
+    返回:
+        无.
+    """
+    print("\n========== 执行结果 ==========")
+    for key, value in result.items():
+        print(f"  {key}: {value}")
+    print("==============================\n")
+
+
+def main() -> None:
+    """
+    功能:
+        交互式菜单, 用于手动测试 run_analysis / process_gc_ms_results / poll_and_process.
+        用户可选择功能并输入 task_id, 输入 q 退出.
+    参数:
+        无.
+    返回:
+        无.
+    """
+    configure_logging("DEBUG")
+    logger = logging.getLogger("main")
+    logger.info("初始化分析站控制器...")
+
+    controller = AnalysisStationController()
+
+    menu = (
+        "\n===== 分析站交互式测试菜单 =====\n"
+        "  1. run_analysis        - 统一分析入口(生成CSV并提交至仪器)\n"
+        "  2. process_gc_ms_results - GC-MS结果处理(积分+定性+报告)\n"
+        "  3. poll_and_process    - 轮询GC-MS状态并自动处理结果\n"
+        "  q. 退出\n"
+        "================================"
+    )
+
+    while True:
+        print(menu)
+        choice = input("请选择功能编号: ").strip()
+
+        if choice in ("q", "Q"):
+            print("已退出测试.")
+            break
+
+        if choice not in ("1", "2", "3"):
+            print("无效选择, 请输入 1/2/3 或 q.")
+            continue
+
+        # 获取 task_id, 空字符串视为 None(自动选取最新任务)
+        task_id_input = input("请输入 task_id (留空则自动选取最新任务): ").strip()
+        task_id = task_id_input if task_id_input else None
+
+        if choice == "1":
+            print(f"\n>>> 调用 run_analysis(task_id={task_id!r})")
+            result = controller.run_analysis(task_id=task_id)
+            _print_result(result)
+
+        elif choice == "2":
+            print(f"\n>>> 调用 process_gc_ms_results(task_id={task_id!r})")
+            result = controller.process_gc_ms_results(task_id=task_id)
+            _print_result(result)
+
+        elif choice == "3":
+            # poll_and_process 额外支持配置轮询间隔
+            interval_input = input("请输入轮询间隔秒数 (留空默认30): ").strip()
+            try:
+                interval = float(interval_input) if interval_input else 30.0
+            except ValueError:
+                print("无效数值, 使用默认30秒.")
+                interval = 30.0
+
+            print(
+                f"\n>>> 调用 poll_and_process(task_id={task_id!r}, "
+                f"poll_interval={interval})"
+            )
+            result = controller.poll_and_process(
+                task_id=task_id, poll_interval=interval
+            )
+            _print_result(result)
+
+
+if __name__ == "__main__":
+    main()

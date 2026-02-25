@@ -57,8 +57,8 @@ class Settings:
     hplc_port: int = 5792
     hplc_timeout: float = 10.0
 
-    # ---------- 仪器侧数据保存路径（写入仪器配置，非本地） ----------
-    gc_ms_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_GC_MS/data"))
+    # ---------- 仪器侧数据保存路径（通过网络共享访问） ----------
+    gc_ms_data_dir: Path = field(default_factory=lambda: Path(r"\\10.37.2.2\Autolab_Database\Auto_GC_MS\data"))
     uplc_qtof_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_UPLC_QTOF/data"))
     hplc_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_HPLC/data"))
 
@@ -76,6 +76,24 @@ class Settings:
     )
 
     log_level: str = "INFO"
+
+    # ---------- NIST MS Search 配置 ----------
+    nist_path: Path = field(default_factory=lambda: Path(r"D:\NIST23\MSSEARCH"))
+    nist_max_hits: int = 5               # 每个质谱返回的最大匹配数
+    nist_search_timeout: float = 120.0   # NIST 搜索等待超时(秒)
+
+    # ---------- 峰检测与积分参数 ----------
+    peak_smoothing_window: int = 11        # Savitzky-Golay 平滑窗口 (奇数)
+    peak_prominence: float = 5000.0        # TIC 峰检测最小 prominence
+    peak_min_distance: int = 5             # 相邻峰最小距离 (数据点数)
+    peak_width_rel_height: float = 0.95    # 峰宽计算的相对高度 (0-1)
+    fid_peak_prominence: float = 0.5       # FID 峰检测最小 prominence (FID 信号较小)
+    fid_peak_min_distance: int = 50        # FID 相邻峰最小距离 (FID 采样率更高)
+
+    # ---------- 积分报告输出目录 ----------
+    report_dir: Path = field(
+        default_factory=lambda: Path(__file__).parent.parent / "data"
+    )
 
     @staticmethod
     def from_env() -> "Settings":
@@ -130,6 +148,16 @@ class Settings:
             synthesis_tasks_dir=_path("ANALYSIS_SYNTHESIS_TASKS_DIR", defaults.synthesis_tasks_dir),
             data_dir=_path("ANALYSIS_DATA_DIR", defaults.data_dir),
             log_level=_str("ANALYSIS_LOG_LEVEL", defaults.log_level),
+            peak_smoothing_window=_int("ANALYSIS_PEAK_SMOOTHING_WINDOW", defaults.peak_smoothing_window),
+            peak_prominence=_float("ANALYSIS_PEAK_PROMINENCE", defaults.peak_prominence),
+            peak_min_distance=_int("ANALYSIS_PEAK_MIN_DISTANCE", defaults.peak_min_distance),
+            peak_width_rel_height=_float("ANALYSIS_PEAK_WIDTH_REL_HEIGHT", defaults.peak_width_rel_height),
+            fid_peak_prominence=_float("ANALYSIS_FID_PEAK_PROMINENCE", defaults.fid_peak_prominence),
+            fid_peak_min_distance=_int("ANALYSIS_FID_PEAK_MIN_DISTANCE", defaults.fid_peak_min_distance),
+            report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
+            nist_path=_path("ANALYSIS_NIST_PATH", defaults.nist_path),
+            nist_max_hits=_int("ANALYSIS_NIST_MAX_HITS", defaults.nist_max_hits),
+            nist_search_timeout=_float("ANALYSIS_NIST_SEARCH_TIMEOUT", defaults.nist_search_timeout),
         )
 
 

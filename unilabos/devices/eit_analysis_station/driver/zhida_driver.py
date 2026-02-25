@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 class ZhidaClient:
-    def __init__(self, host='192.168.3.184', port=5792, timeout=10.0):
+    def __init__(self, host='10.40.6.101', port=5792, timeout=10.0):
         # 如果部署在智达GCMS上位机本地，可使用localhost: host='127.0.0.1'
         """
         初始化智达GCMS客户端
@@ -368,7 +368,7 @@ def test_zhida_client():
         print("Connected successfully!")
         
         # 获取设备状态
-        print(f"Device status: {client.status}")
+        print(f"Device status: {client.get_status()}")
         
         # 获取版本信息
         version_info = client.get_version()
