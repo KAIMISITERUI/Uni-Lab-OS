@@ -15,7 +15,8 @@ from ..config.agv_config import (
     AGV_HOST,
     AGV_PORT,
     AGV_PORT_NAVIGATION,
-    AGV_TIMEOUT
+    AGV_TIMEOUT,
+    TASK_STATUS_MAP,
 )
 from ..config.arm_config import ENABLE_GRIP_DETECTION
 
@@ -41,6 +42,7 @@ class AGVController:
         self.arm = ArmDriver(ip, port, timeout)
         self.position_manager = PositionManager()
         self.current_station = None  # 当前所在工站
+
         logger.info("AGV控制器初始化完成")
 
     def _ensure_connected(self):
@@ -694,6 +696,49 @@ class AGVController:
             agv_driver.close()
             logger.debug("AGV连接已关闭")
 
+    def query_nav_task_status(self):
+        """
+        功能:
+            查询AGV当前导航任务状态, 用于判断AGV是否正在执行导航任务
+        参数:
+            无
+        返回:
+            dict或None, 成功时返回包含导航状态的字典, 失败时返回None
+            - task_status: int, 状态码(0=NONE, 1=WAITING, 2=RUNNING, 3=SUSPENDED, 4=COMPLETED, 5=FAILED, 6=CANCELED)
+            - task_status_name: str, 状态名称
+        """
+        agv_driver = AGVDriver(AGVDriverConfig(
+            host=AGV_HOST,
+            port=AGV_PORT,
+            port_navigation=AGV_PORT_NAVIGATION,
+            timeout_s=AGV_TIMEOUT,
+            debug_hex=False
+        ))
+
+        try:
+            logger.debug("正在连接到AGV查询端口(导航状态)...")
+            agv_driver.connect()
+            nav_info = agv_driver.query_agv_nav_status(simple=True)
+
+            if nav_info is None:
+                logger.error("查询导航状态返回空")
+                return None
+
+            task_status = nav_info.get("task_status")
+            task_status_name = TASK_STATUS_MAP.get(task_status, "UNKNOWN")
+            logger.debug(f"当前导航状态: {task_status_name}({task_status})")
+            return {
+                "task_status": task_status,
+                "task_status_name": task_status_name,
+            }
+
+        except Exception as e:
+            logger.error(f"查询导航任务状态失败: {e}")
+            return None
+        finally:
+            agv_driver.close()
+            logger.debug("AGV连接已关闭")
+
     def navigate_to_station(self, station_id):
         """
         功能:
@@ -870,22 +915,44 @@ class AGVController:
     def auto_charge_check(self):
         """
         功能:
-            自动充电检查函数, 检测当前位置和电池电量, 根据情况执行充电操作
-            - 如果不在充电点位CP6, 则运动到CP6
-            - 如果在CP6, 查询电池电量
-            - 如果电量低于0.5, 则运动到PP5, 再运动回CP6
+            自动充电检查函数, 按优先级依次判断并执行充电动作
+            前置守卫(任一成立则跳过本次):
+                1. AGV导航任务正在运行(WAITING/RUNNING/SUSPENDED)
+            主要逻辑:
+                - 不在CP6         → 不执行任何操作(not_at_cp6)
+                - 在CP6且电量<50% → 执行充电循环CP6->PP5->CP6
+                    - 到达PP5后检查设备状态, 非空闲则认为被接管, 跳过后续(intercepted_after_pp5)
+                    - 返回CP6后查询完整电池状态, 确认是否正在充电(charge_cycle_completed)
+                - 在CP6且电量>=50%→ 无需动作(battery_sufficient)
         参数:
             无
         返回:
             dict, 包含检查结果的字典:
-                - status: "success"或"error"
-                - action: 执行的动作描述
-                - battery_level: 电池电量(如果查询成功)
+                - status: "success" / "skipped" / "error"
+                - action: 执行的动作标识
+                - battery_level: 电池电量(查询成功时包含)
+                - charging: 是否正在充电(充电循环完成时包含)
                 - message: 详细信息
         """
         logger.info("开始自动充电检查")
 
         try:
+            # 前置守卫: AGV导航任务正忙时跳过
+            nav_status = self.query_nav_task_status()
+            if nav_status is not None:
+                task_status = nav_status.get("task_status")
+                # 1=WAITING / 2=RUNNING / 3=SUSPENDED 均视为忙碌
+                if task_status in {1, 2, 3}:
+                    status_name = nav_status.get("task_status_name", "UNKNOWN")
+                    logger.info(f"AGV导航任务正忙(状态={status_name}), 跳过本次充电检查")
+                    return {
+                        "status": "skipped",
+                        "action": "skipped_busy_nav",
+                        "nav_task_status": task_status,
+                        "nav_task_status_name": status_name,
+                        "message": f"AGV导航任务正忙(状态={status_name}), 跳过本次充电检查"
+                    }
+
             # 步骤1: 查询当前位置
             logger.info("步骤1: 查询当前位置")
             current_station = self.query_current_station()
@@ -901,28 +968,8 @@ class AGVController:
             current_station_id = current_station.get("station_id")
             logger.info(f"当前位置: {current_station_id} - {current_station.get('station_name')}")
 
-            # 步骤2: 判断是否在充电点位CP6
-            if current_station_id != "CP6":
-                logger.info(f"当前不在充电点位CP6, 正在从{current_station_id}移动到CP6")
-                result = self.go_to_charging_station()
-
-                if result is None:
-                    logger.error("移动到充电站失败")
-                    return {
-                        "status": "error",
-                        "action": "move_to_cp6",
-                        "message": "移动到充电站CP6失败"
-                    }
-
-                logger.info("成功移动到充电站CP6")
-                return {
-                    "status": "success",
-                    "action": "moved_to_cp6",
-                    "message": f"已从{current_station_id}移动到充电站CP6"
-                }
-
-            # 步骤3: 已在CP6, 查询电池电量
-            logger.info("步骤3: 当前在CP6, 查询电池电量")
+            # 步骤2: 查询电池电量
+            logger.info("步骤2: 查询电池电量")
             battery_info = self.query_battery_status(simple=True)
 
             if battery_info is None:
@@ -936,7 +983,18 @@ class AGVController:
             battery_level = battery_info.get("battery_level")
             logger.info(f"当前电池电量: {battery_level * 100:.1f}%")
 
-            # 步骤4: 判断电量是否低于0.5
+            # 步骤3: 若不在CP6, 不执行任何操作直接跳过
+            if current_station_id != "CP6":
+                logger.info(f"当前不在CP6充电站(当前位置={current_station_id}), 跳过充电检查")
+                return {
+                    "status": "skipped",
+                    "action": "not_at_cp6",
+                    "battery_level": battery_level,
+                    "current_station": current_station_id,
+                    "message": f"当前不在CP6充电站(当前位置={current_station_id}), 不执行任何操作"
+                }
+
+            # 步骤4: 已在CP6, 电量低则执行充电循环
             if battery_level < 0.5:
                 logger.info(f"电池电量{battery_level * 100:.1f}%低于50%, 开始充电循环")
 
@@ -955,8 +1013,27 @@ class AGVController:
 
                 logger.info("成功到达PP5")
 
-                # 步骤4.2: 从PP5返回CP6
-                logger.info("步骤4.2: 从PP5返回CP6")
+                # 步骤4.2: 检查设备是否处于空闲状态, 非空闲则认为途中被接管
+                logger.info("步骤4.2: 检查设备空闲状态")
+                nav_status_after_pp5 = self.query_nav_task_status()
+                if nav_status_after_pp5 is not None:
+                    task_status_pp5 = nav_status_after_pp5.get("task_status")
+                    # 0=NONE / 4=COMPLETED 视为空闲, 其余视为被接管
+                    if task_status_pp5 not in {0, 4}:
+                        status_name_pp5 = nav_status_after_pp5.get("task_status_name", "UNKNOWN")
+                        logger.info(f"到达PP5后设备非空闲(状态={status_name_pp5}), 认为途中被接管, 跳过后续步骤")
+                        return {
+                            "status": "skipped",
+                            "action": "intercepted_after_pp5",
+                            "battery_level": battery_level,
+                            "nav_task_status": task_status_pp5,
+                            "nav_task_status_name": status_name_pp5,
+                            "message": f"到达PP5后设备非空闲(状态={status_name_pp5}), 认为途中被接管, 跳过后续步骤"
+                        }
+                logger.info("设备处于空闲状态, 继续返回CP6")
+
+                # 步骤4.3: 从PP5返回CP6
+                logger.info("步骤4.3: 从PP5返回CP6")
                 result_cp6 = self.safe_navigate_to_station("CP6")
 
                 if result_cp6 is None:
@@ -968,13 +1045,31 @@ class AGVController:
                         "message": f"电量{battery_level * 100:.1f}%低于50%, 已到达PP5但返回CP6失败"
                     }
 
-                logger.info("充电循环完成, 已返回CP6")
-                return {
-                    "status": "success",
-                    "action": "charge_cycle_completed",
-                    "battery_level": battery_level,
-                    "message": f"电量{battery_level * 100:.1f}%低于50%, 已完成充电循环(CP6->PP5->CP6)"
-                }
+                logger.info("已返回CP6, 检查充电状态")
+
+                # 步骤4.4: 查询完整电池状态, 确认是否正在充电
+                logger.info("步骤4.4: 查询完整电池状态, 确认充电状态")
+                battery_full_info = self.query_battery_status(simple=False)
+
+                if battery_full_info is not None and battery_full_info.get("charging"):
+                    logger.info("确认AGV正在充电, 充电循环成功")
+                    return {
+                        "status": "success",
+                        "action": "charge_cycle_completed",
+                        "battery_level": battery_level,
+                        "charging": True,
+                        "message": f"电量{battery_level * 100:.1f}%低于50%, 已完成充电循环(CP6->PP5->CP6), 确认正在充电"
+                    }
+                else:
+                    charging_val = battery_full_info.get("charging") if battery_full_info is not None else None
+                    logger.warning(f"已返回CP6但未检测到充电状态(charging={charging_val})")
+                    return {
+                        "status": "success",
+                        "action": "charge_cycle_completed_no_charging",
+                        "battery_level": battery_level,
+                        "charging": False,
+                        "message": f"电量{battery_level * 100:.1f}%低于50%, 已完成充电循环(CP6->PP5->CP6), 但未检测到正在充电"
+                    }
             else:
                 logger.info(f"电池电量{battery_level * 100:.1f}%充足, 无需充电")
                 return {
@@ -992,36 +1087,65 @@ class AGVController:
                 "message": f"自动充电检查过程中发生异常: {e}"
             }
 
-    def auto_charge_loop(self, interval_hours=1):
+    def auto_charge_loop(self, interval_hours=1, retry_wait_minutes=5):
         """
         功能:
-            自动充电循环函数, 每隔指定时间执行一次充电检查
+            自动充电循环函数, 持续监控AGV充电状态
+            - AGV在CP6时: 执行电量检查与充电, 之后等待interval_hours
+            - AGV不在CP6时: 认为AGV正忙, 等待retry_wait_minutes后重试
         参数:
-            interval_hours: 检查间隔时间, 单位小时, 默认1小时
+            interval_hours: AGV在CP6完成检查后的等待时间, 单位小时, 默认1小时
+            retry_wait_minutes: AGV不在CP6时的重试间隔, 单位分钟, 默认5分钟
         返回:
-            无(持续运行)
+            无(持续运行, 按Ctrl+C中断)
         """
-        logger.info(f"启动自动充电循环, 检查间隔: {interval_hours}小时")
+        logger.info(f"启动自动充电循环, 检查间隔: {interval_hours}小时, 不在CP6时重试间隔: {retry_wait_minutes}分钟")
 
         while True:
             try:
-                # 执行充电检查
+                # 执行充电检查(内部已判断是否在CP6)
                 result = self.auto_charge_check()
+                action = result.get("action", "")
+                status = result.get("status", "")
                 logger.info(f"充电检查结果: {result}")
 
-                # 等待指定时间
-                wait_seconds = interval_hours * 3600
-                logger.info(f"等待{interval_hours}小时后进行下次检查...")
-                time.sleep(wait_seconds)
+                # 根据检查结果决定等待时长
+                if status == "skipped":
+                    # AGV不在CP6, 短暂等待后重试
+                    wait_seconds = retry_wait_minutes * 60
+                    logger.info(f"跳过充电检查(原因={action}), 等待{retry_wait_minutes}分钟后重试...")
+                else:
+                    # 完成了充电检查, 等待较长时间再检查
+                    wait_seconds = interval_hours * 3600
+                    logger.info(f"充电检查完成, 等待{interval_hours}小时后进行下次检查...")
+
+                # 分段睡眠, 每60秒一次, 使KeyboardInterrupt能及时响应
+                self._interruptible_sleep(wait_seconds)
 
             except KeyboardInterrupt:
                 logger.info("用户中断自动充电循环")
                 break
             except Exception as e:
                 logger.error(f"自动充电循环中发生异常: {e}")
-                # 发生异常后等待一段时间再继续
                 logger.info("等待5分钟后重试...")
-                time.sleep(300)
+                self._interruptible_sleep(300)
+
+    def _interruptible_sleep(self, total_seconds):
+        """
+        功能:
+            分段睡眠, 将长时间睡眠拆分为多个60秒片段
+            使KeyboardInterrupt信号能在最多60秒内得到响应
+        参数:
+            total_seconds: 总睡眠时间, 单位秒
+        返回:
+            无
+        """
+        elapsed = 0
+        while elapsed < total_seconds:
+            # 每次最多睡60秒, 剩余不足60秒则按实际时间睡
+            step = min(60, total_seconds - elapsed)
+            time.sleep(step)
+            elapsed += step
 
     def move_to_grasp_position(self, tray_name, block=True):
         """

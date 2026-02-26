@@ -947,6 +947,7 @@ class AnalysisStationController:
 
         # 记录每个样品的上次状态, 用于检测状态变更
         prev_status: Dict[str, str] = {name: "" for name in expected_samples}
+        prev_completed = -1  # -1 保证第一轮必然输出进度
 
         try:
             while True:
@@ -977,10 +978,12 @@ class AnalysisStationController:
                     if status == "采集结束":
                         completed_count += 1
 
-                # 输出整体进度
-                self._logger.info(
-                    "轮询进度: %d/%d 样品已完成采集", completed_count, total
-                )
+                # 进度有变化时才输出, 避免无变化时重复刷屏
+                if completed_count != prev_completed:
+                    self._logger.info(
+                        "轮询进度: %d/%d 样品已完成采集", completed_count, total
+                    )
+                    prev_completed = completed_count
 
                 # 全部采集完成, 进入结果处理
                 if completed_count == total:
