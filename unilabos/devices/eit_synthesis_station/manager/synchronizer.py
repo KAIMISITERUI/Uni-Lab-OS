@@ -176,22 +176,6 @@ class EITSynthesisResourceSynchronizer(ResourceSynchronizer):
                     slot_name = normalize_layout_code(getattr(slot, "name", None))
                     if slot_name:
                         slot_index[slot_name] = slot
-            missing_codes: List[str] = []
-            for eit_code in occupied_codes:
-                if eit_code not in slot_index:
-                    missing_codes.append(eit_code)
-            if missing_codes:
-                sample = missing_codes[:10]
-                logger.warning(
-                    f"layout_code 未匹配到仓库槽位: {sample} (total={len(missing_codes)})"
-                )
-                missing_zones = sorted({code.split("-")[0] for code in missing_codes if "-" in code})
-                for zone in missing_zones:
-                    wh = self.workstation.deck.get_resource(zone)
-                    if wh and hasattr(wh, "_ordering"):
-                        keys = list(getattr(wh, "_ordering", {}).keys())
-                        logger.warning(f"{zone} 仓库现有槽位示例: {keys[:10]}")
-
             for wh in warehouses:
                 wh_changed = False
                 for slot in wh.children:
@@ -287,13 +271,14 @@ class EITSynthesisResourceSynchronizer(ResourceSynchronizer):
                         if item_factory and hasattr(new_carrier, 'sites'):
                             for detail in details:
                                 slot_idx = detail.get("slot")
-                                if slot_idx < len(new_carrier.sites):
-                                    well_name = detail.get("well") or f"slot_{slot_idx + 1}"
-                                    substance_name = detail.get("substance") or well_name
-                                    bottle = item_factory(name=f"{substance_name}@{well_name}")
-                                    bottle.unilabos_uuid = str(uuid.uuid4())
-                                    bottle.description = substance_name
-                                    new_carrier[slot_idx] = bottle
+                                if slot_idx is None or slot_idx >= len(new_carrier.sites):
+                                    continue
+                                well_name = detail.get("well") or f"slot_{slot_idx + 1}"
+                                substance_name = detail.get("substance") or well_name
+                                bottle = item_factory(name=f"{substance_name}@{well_name}")
+                                bottle.unilabos_uuid = str(uuid.uuid4())
+                                bottle.description = substance_name
+                                new_carrier[slot_idx] = bottle
                         
                         # 将新创建的物料挂载到虚拟槽位
                         slot.assign_child_resource(new_carrier)
@@ -535,7 +520,7 @@ class EITSynthesisResourceSynchronizer(ResourceSynchronizer):
                     return None, None
                 if isinstance(text, (int, float)):
                     return float(text), None
-                match = re.search(r"([0-9]+(?:\\.[0-9]+)?)\\s*([a-zA-Zμµ]+)?", str(text))
+                match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Zμµ]+)?", str(text))
                 if not match:
                     return None, None
                 value = float(match.group(1))
@@ -1007,13 +992,7 @@ class EITSynthesisResourceSynchronizer(ResourceSynchronizer):
             "resource_list": resource_list,
         }]
         logger.info(f"[同步→硬件] BatchInTray payload: {resource_req_list}")
-        # 解析 tray_code 用于异常时释放去重锁（若解析不到也不影响执行）
-        tray_code = None
-        try:
-            if hasattr(self.workstation, "_resolve_tray_code"):
-                tray_code = self.workstation._resolve_tray_code(carrier)
-        except Exception:
-            tray_code = None
+        # tray_code 已在上方解析并校验(非 None), 直接用于异常时释放去重锁
 
         def _run_batch_in_tray():
             try:
@@ -1095,7 +1074,7 @@ class EITSynthesisWorkstation(WorkstationBase):
                 "h2o_ppm": env.get("water_content"),
                 "pressure_pa": env.get("box_pressure")
             }
-        except:
+        except Exception:
             return {"connected": False}
 
     # ================= 资源树操作钩子 =================

@@ -394,6 +394,56 @@ eit_synthesis_station:
           title: device_init参数
           type: object
         type: UniLabJsonCommand
+      poll_analysis_run:
+        feedback: {}
+        goal: {}
+        goal_default:
+          poll_interval: 30.0
+          task_id: null
+        handles: {}
+        result: {}
+        schema:
+          description: ''
+          properties:
+            feedback: {}
+            goal:
+              properties:
+                poll_interval:
+                  default: 30.0
+                  type: number
+                task_id:
+                  type: string
+              required: []
+              type: object
+            result: {}
+          required:
+          - goal
+          title: poll_analysis_run参数
+          type: object
+        type: UniLabJsonCommand
+      run_analysis:
+        feedback: {}
+        goal: {}
+        goal_default:
+          task_id: null
+        handles: {}
+        result: {}
+        schema:
+          description: ''
+          properties:
+            feedback: {}
+            goal:
+              properties:
+                task_id:
+                  type: string
+              required: []
+              type: object
+            result: {}
+          required:
+          - goal
+          title: run_analysis参数
+          type: object
+        type: UniLabJsonCommand
       start_task:
         feedback: {}
         goal: {}
