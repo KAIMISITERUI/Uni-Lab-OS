@@ -1510,8 +1510,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
     def batch_out_tray(self, layout_list: list[dict], move_type: str = "main_out", *, task_id: int = None, poll_interval_s: float = 1.0, timeout_s: float = 900.0):
         return super().batch_out_tray(layout_list, move_type=move_type, task_id=task_id, poll_interval_s=poll_interval_s, timeout_s=timeout_s)
 
-    def auto_unload_trays_to_agv(self, batch_out_file: Optional[str] = None, *, block: bool = True):
-        return super().auto_unload_trays_to_agv(batch_out_file, block=block)
+    def auto_unload_trays_to_agv(self, batch_out_file: Optional[str] = None, *, block: bool = True, auto_run_analysis: bool = True):
+        return super().auto_unload_trays_to_agv(batch_out_file, block=block, auto_run_analysis=auto_run_analysis)
 
     # ---------- 7. Unilab 接口（待修改） ----------
     def submit_experiment_task(

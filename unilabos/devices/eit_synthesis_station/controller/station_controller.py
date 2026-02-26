@@ -2085,6 +2085,7 @@ class SynthesisStationController:
         batch_out_file: Optional[str] = None,
         *,
         block: bool = True,
+        auto_run_analysis: bool = True,
     ) -> JsonDict:
         """
         功能:
@@ -2095,9 +2096,13 @@ class SynthesisStationController:
               - 同一批次内, 分析工站任务也排在货架任务前面, AGV 在同一趟行程中先
                 卸货到分析工站再卸货到货架
               - 每批最多携带 4 个托盘, 任意批次失败则立即中止后续批次
+            当分析物料(闪滤瓶外瓶托盘)全部转运到分析工站后, 若 auto_run_analysis
+            为 True, 则立即调用 AnalysisStationController.run_analysis 提交分析任务,
+            无需等待后续货架物料转运完成.
         参数:
             batch_out_file: 下料信息文件路径, 默认为 data/operations/batch_out_tray.json
             block: 是否阻塞执行, True 表示等待转运完成
+            auto_run_analysis: 是否在分析物料转运完成后自动执行分析, 默认 True
         返回:
             Dict, 包含转运结果信息:
                 - success: bool, 是否全部成功
@@ -2105,6 +2110,10 @@ class SynthesisStationController:
                 - transferred_trays: int, 成功转运的托盘数
                 - batches: List[Dict], 每批次的转运详情
                 - errors: List[str], 错误信息列表
+                - analysis_results: Dict[str, Dict], 分析任务提交结果,
+                  key 为 task_id 字符串, value 为 run_analysis 返回值.
+                  仅在存在分析物料且 auto_run_analysis=True 时非空.
+                  分析失败不影响 success 状态.
         """
         from pathlib import Path
         import json
@@ -2153,6 +2162,7 @@ class SynthesisStationController:
         #    保证跨批次优先分配给前几批, 批次内也保持分析站先于货架
         analysis_tasks: list = []   # 闪滤瓶外瓶托盘 -> 分析工站
         shelf_tasks: list = []      # 其余托盘       -> 货架
+        analysis_task_ids: set = set()  # 分析任务的 task_id 集合
         shelf_position_index = 0
         analysis_position_index = 0
         errors = []
@@ -2196,6 +2206,10 @@ class SynthesisStationController:
                     "target_tray": target_tray,
                     "material_type": material_type,
                 })
+                # 记录分析任务的 task_id
+                raw_task_id = resource.get("task_id")
+                if raw_task_id is not None:
+                    analysis_task_ids.add(raw_task_id)
                 self._logger.info(
                     f"[分析工站] 任务: {source_tray} -> {target_tray}, "
                     f"物料类型: {material_type} ({resource_type_name})"
@@ -2244,6 +2258,8 @@ class SynthesisStationController:
         batch_size = 4
         batches_result = []
         transferred_count = 0
+        analysis_submitted = False   # 分析任务是否已提交
+        analysis_results = {}        # 分析任务提交结果
 
         for batch_index in range(0, len(transfer_tasks_all), batch_size):
             batch_tasks = transfer_tasks_all[batch_index:batch_index + batch_size]
@@ -2264,6 +2280,41 @@ class SynthesisStationController:
                 if result:
                     transferred_count += len(batch_tasks)
                     self._logger.info(f"第 {batch_num} 批转运成功")
+
+                    # 分析物料已全部转运完成, 立即提交分析任务
+                    if (auto_run_analysis
+                            and len(analysis_task_ids) > 0
+                            and not analysis_submitted
+                            and transferred_count >= len(analysis_tasks)):
+                        analysis_submitted = True
+                        self._logger.info(
+                            "分析物料已全部到达分析工站, 开始自动提交分析任务: %s",
+                            analysis_task_ids
+                        )
+                        from eit_analysis_station.controller.analysis_controller import (
+                            AnalysisStationController,
+                        )
+                        analysis_ctrl = AnalysisStationController()
+
+                        for tid in sorted(analysis_task_ids):
+                            task_id_str = str(tid)
+                            self._logger.info("正在提交分析任务, task_id=%s", task_id_str)
+                            try:
+                                ar = analysis_ctrl.run_analysis(task_id=task_id_str)
+                                analysis_results[task_id_str] = ar
+                                self._logger.info(
+                                    "分析任务提交完成, task_id=%s, 结果: %s",
+                                    task_id_str, ar
+                                )
+                            except Exception as e:
+                                error_msg = (
+                                    f"分析任务提交失败, task_id={task_id_str}: {str(e)}"
+                                )
+                                self._logger.error(error_msg)
+                                analysis_results[task_id_str] = {
+                                    "success": False,
+                                    "error": error_msg,
+                                }
                 else:
                     error_msg = f"第 {batch_num} 批转运失败"
                     self._logger.error(error_msg)
@@ -2311,6 +2362,7 @@ class SynthesisStationController:
             "transferred_trays": transferred_count,
             "batches": batches_result,
             "errors": errors,
+            "analysis_results": analysis_results,
         }
 
     def get_task_tray_mapping(self, task_id: int) -> JsonDict:
