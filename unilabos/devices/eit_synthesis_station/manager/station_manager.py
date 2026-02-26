@@ -1704,3 +1704,24 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info("启动分析任务提交流程, task_id=%s", task_id)
         results = analysis_ctrl.run_analysis(task_id=task_id)
         return results
+
+    def poll_analysis_run(
+        self, task_id: Optional[str] = None, poll_interval: float = 30.0
+    ) -> Dict:
+        """
+        功能:
+            轮询 GC-MS 分析任务运行状态, 完成后自动触发结果处理(积分+定性+报告).
+            内部委托给 AnalysisStationController.poll_analysis_run 执行.
+        参数:
+            task_id: 合成任务 ID 字符串, 为 None 时自动选取编号最大的最近任务.
+            poll_interval: 轮询间隔(秒), 默认 30 秒.
+        返回:
+            Dict: process_gc_ms_results 的返回值, 包含 success/return_info/report_path.
+        """
+        from eit_analysis_station.controller.analysis_controller import AnalysisStationController
+
+        analysis_ctrl = AnalysisStationController()
+
+        logger.info("启动 GC-MS 轮询流程, task_id=%s, poll_interval=%.0fs", task_id, poll_interval)
+        result = analysis_ctrl.poll_analysis_run(task_id=task_id, poll_interval=poll_interval)
+        return result

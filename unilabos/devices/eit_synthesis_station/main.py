@@ -19,7 +19,9 @@ if __name__ == "__main__":
     template_in = ROOT / "sheet" / "batch_in_tray.xlsx"
 
 
-    # 1. 设备初始化
+    #---------------常用动作集合-------------------
+
+    # 1. 合成工站设备初始化
     # manager.device_init()
 
     # 2. 工站化学品库和本地化学品库数据对齐
@@ -37,14 +39,17 @@ if __name__ == "__main__":
     # 6. 开始任务
     # manager.start_task()
 
-    # 7. 等待任务完成并回传执行信息
+    # 7. 等待任务完成并回传执行信息，完成后下载任务报告
     # manager.wait_task_with_ops()
 
     # 8. 查询任务物料，并执行下料操作, 同时下料空托盘
     # manager.batch_out_task_and_empty_trays()
 
-    # 9. 导出任务报告(指定任务id, 保存到 data/tasks/<task_id>/ 目录)
-    # manager.export_task_report(task_id=725)
+    # 9. 根据合成任务自动生成分析 CSV 并提交分析任务
+    # manager.run_analysis()      
+
+    # 10. 等待分析仪器空闲后进行数据分析
+    # manager.poll_analysis_run()
 
     #---------------工站状态查询-------------------
 
@@ -59,20 +64,22 @@ if __name__ == "__main__":
 
     # 4. 查询手套箱状态
     # manager.get_glovebox_env()
+
+    #————————————————其它动作————————————————————
             
     # 下料
     # manager.batch_out_tray(layout_list=[{"layout_code": "T-1-2", "dst_layout_code": "TB-2-2"}])
 
+    # 导出任务报告(指定任务id, 保存到 data/tasks/<task_id>/ 目录)
+    # manager.export_task_report(task_id=725)
 
-    #————————————————额外功能————————————————————
-
-    # 2. 设备初始化
+    #  设备初始化
     # manager.device_init()
 
-    # # 获取站内所有化学品信息,导出到csv文件
+    # 获取站内所有化学品信息,导出到csv文件
     # manager.export_chemical_list_to_file("chemicals_list_export.csv")
 
-    # # 通过csv进行化学品录入
+    # 通过csv进行化学品录入
     # manager.sync_chemicals_from_file("add_chemical_list.csv")
 
     # 本地化学品库去重整理
@@ -100,12 +107,13 @@ if __name__ == "__main__":
 
     # manager.start_task()
 
-    manager.wait_task_with_ops()
+    # manager.wait_task_with_ops()
 
-    manager.batch_out_task_and_empty_trays()
+    # manager.batch_out_task_and_empty_trays()
 
-    manager.auto_unload_trays_to_agv()
+    # manager.auto_unload_trays_to_agv()
 
-    manager.run_analysis()      # 3. 根据合成任务自动生成分析 CSV 并提交 GC_MS（自动选取最新任务）
+    # manager.run_analysis()   
 
+    # manager.poll_analysis_run()
 

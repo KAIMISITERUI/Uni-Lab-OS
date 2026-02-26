@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 功能:
-    分析站配置模块, 统一管理三台仪器(GC_MS/UPLC_QTOF/HPLC)的连接参数、
-    数据保存路径以及合成任务文件路径.
+    分析站配置模块, 统一管理仪器连接参数, 数据目录和积分参数.
 参数:
-    无(通过 dataclass 默认值或环境变量配置).
+    无.
 返回:
     Settings 实例.
 """
@@ -21,24 +20,9 @@ from typing import Optional
 class Settings:
     """
     功能:
-        统一存放分析站驱动的基础配置, 包含三台仪器的 IP/端口/超时时间、
-        仪器侧数据保存路径、合成任务目录以及本站数据存储根目录.
+        存储分析站运行所需的全部配置项.
     参数:
-        gc_ms_host: GC_MS 设备 IP 地址.
-        gc_ms_port: GC_MS 通信端口, 默认 5792.
-        gc_ms_timeout: GC_MS 连接/接收超时时间(秒).
-        uplc_qtof_host: UPLC_QTOF 设备 IP 地址(预留).
-        uplc_qtof_port: UPLC_QTOF 通信端口(预留).
-        uplc_qtof_timeout: UPLC_QTOF 超时时间(秒)(预留).
-        hplc_host: HPLC 设备 IP 地址(预留).
-        hplc_port: HPLC 通信端口(预留).
-        hplc_timeout: HPLC 超时时间(秒)(预留).
-        gc_ms_data_dir: GC_MS 仪器侧数据保存目录.
-        uplc_qtof_data_dir: UPLC_QTOF 仪器侧数据保存目录.
-        hplc_data_dir: HPLC 仪器侧数据保存目录.
-        synthesis_tasks_dir: 合成任务文件夹根路径(含 task_info.json 和 xlsx).
-        data_dir: 分析站本地数据存储根目录(生成的 CSV 保存于此).
-        log_level: 日志级别字符串, 例如 "INFO".
+        无.
     返回:
         Settings.
     """
@@ -48,22 +32,22 @@ class Settings:
     gc_ms_port: int = 5792
     gc_ms_timeout: float = 10.0
 
-    # ---------- UPLC_QTOF 设备（预留，后续接入） ----------
+    # ---------- UPLC_QTOF 设备(预留) ----------
     uplc_qtof_host: str = "192.168.3.185"
     uplc_qtof_port: int = 5792
     uplc_qtof_timeout: float = 10.0
 
-    # ---------- HPLC 设备（预留，后续接入） ----------
+    # ---------- HPLC 设备(预留) ----------
     hplc_host: str = "192.168.3.186"
     hplc_port: int = 5792
     hplc_timeout: float = 10.0
 
-    # ---------- 仪器侧数据保存路径（通过网络共享访问） ----------
+    # ---------- 仪器侧数据目录 ----------
     gc_ms_data_dir: Path = field(default_factory=lambda: Path(r"\\10.37.2.2\Autolab_Database\Auto_GC_MS\data"))
     uplc_qtof_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_UPLC_QTOF/data"))
     hplc_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_HPLC/data"))
 
-    # ---------- 合成任务目录（eit_synthesis_station/data/tasks） ----------
+    # ---------- 合成任务目录 ----------
     synthesis_tasks_dir: Path = field(
         default_factory=lambda: Path(__file__).parent.parent.parent
         / "eit_synthesis_station"
@@ -71,41 +55,55 @@ class Settings:
         / "tasks"
     )
 
-    # ---------- 分析站本地数据存储根目录 ----------
-    data_dir: Path = field(
-        default_factory=lambda: Path(__file__).parent.parent / "data"
-    )
+    # ---------- 分析站本地数据目录 ----------
+    data_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")
 
+    # ---------- 日志 ----------
     log_level: str = "INFO"
 
-    # ---------- NIST MS Search 配置 ----------
+    # ---------- NIST 配置 ----------
     nist_path: Path = field(default_factory=lambda: Path(r"D:\NIST23\MSSEARCH"))
-    nist_max_hits: int = 5               # 每个质谱返回的最大匹配数
-    nist_search_timeout: float = 120.0   # NIST 搜索等待超时(秒)
-    nist_avg_scans: int = 3              # NIST 质谱提取时以 apex 为中心的平均扫描数
+    nist_max_hits: int = 5
+    nist_search_timeout: float = 120.0
+    nist_avg_scans: int = 3
 
     # ---------- 峰检测与积分参数 ----------
-    peak_smoothing_window: int = 11        # Savitzky-Golay 平滑窗口 (奇数)
-    peak_prominence: float = 5000.0        # TIC 峰检测最小 prominence
-    peak_min_distance: int = 5             # 相邻峰最小距离 (数据点数)
-    peak_width_rel_height: float = 0.99    # 峰宽计算的相对高度 (0-1)
-    fid_peak_prominence: float = 0.5       # FID 峰检测最小 prominence (FID 信号较小)
-    fid_peak_min_distance: int = 50        # FID 相邻峰最小距离 (FID 采样率更高)
+    peak_smoothing_window: int = 11
+    peak_prominence: float = 50000.0
+    peak_min_distance: int = 5
+    peak_width_rel_height: float = 0.99
+    fid_peak_prominence: float = 0.5
+    fid_peak_min_distance: int = 50
+
+    # ---------- legacy 参数 ----------
+    use_als_baseline: bool = True
+    als_lambda: float = 1e7
+    als_p: float = 0.01
+    use_valley_boundary: bool = False
+
+    # ---------- robust_v2 参数 ----------
+    integration_mode: str = "robust_v2"
+    baseline_method: str = "rolling_quantile"
+    baseline_quantile: float = 20.0
+    baseline_window_min: float = 0.9
+    boundary_sigma_factor: float = 3.0
+    boundary_edge_ratio: float = 0.01
+    boundary_expand_factor: float = 6.0
+    boundary_min_span_min: float = 0.08
+    boundary_max_span_min: float = 0.80
 
     # ---------- 峰过滤参数 ----------
-    peak_rt_min: Optional[float] = 4      # 保留时间下限 (min), TIC/FID 共用, None 不过滤
-    peak_rt_max: Optional[float] = 10      # 保留时间上限 (min), TIC/FID 共用, None 不过滤
-    tic_area_min: Optional[float] = 100000     # TIC 峰面积下限, None 不过滤
-    tic_area_max: Optional[float] = None     # TIC 峰面积上限, None 不过滤
-    fid_area_min: Optional[float] = 0.01     # FID 峰面积下限, None 不过滤
-    fid_area_max: Optional[float] = None     # FID 峰面积上限, None 不过滤
+    peak_rt_min: Optional[float] = 4
+    peak_rt_max: Optional[float] = 10
+    tic_area_min: Optional[float] = 100000
+    tic_area_max: Optional[float] = None
+    fid_area_min: Optional[float] = 0.01
+    fid_area_max: Optional[float] = None
 
-    # ---------- 积分报告输出目录 ----------
-    report_dir: Path = field(
-        default_factory=lambda: Path(__file__).parent.parent / "data"
-    )
+    # ---------- 报告目录 ----------
+    report_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")
 
-    # ---------- 化合物结构图全局缓存目录 (跨任务共享) ----------
+    # ---------- 结构图缓存目录 ----------
     structure_cache_dir: Path = field(
         default_factory=lambda: Path(__file__).parent.parent / "data" / "structure_cache"
     )
@@ -114,7 +112,7 @@ class Settings:
     def from_env() -> "Settings":
         """
         功能:
-            从环境变量读取配置, 便于部署与 CI.
+            从环境变量读取配置, 未配置时使用默认值.
         参数:
             无.
         返回:
@@ -124,7 +122,23 @@ class Settings:
             ANALYSIS_UPLC_QTOF_HOST, ANALYSIS_UPLC_QTOF_PORT, ANALYSIS_UPLC_QTOF_TIMEOUT,
             ANALYSIS_HPLC_HOST, ANALYSIS_HPLC_PORT, ANALYSIS_HPLC_TIMEOUT,
             ANALYSIS_GC_MS_DATA_DIR, ANALYSIS_UPLC_QTOF_DATA_DIR, ANALYSIS_HPLC_DATA_DIR,
-            ANALYSIS_SYNTHESIS_TASKS_DIR, ANALYSIS_DATA_DIR, ANALYSIS_LOG_LEVEL.
+            ANALYSIS_SYNTHESIS_TASKS_DIR, ANALYSIS_DATA_DIR, ANALYSIS_LOG_LEVEL,
+            ANALYSIS_PEAK_SMOOTHING_WINDOW, ANALYSIS_PEAK_PROMINENCE,
+            ANALYSIS_PEAK_MIN_DISTANCE, ANALYSIS_PEAK_WIDTH_REL_HEIGHT,
+            ANALYSIS_FID_PEAK_PROMINENCE, ANALYSIS_FID_PEAK_MIN_DISTANCE,
+            ANALYSIS_USE_ALS_BASELINE, ANALYSIS_ALS_LAMBDA, ANALYSIS_ALS_P,
+            ANALYSIS_USE_VALLEY_BOUNDARY,
+            ANALYSIS_INTEGRATION_MODE, ANALYSIS_BASELINE_METHOD,
+            ANALYSIS_BASELINE_QUANTILE, ANALYSIS_BASELINE_WINDOW_MIN,
+            ANALYSIS_BOUNDARY_SIGMA_FACTOR, ANALYSIS_BOUNDARY_EDGE_RATIO,
+            ANALYSIS_BOUNDARY_EXPAND_FACTOR, ANALYSIS_BOUNDARY_MIN_SPAN_MIN,
+            ANALYSIS_BOUNDARY_MAX_SPAN_MIN,
+            ANALYSIS_PEAK_RT_MIN, ANALYSIS_PEAK_RT_MAX,
+            ANALYSIS_TIC_AREA_MIN, ANALYSIS_TIC_AREA_MAX,
+            ANALYSIS_FID_AREA_MIN, ANALYSIS_FID_AREA_MAX,
+            ANALYSIS_REPORT_DIR, ANALYSIS_STRUCTURE_CACHE_DIR,
+            ANALYSIS_NIST_PATH, ANALYSIS_NIST_MAX_HITS,
+            ANALYSIS_NIST_SEARCH_TIMEOUT, ANALYSIS_NIST_AVG_SCANS.
         """
         defaults = Settings()
 
@@ -144,18 +158,25 @@ class Settings:
                 return default
 
         def _path(key: str, default: Path) -> Path:
-            val = os.getenv(key)
-            return Path(val) if val else default
+            value = os.getenv(key)
+            if value is None or value.strip() == "":
+                return default
+            return Path(value)
 
         def _opt_float(key: str, default: Optional[float] = None) -> Optional[float]:
-            """从环境变量读取可选浮点值, 未设置时返回 default."""
-            val = os.getenv(key)
-            if val is None or val.strip() == "":
+            value = os.getenv(key)
+            if value is None or value.strip() == "":
                 return default
             try:
-                return float(val)
+                return float(value)
             except ValueError:
                 return default
+
+        def _bool(key: str, default: bool) -> bool:
+            value = os.getenv(key)
+            if value is None or value.strip() == "":
+                return default
+            return value.strip().lower() in ("true", "1", "yes")
 
         return Settings(
             gc_ms_host=_str("ANALYSIS_GC_MS_HOST", defaults.gc_ms_host),
@@ -179,6 +200,19 @@ class Settings:
             peak_width_rel_height=_float("ANALYSIS_PEAK_WIDTH_REL_HEIGHT", defaults.peak_width_rel_height),
             fid_peak_prominence=_float("ANALYSIS_FID_PEAK_PROMINENCE", defaults.fid_peak_prominence),
             fid_peak_min_distance=_int("ANALYSIS_FID_PEAK_MIN_DISTANCE", defaults.fid_peak_min_distance),
+            use_als_baseline=_bool("ANALYSIS_USE_ALS_BASELINE", defaults.use_als_baseline),
+            als_lambda=_float("ANALYSIS_ALS_LAMBDA", defaults.als_lambda),
+            als_p=_float("ANALYSIS_ALS_P", defaults.als_p),
+            use_valley_boundary=_bool("ANALYSIS_USE_VALLEY_BOUNDARY", defaults.use_valley_boundary),
+            integration_mode=_str("ANALYSIS_INTEGRATION_MODE", defaults.integration_mode),
+            baseline_method=_str("ANALYSIS_BASELINE_METHOD", defaults.baseline_method),
+            baseline_quantile=_float("ANALYSIS_BASELINE_QUANTILE", defaults.baseline_quantile),
+            baseline_window_min=_float("ANALYSIS_BASELINE_WINDOW_MIN", defaults.baseline_window_min),
+            boundary_sigma_factor=_float("ANALYSIS_BOUNDARY_SIGMA_FACTOR", defaults.boundary_sigma_factor),
+            boundary_edge_ratio=_float("ANALYSIS_BOUNDARY_EDGE_RATIO", defaults.boundary_edge_ratio),
+            boundary_expand_factor=_float("ANALYSIS_BOUNDARY_EXPAND_FACTOR", defaults.boundary_expand_factor),
+            boundary_min_span_min=_float("ANALYSIS_BOUNDARY_MIN_SPAN_MIN", defaults.boundary_min_span_min),
+            boundary_max_span_min=_float("ANALYSIS_BOUNDARY_MAX_SPAN_MIN", defaults.boundary_max_span_min),
             report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
             structure_cache_dir=_path("ANALYSIS_STRUCTURE_CACHE_DIR", defaults.structure_cache_dir),
             nist_path=_path("ANALYSIS_NIST_PATH", defaults.nist_path),
@@ -197,22 +231,22 @@ class Settings:
 def configure_logging(level: str = "INFO") -> None:
     """
     功能:
-        配置全局 logging, 统一输出格式.
+        配置全局 logging.
     参数:
-        level: 日志级别, 例如 "DEBUG", "INFO".
+        level: 日志等级字符串.
     返回:
         无.
     """
     numeric_level = getattr(logging, level.upper(), logging.INFO)
 
-    root = logging.getLogger()
-    root.setLevel(numeric_level)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(numeric_level)
 
-    if not root.handlers:
+    if not root_logger.handlers:
         handler = logging.StreamHandler()
         formatter = logging.Formatter(
             fmt="%(asctime)s %(levelname)s %(name)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         handler.setFormatter(formatter)
-        root.addHandler(handler)
+        root_logger.addHandler(handler)

@@ -17,7 +17,6 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib
 matplotlib.use("Agg")  # 非交互式后端, 不依赖 GUI
 import matplotlib.pyplot as plt
-from matplotlib.text import Text
 import numpy as np
 
 plt.rcParams["axes.unicode_minus"] = False  # 负号正常显示
@@ -61,6 +60,8 @@ class ChromatogramPlotter:
         rt_min: Optional[float] = None,
         rt_max: Optional[float] = None,
         y_range_min: float = 0,
+        baseline: Optional[np.ndarray] = None,
+        fill_baseline_mode: str = "local",
     ) -> Path:
         """
         功能:
@@ -78,10 +79,20 @@ class ChromatogramPlotter:
             rt_min: X 轴最小保留时间 (min), None 使用数据范围.
             rt_max: X 轴最大保留时间 (min), None 使用数据范围.
             y_range_min: Y 轴最小显示范围, 确保小信号图不会过于压缩.
+            baseline: ALS 基线数组, 与 times/intensities 等长. 提供时用于峰区域填充,
+                      None 时回退到峰端点连线基线.
+            fill_baseline_mode: 填充基线模式, local 表示局部端点连线, global 表示优先使用传入 baseline.
         返回:
             Path: 保存的图片路径.
         """
         fig, ax = plt.subplots(1, 1, figsize=self._figsize)
+        global_baseline_valid = (
+            fill_baseline_mode == "global"
+            and baseline is not None
+            and len(baseline) == len(times)
+        )
+        if fill_baseline_mode == "global" and not global_baseline_valid:
+            logger.warning("全局基线填充不可用, 自动回退到局部基线填充.")
 
         # 绘制色谱基线
         ax.plot(times, intensities, color="black", linewidth=0.6, label="Signal")
@@ -89,17 +100,22 @@ class ChromatogramPlotter:
         for i, peak in enumerate(peaks):
             color = _PEAK_COLORS[i % len(_PEAK_COLORS)]
 
-            # 填充峰区域: 从基线 (峰左右端点连线) 到信号, 与积分计算一致
+            # 填充峰区域: 从基线到信号, 与积分计算一致
             mask = (times >= peak.start_time) & (times <= peak.end_time)
             if mask.any():
                 peak_times = times[mask]
                 peak_intensities = intensities[mask]
-                # 基线: 峰起止点间的线性插值 (与 peak_width_rel_height 积分基线一致)
-                baseline = np.linspace(
-                    peak_intensities[0], peak_intensities[-1], len(peak_times)
-                )
+                if global_baseline_valid:
+                    peak_baseline = baseline[mask]
+                else:
+                    # 默认使用局部端点连线, 与积分算法保持一致.
+                    peak_baseline = np.linspace(
+                        peak_intensities[0],
+                        peak_intensities[-1],
+                        len(peak_times),
+                    )
                 ax.fill_between(
-                    peak_times, baseline, peak_intensities,
+                    peak_times, peak_baseline, peak_intensities,
                     alpha=0.3, color=color,
                 )
 

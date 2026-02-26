@@ -17,6 +17,7 @@ import logging
 import io
 import re
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -527,6 +528,62 @@ class AnalysisStationController:
 
         return d_dirs
 
+    def _load_expected_samples(self, task_id: str) -> List[str]:
+        """
+        功能:
+            从本地数据目录的 gc_ms.csv 读取预期样品列表, 按 CSV 行顺序返回.
+            CSV 由 _save_csv 生成, 格式为:
+            SampleName,AcqMethod,RackCode,VialPos,SmplInjVol,OutputFile.
+        参数:
+            task_id: 任务 ID 字符串.
+        返回:
+            List[str]: 样品名称列表, 如 ["725-1", "725-2", ..., "725-12"].
+        """
+        csv_path = self._settings.data_dir / task_id / "gc_ms.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(f"未找到样品列表文件: {csv_path}")
+
+        with csv_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            samples = [row["SampleName"] for row in reader]
+
+        if not samples:
+            raise ValueError(f"样品列表为空: {csv_path}")
+
+        self._logger.info("从 gc_ms.csv 加载 %d 个预期样品", len(samples))
+        return samples
+
+    def _read_run_completed_flag(self, d_dir: Path) -> Optional[bool]:
+        """
+        功能:
+            读取 .D 目录下 AcqData/sample_info.xml 中的 RunCompletedFlag 字段.
+            解析 XML 中所有 <Field> 元素, 找到 Name 为 "RunCompletedFlag" 的条目,
+            返回其 Value 的布尔解析结果.
+        参数:
+            d_dir: .D 目录路径.
+        返回:
+            Optional[bool]: True 表示采集完成, False 表示采集中,
+                            None 表示文件不存在或解析失败.
+        """
+        info_path = d_dir / "AcqData" / "sample_info.xml"
+        if not info_path.exists():
+            return None
+
+        try:
+            tree = ET.parse(str(info_path))
+            root = tree.getroot()
+            for field_elem in root.findall("Field"):
+                name = field_elem.findtext("Name", "")
+                if name == "RunCompletedFlag":
+                    value = field_elem.findtext("Value", "").strip()
+                    return value.lower() == "true"
+            # RunCompletedFlag 字段不存在, 视为未完成
+            return False
+        except (ET.ParseError, OSError) as exc:
+            # 文件可能正在被仪器写入, 视为采集中
+            self._logger.debug("解析 %s 失败: %s, 视为采集中", info_path, exc)
+            return None
+
     def _filter_peaks(
         self,
         peaks: List[PeakResult],
@@ -596,6 +653,7 @@ class AnalysisStationController:
         # 缓存色谱数据, 供后续绘图复用
         tic_times = tic_intensities = None
         fid_times = fid_intensities = None
+        tic_baseline = fid_baseline = None  # 积分基线, 供绘图使用
 
         # TIC 积分
         try:
@@ -605,8 +663,22 @@ class AnalysisStationController:
                 prominence=self._settings.peak_prominence,
                 min_distance=self._settings.peak_min_distance,
                 width_rel_height=self._settings.peak_width_rel_height,
+                use_als_baseline=self._settings.use_als_baseline,
+                als_lambda=self._settings.als_lambda,
+                als_p=self._settings.als_p,
+                use_valley_boundary=self._settings.use_valley_boundary,
+                integration_mode=self._settings.integration_mode,
+                baseline_method=self._settings.baseline_method,
+                baseline_quantile=self._settings.baseline_quantile,
+                baseline_window_min=self._settings.baseline_window_min,
+                boundary_sigma_factor=self._settings.boundary_sigma_factor,
+                boundary_edge_ratio=self._settings.boundary_edge_ratio,
+                boundary_expand_factor=self._settings.boundary_expand_factor,
+                boundary_min_span_min=self._settings.boundary_min_span_min,
+                boundary_max_span_min=self._settings.boundary_max_span_min,
             )
             result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
+            tic_baseline = tic_integrator.last_baseline
             result.tic_peaks = self._filter_peaks(
                 result.tic_peaks,
                 area_min=self._settings.tic_area_min,
@@ -624,8 +696,22 @@ class AnalysisStationController:
                 prominence=self._settings.fid_peak_prominence,
                 min_distance=self._settings.fid_peak_min_distance,
                 width_rel_height=self._settings.peak_width_rel_height,
+                use_als_baseline=self._settings.use_als_baseline,
+                als_lambda=self._settings.als_lambda,
+                als_p=self._settings.als_p,
+                use_valley_boundary=self._settings.use_valley_boundary,
+                integration_mode=self._settings.integration_mode,
+                baseline_method=self._settings.baseline_method,
+                baseline_quantile=self._settings.baseline_quantile,
+                baseline_window_min=self._settings.baseline_window_min,
+                boundary_sigma_factor=self._settings.boundary_sigma_factor,
+                boundary_edge_ratio=self._settings.boundary_edge_ratio,
+                boundary_expand_factor=self._settings.boundary_expand_factor,
+                boundary_min_span_min=self._settings.boundary_min_span_min,
+                boundary_max_span_min=self._settings.boundary_max_span_min,
             )
             result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
+            fid_baseline = fid_integrator.last_baseline
             result.fid_peaks = self._filter_peaks(
                 result.fid_peaks,
                 area_min=self._settings.fid_area_min,
@@ -677,6 +763,8 @@ class AnalysisStationController:
                         output_path=tic_plot,
                         rt_min=self._settings.peak_rt_min,
                         rt_max=self._settings.peak_rt_max,
+                        baseline=tic_baseline,
+                        fill_baseline_mode="local",
                     )
                 except Exception as e:
                     self._logger.error("样品 %s TIC 色谱图生成失败: %s", sample_name, e)
@@ -694,6 +782,8 @@ class AnalysisStationController:
                         rt_min=self._settings.peak_rt_min,
                         rt_max=self._settings.peak_rt_max,
                         y_range_min=100,  # FID 信号较小, 确保 Y 轴最小范围
+                        baseline=fid_baseline,
+                        fill_baseline_mode="local",
                     )
                 except Exception as e:
                     self._logger.error("样品 %s FID 色谱图生成失败: %s", sample_name, e)
@@ -804,49 +894,101 @@ class AnalysisStationController:
             self._logger.error(msg)
             return {"success": False, "return_info": msg}
 
-    def poll_and_process(
+    def poll_analysis_run(
         self, task_id: Optional[str] = None, poll_interval: float = 30.0
     ) -> Dict:
         """
         功能:
-            轮询 GC-MS 状态, 运行完成后自动触发结果处理.
-            1. 循环调用 ZhidaClient.get_status() 检查状态.
-            2. 当状态从 RunSample 变为 Idle 时触发 process_gc_ms_results.
+            基于文件监控的 GC-MS 分析任务轮询.
+            1. 从 gc_ms.csv 读取预期样品列表, 确定总样品数和采集顺序.
+            2. 循环检查数据目录中 .D 目录的出现情况.
+            3. 对每个 .D 目录, 解析 AcqData/sample_info.xml 中的
+               RunCompletedFlag 判断采集状态:
+               - .D 目录不存在 -> "等待进样"
+               - .D 存在但 RunCompletedFlag 非 True -> "采集中"
+               - RunCompletedFlag 为 True -> "采集结束"
+            4. 实时反馈每个样品的状态变更和整体进度.
+            5. 当所有样品均为 "采集结束" 时, 调用 process_gc_ms_results 处理结果.
         参数:
             task_id: 任务 ID 字符串, None 表示自动选取最新任务.
             poll_interval: 轮询间隔(秒), 默认 30 秒.
         返回:
-            Dict: process_gc_ms_results 的返回值.
+            Dict: process_gc_ms_results 的返回值, 包含 success/return_info/report_path.
         """
-        client = ZhidaClient(
-            host=self._settings.gc_ms_host,
-            port=self._settings.gc_ms_port,
-            timeout=self._settings.gc_ms_timeout,
-        )
+        # 解析任务 ID
+        _, resolved_id = self._find_task_dir(task_id)
+
+        # 从 gc_ms.csv 加载预期样品列表(按表格顺序)
+        try:
+            expected_samples = self._load_expected_samples(resolved_id)
+        except (FileNotFoundError, ValueError) as exc:
+            msg = f"加载预期样品列表失败: {exc}"
+            self._logger.error(msg)
+            return {"success": False, "return_info": msg}
+
+        total = len(expected_samples)
+
+        # 确定 .D 目录搜索路径: 优先远程仪器目录, 回退到本地数据目录
+        remote_data_dir = self._settings.gc_ms_data_dir
+        local_data_dir = self._settings.data_dir / resolved_id
+        if remote_data_dir.exists():
+            search_dir = remote_data_dir
+        else:
+            self._logger.warning(
+                "远程数据目录不可达: %s, 回退到本地目录: %s",
+                remote_data_dir, local_data_dir
+            )
+            search_dir = local_data_dir
 
         self._logger.info(
-            "开始轮询 GC-MS 状态, 间隔 %.0f 秒, 等待运行完成...", poll_interval
+            "开始文件监控轮询, 任务 %s, 共 %d 个样品, 间隔 %.0f 秒, 监控目录: %s",
+            resolved_id, total, poll_interval, search_dir
         )
 
-        prev_status = ""
+        # 记录每个样品的上次状态, 用于检测状态变更
+        prev_status: Dict[str, str] = {name: "" for name in expected_samples}
+
         try:
             while True:
-                status = client.get_status()
+                completed_count = 0
 
-                if status != prev_status:
-                    self._logger.info("GC-MS 状态变更: %s -> %s", prev_status, status)
-                    prev_status = status
+                for idx, sample_name in enumerate(expected_samples, start=1):
+                    d_dir = search_dir / f"{sample_name}.D"
 
-                # 运行完成: 从 RunSample 变为 Idle
-                if status == "Idle" and prev_status in ("RunSample", "Idle"):
-                    # 首次进入 Idle 时直接处理, 或从 RunSample 变为 Idle
-                    self._logger.info("GC-MS 运行完成, 开始处理结果...")
-                    return self.process_gc_ms_results(task_id)
+                    # 判断当前样品采集状态
+                    if not d_dir.exists():
+                        status = "等待进样"
+                    else:
+                        flag = self._read_run_completed_flag(d_dir)
+                        if flag is True:
+                            status = "采集结束"
+                        else:
+                            status = "采集中"
 
-                if status in ("Error", "Offline"):
-                    msg = f"GC-MS 状态异常: {status}, 停止轮询"
-                    self._logger.error(msg)
-                    return {"success": False, "return_info": msg}
+                    # 状态变更时输出日志
+                    if status != prev_status[sample_name]:
+                        self._logger.info(
+                            "[%d/%d] 样品 %s: %s -> %s",
+                            idx, total, sample_name,
+                            prev_status[sample_name] or "(初始)", status
+                        )
+                        prev_status[sample_name] = status
+
+                    if status == "采集结束":
+                        completed_count += 1
+
+                # 输出整体进度
+                self._logger.info(
+                    "轮询进度: %d/%d 样品已完成采集", completed_count, total
+                )
+
+                # 全部采集完成, 进入结果处理
+                if completed_count == total:
+                    self._logger.info(
+                        "任务 %s 全部 %d 个样品采集完成, 开始处理结果...",
+                        resolved_id, total
+                    )
+                    return self.process_gc_ms_results(resolved_id)
 
                 time.sleep(poll_interval)
 
@@ -877,7 +1019,8 @@ def _print_result(result: Dict) -> None:
 def main() -> None:
     """
     功能:
-        交互式菜单, 用于手动测试 run_analysis / process_gc_ms_results / poll_and_process.
+        交互式菜单, 用于手动测试 run_analysis / process_gc_ms_results /
+        poll_analysis_run / get_status / get_methods.
         用户可选择功能并输入 task_id, 输入 q 退出.
     参数:
         无.
@@ -892,9 +1035,11 @@ def main() -> None:
 
     menu = (
         "\n===== 分析站交互式测试菜单 =====\n"
-        "  1. run_analysis        - 统一分析入口(生成CSV并提交至仪器)\n"
+        "  1. run_analysis          - 统一分析入口(生成CSV并提交至仪器)\n"
         "  2. process_gc_ms_results - GC-MS结果处理(积分+定性+报告)\n"
-        "  3. poll_and_process    - 轮询GC-MS状态并自动处理结果\n"
+        "  3. poll_analysis_run    - 轮询GC-MS分析任务状态并自动处理结果\n"
+        "  4. get_status            - 获取GC-MS设备当前状态\n"
+        "  5. get_methods           - 获取当前Project的方法列表\n"
         "  q. 退出\n"
         "================================"
     )
@@ -907,8 +1052,33 @@ def main() -> None:
             print("已退出测试.")
             break
 
-        if choice not in ("1", "2", "3"):
-            print("无效选择, 请输入 1/2/3 或 q.")
+        if choice not in ("1", "2", "3", "4", "5"):
+            print("无效选择, 请输入 1/2/3/4/5 或 q.")
+            continue
+
+        # 选项 4/5 直接操作设备驱动, 不需要 task_id
+        if choice in ("4", "5"):
+            settings = controller._settings
+            client = ZhidaClient(
+                host=settings.gc_ms_host,
+                port=settings.gc_ms_port,
+                timeout=settings.gc_ms_timeout,
+            )
+            try:
+                client.connect()
+                if choice == "4":
+                    print("\n>>> 调用 ZhidaClient.get_status()")
+                    status = client.get_status()
+                    print(f"\n  设备状态: {status}\n")
+                else:
+                    print("\n>>> 调用 ZhidaClient.get_methods()")
+                    methods = client.get_methods()
+                    _print_result(methods)
+            except Exception as exc:
+                logger.error("设备操作失败: %s", exc)
+                print(f"\n  操作失败: {exc}\n")
+            finally:
+                client.close()
             continue
 
         # 获取 task_id, 空字符串视为 None(自动选取最新任务)
@@ -926,7 +1096,7 @@ def main() -> None:
             _print_result(result)
 
         elif choice == "3":
-            # poll_and_process 额外支持配置轮询间隔
+            # poll_analysis_run 额外支持配置轮询间隔
             interval_input = input("请输入轮询间隔秒数 (留空默认30): ").strip()
             try:
                 interval = float(interval_input) if interval_input else 30.0
@@ -935,10 +1105,10 @@ def main() -> None:
                 interval = 30.0
 
             print(
-                f"\n>>> 调用 poll_and_process(task_id={task_id!r}, "
+                f"\n>>> 调用 poll_analysis_run(task_id={task_id!r}, "
                 f"poll_interval={interval})"
             )
-            result = controller.poll_and_process(
+            result = controller.poll_analysis_run(
                 task_id=task_id, poll_interval=interval
             )
             _print_result(result)
