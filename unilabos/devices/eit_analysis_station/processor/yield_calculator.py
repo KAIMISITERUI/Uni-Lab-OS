@@ -44,6 +44,7 @@ class TargetProduct:
         ecn: 有效碳数 (从 SMILES 自动计算).
         expected_rt: 预期保留时间(min), None 表示使用分子式匹配.
         applicable_experiments: 适用实验编号列表, 如 [1,2,3].
+        equivalent: 目标产物当量(eq), 默认1.0. 理论产物量 = 反应规模 * equivalent.
     返回:
         TargetProduct.
     """
@@ -53,6 +54,7 @@ class TargetProduct:
     ecn: float = 0.0
     expected_rt: Optional[float] = None
     applicable_experiments: List[int] = field(default_factory=list)
+    equivalent: float = 1.0
 
 
 @dataclass
@@ -585,18 +587,21 @@ class YieldCalculator:
             smiles = str(_get("SMILES")).strip()
             rt_val = _get("预期RT", _get("RT"))
             range_str = str(_get("适用实验")).strip()
+            eq_val = _get("当量", _get("eq", 1.0))
 
             if not product_name or not smiles:
                 continue
 
             expected_rt = self._parse_opt_float(rt_val)
             applicable = self.parse_experiment_range(range_str)
+            equivalent = self._parse_float(eq_val, default=1.0)
 
             products.append(TargetProduct(
                 name=product_name,
                 smiles=smiles,
                 expected_rt=expected_rt,
                 applicable_experiments=applicable,
+                equivalent=equivalent,
             ))
 
         return products
@@ -744,6 +749,7 @@ class YieldCalculator:
         ecn_product: float,
         ecn_is: float,
         config: YieldCalcConfig,
+        product_equivalent: float = 1.0,
     ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
         """
         功能:
@@ -754,6 +760,7 @@ class YieldCalculator:
             ecn_product: 产物 ECN.
             ecn_is: 内标 ECN.
             config: 产率计算配置.
+            product_equivalent: 目标产物当量(eq), 理论产物量 = 反应规模 * equivalent.
         返回:
             Tuple: (area_ratio, molar_ratio, n_product_mol, yield_percent).
                    任何环节失败返回 None.
@@ -804,7 +811,7 @@ class YieldCalculator:
             logger.warning("反应规模 <= 0, 无法计算产率")
             return (ratio, molar_ratio, n_product, None)
 
-        n_theoretical = config.reaction_scale_mmol / 1000.0  # mmol → mol
+        n_theoretical = (config.reaction_scale_mmol * product_equivalent) / 1000.0  # mmol * eq → mol
         yield_percent = (n_product / n_theoretical) * 100.0
 
         return (ratio, molar_ratio, n_product, yield_percent)
@@ -930,6 +937,7 @@ class YieldCalculator:
                 ratio, molar_ratio, n_product, yield_pct = self._calculate_yield(
                     result.product_fid_area, is_fid_area,
                     product.ecn, config.is_ecn, config,
+                    product_equivalent=product.equivalent,
                 )
 
                 result.area_ratio = ratio
@@ -965,7 +973,7 @@ class YieldCalculator:
             Path: 生成的 xlsx 文件路径.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"yield_report_{task_id}.xlsx"
+        output_path = output_dir / f"{task_id}_yield_report.xlsx"
 
         wb = openpyxl.Workbook()
 
@@ -1007,8 +1015,11 @@ class YieldCalculator:
                     value=round(r.ecn_product, 2) if r.ecn_product is not None else "")
             ws.cell(row=row_idx, column=11,
                     value=round(r.ecn_is, 2) if r.ecn_is is not None else "")
-            ws.cell(row=row_idx, column=12,
-                    value=round(r.yield_percent, 2) if r.yield_percent is not None else "")
+            if r.yield_percent is not None:
+                yield_display = "<1" if r.yield_percent < 1 else round(r.yield_percent)
+            else:
+                yield_display = ""
+            ws.cell(row=row_idx, column=12, value=yield_display)
             ws.cell(row=row_idx, column=13, value=r.match_method)
             ws.cell(row=row_idx, column=14, value="; ".join(r.warnings) if r.warnings else "")
 
@@ -1027,8 +1038,8 @@ class YieldCalculator:
             ("内标SMILES", config.is_smiles),
             ("内标分子式", config.is_formula),
             ("内标ECN", round(config.is_ecn, 4)),
-            ("内标用量", config.is_amount),
-            ("内标摩尔量(mol)", f"{config.is_moles:.6e}"),
+            ("内标用量(μL/mg)", config.is_amount),
+            ("内标摩尔量(mmol)", round(config.is_moles * 1000, 6)),
             ("内标预期RT(min)", config.is_expected_rt if config.is_expected_rt is not None else ""),
             ("", ""),
         ]
@@ -1055,11 +1066,16 @@ class YieldCalculator:
             rows.append((f"产物{i} ECN", round(p.ecn, 4)))
             rows.append((f"产物{i} 预期RT(min)", p.expected_rt if p.expected_rt is not None else ""))
             rows.append((f"产物{i} 适用实验", exp_str))
+            rows.append((f"产物{i} 当量(eq)", p.equivalent))
             rows.append(("", ""))
 
+        left_align = Alignment(horizontal="left", vertical="center")
+        center_align = Alignment(horizontal="center", vertical="center")
         for row_idx, (key, value) in enumerate(rows, start=2):
-            ws.cell(row=row_idx, column=1, value=key)
-            ws.cell(row=row_idx, column=2, value=value)
+            cell_key = ws.cell(row=row_idx, column=1, value=key)
+            cell_val = ws.cell(row=row_idx, column=2, value=value)
+            cell_key.alignment = left_align
+            cell_val.alignment = center_align
 
         self._auto_column_width(ws)
 
@@ -1118,3 +1134,4 @@ class YieldCalculator:
             if numbers:
                 return float(numbers[0])
             return None
+

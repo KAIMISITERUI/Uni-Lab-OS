@@ -83,6 +83,53 @@ class AnalysisStationController:
     # 任务定位与状态检查
     # ------------------------------------------------------------------
 
+    def _build_task_file_name_map(self, task_id: str) -> Dict[str, str]:
+        """
+        功能:
+            构建任务目录中的旧文件名到新文件名映射, 用于历史文件自动迁移.
+        参数:
+            task_id: 任务 ID.
+        返回:
+            Dict[str, str], 键为旧文件名, 值为新文件名.
+        """
+        return {
+            f"{task_id}.xlsx": f"{task_id}_experiment_plan.xlsx",
+            f"integration_report_{task_id}.xlsx": f"{task_id}_integration_report.xlsx",
+            f"yield_report_{task_id}.xlsx": f"{task_id}_yield_report.xlsx",
+            f"task_report_{task_id}.xlsx": f"{task_id}_task_report.xlsx",
+            f"task_report_{task_id}.csv": f"{task_id}_task_report.csv",
+            f"task_report_{task_id}.pdf": f"{task_id}_task_report.pdf",
+        }
+
+    def _migrate_task_file_names(self, task_dir: Path, task_id: str) -> None:
+        """
+        功能:
+            在任务目录中执行旧命名到新命名的自动迁移.
+            若新文件已存在, 保留新文件并记录 warning.
+        参数:
+            task_dir: 任务目录.
+            task_id: 任务 ID.
+        返回:
+            无.
+        """
+        rename_map = self._build_task_file_name_map(task_id)
+        for old_name, new_name in rename_map.items():
+            old_path = task_dir / old_name
+            new_path = task_dir / new_name
+
+            if old_path.exists() is False:
+                continue
+
+            if new_path.exists() is True:
+                self._logger.warning("新命名文件已存在, 跳过迁移: %s -> %s", old_path, new_path)
+                continue
+
+            try:
+                old_path.rename(new_path)
+                self._logger.info("历史文件重命名完成: %s -> %s", old_path.name, new_path.name)
+            except Exception as exc:
+                self._logger.warning("历史文件重命名失败: %s -> %s, 错误: %s", old_path, new_path, exc)
+
     def _find_task_dir(self, task_id: Optional[str] = None) -> Tuple[Path, str]:
         """
         功能:
@@ -104,6 +151,7 @@ class AnalysisStationController:
             if not task_dir.is_dir():
                 raise FileNotFoundError(f"指定的任务目录不存在: {task_dir}")
             self._logger.info("使用指定任务目录: %s", task_dir)
+            self._migrate_task_file_names(task_dir, str(task_id))
             return task_dir, str(task_id)
 
         # 自动选取编号最大的子目录
@@ -119,6 +167,7 @@ class AnalysisStationController:
                 return -1
 
         latest_dir = max(sub_dirs, key=_dir_key)
+        self._migrate_task_file_names(latest_dir, latest_dir.name)
         self._logger.info("自动选取最新任务目录: %s", latest_dir)
         return latest_dir, latest_dir.name
 
@@ -172,17 +221,20 @@ class AnalysisStationController:
                 uplc_qtof_method (str|None): UPLC_QTOF 方法名.
                 hplc_method (str|None): HPLC 方法名.
         """
-        # 优先查找 .xlsx, 兼容 .csv
-        xlsx_path = task_dir / f"{task_id}.xlsx"
+        # 优先查找新命名 xlsx, 兼容旧命名和 .csv
+        xlsx_path = task_dir / f"{task_id}_experiment_plan.xlsx"
+        legacy_xlsx_path = task_dir / f"{task_id}.xlsx"
         csv_path = task_dir / f"{task_id}.csv"
 
         if xlsx_path.exists():
             file_path = xlsx_path
+        elif legacy_xlsx_path.exists():
+            file_path = legacy_xlsx_path
         elif csv_path.exists():
             file_path = csv_path
         else:
             raise FileNotFoundError(
-                f"未找到任务文件 {task_id}.xlsx 或 {task_id}.csv 于: {task_dir}"
+                f"未找到任务文件 {task_id}_experiment_plan.xlsx, {task_id}.xlsx 或 {task_id}.csv 于: {task_dir}"
             )
 
         self._logger.info("解析任务文件: %s", file_path)
@@ -942,17 +994,20 @@ class AnalysisStationController:
 
             # 定位文件
             syn_dir = self._settings.synthesis_tasks_dir / resolved_id
-            plan_path = syn_dir / f"{resolved_id}.xlsx"
-            report_path = syn_dir / f"integration_report_{resolved_id}.xlsx"
+            plan_path = syn_dir / f"{resolved_id}_experiment_plan.xlsx"
+            report_path = syn_dir / f"{resolved_id}_integration_report.xlsx"
             chemical_list_path = self._settings.chemical_list_path
 
             if not plan_path.exists():
                 return {"success": False, "return_info": f"未找到实验方案: {plan_path}"}
             if not report_path.exists():
                 # 尝试本地报告目录
-                local_report = self._settings.report_dir / resolved_id / f"integration_report_{resolved_id}.xlsx"
+                local_report = self._settings.report_dir / resolved_id / f"{resolved_id}_integration_report.xlsx"
+                legacy_local_report = self._settings.report_dir / resolved_id / f"integration_report_{resolved_id}.xlsx"
                 if local_report.exists():
                     report_path = local_report
+                elif legacy_local_report.exists():
+                    report_path = legacy_local_report
                 else:
                     return {"success": False, "return_info": f"未找到积分报告: {report_path}"}
             if not chemical_list_path.exists():
@@ -1168,7 +1223,7 @@ def main() -> None:
         "  4. get_status            - 获取GC-MS设备当前状态\n"
         "  5. get_methods           - 获取当前Project的方法列表\n"
         "  6. calculate_yields      - 产率计算\n"
-        "  q. 退出\n"
+        "  0. 退出\n"
         "================================"
     )
 
@@ -1176,12 +1231,12 @@ def main() -> None:
         print(menu)
         choice = input("请选择功能编号: ").strip()
 
-        if choice in ("q", "Q"):
+        if choice == "0":
             print("已退出测试.")
             break
 
         if choice not in ("1", "2", "3", "4", "5", "6"):
-            print("无效选择, 请输入 1/2/3/4/5/6 或 q.")
+            print("无效选择, 请输入 0/1/2/3/4/5/6.")
             continue
 
         # 选项 4/5 直接操作设备驱动, 不需要 task_id
@@ -1249,3 +1304,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

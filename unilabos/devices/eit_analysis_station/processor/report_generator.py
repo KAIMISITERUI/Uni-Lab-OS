@@ -125,7 +125,7 @@ class ReportGenerator:
             Path: 生成的 xlsx 文件路径.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"integration_report_{task_id}.xlsx"
+        output_path = output_dir / f"{task_id}_integration_report.xlsx"
 
         wb = openpyxl.Workbook()
 
@@ -450,4 +450,5 @@ class ReportGenerator:
         if abs(closest_rt - rt) <= tolerance:
             return matches[closest_rt]
         return None
+
 

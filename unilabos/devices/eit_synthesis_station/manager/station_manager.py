@@ -687,7 +687,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         try:
             task_dir = MODULE_ROOT / "data" / "tasks" / str(task_id)
             task_dir.mkdir(parents=True, exist_ok=True)          # 创建任务文件夹(若已存在则忽略)
-            dest_path = task_dir / f"{task_id}{t_path.suffix}"   # 目标路径: <task_id>.xlsx
+            dest_path = task_dir / f"{task_id}_experiment_plan{t_path.suffix}"   # 目标路径: <task_id>_experiment_plan.xlsx
             shutil.copy2(t_path, dest_path)                      # 拷贝并保留元数据
             logger.info("已将模板文件拷贝至任务目录: %s", dest_path)
         except Exception as exc:
@@ -1725,3 +1725,4 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info("启动 GC-MS 轮询流程, task_id=%s, poll_interval=%.0fs", task_id, poll_interval)
         result = analysis_ctrl.poll_analysis_run(task_id=task_id, poll_interval=poll_interval)
         return result
+

@@ -239,6 +239,45 @@ class TestYieldCalculation(unittest.TestCase):
         result = calc._calculate_yield(50.0, 0.0, 13.0, 15.0, config)
         self.assertIsNone(result[0])  # ratio 应为 None
 
+    def test_ecn_method_with_equivalent(self):
+        """ECN 法 + 当量(eq) 计算验证: eq=1.5, reaction_scale=0.2 → 按 0.3mmol 计算."""
+        from eit_analysis_station.processor.yield_calculator import (
+            YieldCalculator, YieldCalcConfig,
+        )
+        calc = YieldCalculator()
+        config = YieldCalcConfig(
+            calc_method="ECN",
+            is_moles=1e-4,               # 0.1 mmol 内标
+            reaction_scale_mmol=0.2,      # 0.2 mmol 反应规模
+        )
+
+        ratio, molar_ratio, n_product, yield_pct = calc._calculate_yield(
+            fid_area_product=50.0,
+            fid_area_is=100.0,
+            ecn_product=13.0,
+            ecn_is=15.0,
+            config=config,
+            product_equivalent=1.5,       # 当量 1.5
+        )
+
+        # ratio = 50/100 = 0.5
+        self.assertAlmostEqual(ratio, 0.5, places=4)
+        # molar_ratio = 0.5 * (15/13)
+        expected_molar = 0.5 * 15.0 / 13.0
+        self.assertAlmostEqual(molar_ratio, expected_molar, places=4)
+        # n_product = molar_ratio * 1e-4
+        expected_n = expected_molar * 1e-4
+        self.assertAlmostEqual(n_product, expected_n, places=8)
+        # yield = n_product / (0.2 * 1.5 / 1000) * 100, 即按 0.3mmol 计算
+        expected_yield = expected_n / (0.2 * 1.5 / 1000) * 100
+        self.assertAlmostEqual(yield_pct, expected_yield, places=2)
+
+        # 对比默认 eq=1.0 的结果, 确认 eq=1.5 产率更低
+        _, _, _, yield_default = calc._calculate_yield(
+            50.0, 100.0, 13.0, 15.0, config,
+        )
+        self.assertGreater(yield_default, yield_pct)
+
 
 class TestActiveContentParsing(unittest.TestCase):
     """active_content 解析测试."""

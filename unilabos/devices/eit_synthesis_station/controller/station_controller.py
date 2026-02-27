@@ -3162,7 +3162,7 @@ class SynthesisStationController:
         # 根据文件类型确定后缀
         ext_map = {"excel": ".xlsx", "csv": ".csv", "pdf": ".pdf"}
         ext = ext_map.get(file_type, ".xlsx")
-        report_path = task_dir / f"task_report_{task_id}{ext}"
+        report_path = task_dir / f"{task_id}_task_report{ext}"
 
         report_path.write_bytes(content)
         self._logger.info("任务 %s 报告已保存: %s", task_id, report_path)
