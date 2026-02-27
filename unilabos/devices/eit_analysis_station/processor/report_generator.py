@@ -53,6 +53,7 @@ class SampleResult:
     nist_result_path: Optional[Path] = None
     tic_plot_path: Optional[Path] = None
     fid_plot_path: Optional[Path] = None
+    ms_plot_paths: Dict[int, Path] = field(default_factory=dict)  # 峰号(1-based) -> 质谱图路径
 
 
 class ReportGenerator:
@@ -75,8 +76,9 @@ class ReportGenerator:
     _TIC_HEADERS = [
         "样品名", "峰号", "保留时间(min)", "峰高", "峰面积",
         "面积%", "峰起始(min)", "峰结束(min)", "峰宽(min)",
-        "化合物1(名称)", "化合物1(匹配度)", "化合物1(结构)",
-        "化合物2(名称)", "化合物2(匹配度)", "化合物2(结构)",
+        "化合物1(名称)", "化合物1(匹配度)", "化合物1(结构)", "化合物1(分子式)", "化合物1(分子量)",
+        "化合物2(名称)", "化合物2(匹配度)", "化合物2(结构)", "化合物2(分子式)", "化合物2(分子量)",
+        "质谱图",
     ]
 
     # FID 峰表列定义
@@ -189,11 +191,13 @@ class ReportGenerator:
                 ws.cell(row=row, column=8, value=round(peak.end_time, 3))
                 ws.cell(row=row, column=9, value=round(peak.width, 3))
 
-                # 填充 Top 2 化合物 (每个化合物占3列: 名称, 匹配度, 结构)
+                # 填充 Top 2 化合物 (每个化合物占5列: 名称, 匹配度, 结构, 分子式, 分子量)
                 for i in range(2):
-                    col_name = 10 + i * 3     # 列 10, 13
-                    col_score = 11 + i * 3    # 列 11, 14
-                    col_struct = 12 + i * 3   # 列 12, 15
+                    col_name = 10 + i * 5       # 列 10, 15
+                    col_score = 11 + i * 5      # 列 11, 16
+                    col_struct = 12 + i * 5     # 列 12, 17
+                    col_formula = 13 + i * 5    # 列 13, 18
+                    col_mw = 14 + i * 5         # 列 14, 19
                     if match_list is not None and i < len(match_list):
                         m = match_list[i]
                         ws.cell(row=row, column=col_name, value=m.compound_name)
@@ -212,9 +216,21 @@ class ReportGenerator:
                                 )
                                 cell.hyperlink = str(img_path)
                                 cell.font = Font(color="0563C1", underline="single")
+
+                        # 分子式和分子量
+                        ws.cell(row=row, column=col_formula, value=m.formula)
+                        ws.cell(row=row, column=col_mw, value=round(m.mw, 2) if m.mw else "")
                     else:
                         ws.cell(row=row, column=col_name, value="")
                         ws.cell(row=row, column=col_score, value="")
+
+                # 质谱图超链接 (列 20)
+                if peak_num in sr.ms_plot_paths:
+                    ms_path = sr.ms_plot_paths[peak_num]
+                    if ms_path.exists():
+                        cell = ws.cell(row=row, column=20, value="查看质谱")
+                        cell.hyperlink = str(ms_path)
+                        cell.font = Font(color="0563C1", underline="single")
 
                 row += 1
 

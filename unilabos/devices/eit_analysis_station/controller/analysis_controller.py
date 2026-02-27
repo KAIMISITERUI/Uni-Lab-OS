@@ -788,6 +788,28 @@ class AnalysisStationController:
                 except Exception as e:
                     self._logger.error("样品 %s FID 色谱图生成失败: %s", sample_name, e)
 
+            # 各 TIC 峰的质谱图
+            if result.tic_peaks:
+                ms_plot_dir = report_dir / "ms_plots"
+                for peak_num, peak in enumerate(result.tic_peaks, start=1):
+                    try:
+                        mz, ms_intensities = reader.read_ms_spectra_at_peak(
+                            d_dir, peak.start_time, peak.end_time,
+                            avg_scans=self._settings.nist_avg_scans,
+                        )
+                        if len(mz) > 0:
+                            ms_plot_path = ms_plot_dir / f"{sample_name}_peak{peak_num}_ms.png"
+                            plotter.plot_ms_spectrum(
+                                mz, ms_intensities,
+                                title=f"Mass Spectrum - {sample_name} Peak {peak_num} (RT {peak.retention_time:.2f} min)",
+                                output_path=ms_plot_path,
+                            )
+                            result.ms_plot_paths[peak_num] = ms_plot_path
+                    except Exception as e:
+                        self._logger.error(
+                            "样品 %s 峰 %d 质谱图生成失败: %s", sample_name, peak_num, e
+                        )
+
         return result
 
     def process_gc_ms_results(self, task_id: Optional[str] = None) -> Dict:

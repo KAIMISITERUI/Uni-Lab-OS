@@ -329,6 +329,74 @@ class ChromatogramPlotter:
         else:
             return f"{area:.4f}"
 
+    def plot_ms_spectrum(
+        self,
+        mz: np.ndarray,
+        intensities: np.ndarray,
+        title: str = "",
+        output_path: Optional[Path] = None,
+        top_n_labels: int = 10,
+    ) -> Path:
+        """
+        功能:
+            绘制单个峰的质谱棒状图 (m/z vs relative intensity).
+            自动标注强度最高的 top_n_labels 个离子的 m/z 值.
+        参数:
+            mz: m/z 数组.
+            intensities: 强度数组.
+            title: 图片标题.
+            output_path: 输出图片路径, None 使用默认路径.
+            top_n_labels: 标注 m/z 值的最强峰数量.
+        返回:
+            Path: 保存的图片路径.
+        """
+        fig, ax = plt.subplots(1, 1, figsize=(12, 5))
+
+        # 归一化为相对强度 (%)
+        max_intensity = intensities.max() if len(intensities) > 0 else 1.0
+        if max_intensity == 0:
+            max_intensity = 1.0
+        rel_intensities = intensities / max_intensity * 100.0
+
+        # 棒状图绘制
+        ax.vlines(mz, 0, rel_intensities, colors="#1f77b4", linewidth=0.8)
+
+        # 标注最强的 top_n_labels 个峰的 m/z 值
+        if len(mz) > 0:
+            n = min(top_n_labels, len(mz))
+            top_indices = np.argsort(rel_intensities)[-n:]
+            for idx in top_indices:
+                ax.annotate(
+                    f"{mz[idx]:.1f}",
+                    xy=(mz[idx], rel_intensities[idx]),
+                    xytext=(0, 4),
+                    textcoords="offset points",
+                    ha="center", va="bottom",
+                    fontsize=7,
+                    color="#333333",
+                )
+
+        ax.set_xlabel("m/z")
+        ax.set_ylabel("Relative Intensity (%)")
+        ax.set_title(title)
+        ax.set_ylim(bottom=0, top=110)
+
+        # X 轴留边距
+        if len(mz) > 0:
+            margin = (mz.max() - mz.min()) * 0.05
+            ax.set_xlim(mz.min() - max(margin, 5), mz.max() + max(margin, 5))
+
+        plt.tight_layout()
+
+        if output_path is None:
+            output_path = Path("ms_spectrum.png")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(output_path), dpi=self._dpi, bbox_inches="tight")
+        plt.close(fig)
+
+        logger.info("质谱图已保存: %s", output_path)
+        return output_path
+
     @staticmethod
     def _find_match(
         rt: float,
