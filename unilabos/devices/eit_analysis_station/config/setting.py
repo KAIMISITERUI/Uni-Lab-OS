@@ -69,7 +69,7 @@ class Settings:
 
     # ---------- 峰检测与积分参数 ----------
     peak_smoothing_window: int = 11
-    peak_prominence: float = 50000.0
+    peak_prominence: float = 10000.0
     peak_min_distance: int = 5
     peak_width_rel_height: float = 0.99
     fid_peak_prominence: float = 0.5
@@ -93,15 +93,34 @@ class Settings:
     boundary_max_span_min: float = 0.80
 
     # ---------- 峰过滤参数 ----------
-    peak_rt_min: Optional[float] = 4
-    peak_rt_max: Optional[float] = 10
-    tic_area_min: Optional[float] = 100000
+    peak_rt_min: Optional[float] = 4.0
+    peak_rt_max: Optional[float] = 10.0
+    tic_area_min: Optional[float] = 10000.0
     tic_area_max: Optional[float] = None
     fid_area_min: Optional[float] = 0.01
     fid_area_max: Optional[float] = None
 
+    # ---------- TIC-FID 峰对齐参数 ----------
+    alignment_tolerance: float = 0.05  # FID与TIC峰保留时间对齐容差(min)
+    alignment_include_tic_only: bool = False   # 对照表是否输出TIC有峰但FID无峰的行
+    alignment_include_fid_only: bool = True   # 对照表是否输出FID有峰但TIC无峰的行
+
+    # ---------- 产率计算参数 ----------
+    yield_rt_tolerance: float = 0.1  # 产率计算时保留时间匹配容差(min)
+
+    # ---------- TIC 绘图参数 ----------
+    tic_plot_show_compound: bool = True       # TIC色谱图是否标注化合物名称
+
     # ---------- 报告目录 ----------
     report_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")
+
+    # ---------- 化学品库目录 ----------
+    chemical_list_path: Path = field(
+        default_factory=lambda: Path(__file__).parent.parent.parent
+        / "eit_synthesis_station"
+        / "sheet"
+        / "chemical_list.xlsx"
+    )
 
     # ---------- 结构图缓存目录 ----------
     structure_cache_dir: Path = field(
@@ -138,7 +157,10 @@ class Settings:
             ANALYSIS_FID_AREA_MIN, ANALYSIS_FID_AREA_MAX,
             ANALYSIS_REPORT_DIR, ANALYSIS_STRUCTURE_CACHE_DIR,
             ANALYSIS_NIST_PATH, ANALYSIS_NIST_MAX_HITS,
-            ANALYSIS_NIST_SEARCH_TIMEOUT, ANALYSIS_NIST_AVG_SCANS.
+            ANALYSIS_NIST_SEARCH_TIMEOUT, ANALYSIS_NIST_AVG_SCANS,
+            ANALYSIS_ALIGNMENT_INCLUDE_TIC_ONLY,
+            ANALYSIS_ALIGNMENT_INCLUDE_FID_ONLY,
+            ANALYSIS_TIC_PLOT_SHOW_COMPOUND.
         """
         defaults = Settings()
 
@@ -215,6 +237,7 @@ class Settings:
             boundary_max_span_min=_float("ANALYSIS_BOUNDARY_MAX_SPAN_MIN", defaults.boundary_max_span_min),
             report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
             structure_cache_dir=_path("ANALYSIS_STRUCTURE_CACHE_DIR", defaults.structure_cache_dir),
+            chemical_list_path=_path("ANALYSIS_CHEMICAL_LIST_PATH", defaults.chemical_list_path),
             nist_path=_path("ANALYSIS_NIST_PATH", defaults.nist_path),
             nist_max_hits=_int("ANALYSIS_NIST_MAX_HITS", defaults.nist_max_hits),
             nist_search_timeout=_float("ANALYSIS_NIST_SEARCH_TIMEOUT", defaults.nist_search_timeout),
@@ -225,6 +248,11 @@ class Settings:
             tic_area_max=_opt_float("ANALYSIS_TIC_AREA_MAX", defaults.tic_area_max),
             fid_area_min=_opt_float("ANALYSIS_FID_AREA_MIN", defaults.fid_area_min),
             fid_area_max=_opt_float("ANALYSIS_FID_AREA_MAX", defaults.fid_area_max),
+            alignment_tolerance=_float("ANALYSIS_ALIGNMENT_TOLERANCE", defaults.alignment_tolerance),
+            alignment_include_tic_only=_bool("ANALYSIS_ALIGNMENT_INCLUDE_TIC_ONLY", defaults.alignment_include_tic_only),
+            alignment_include_fid_only=_bool("ANALYSIS_ALIGNMENT_INCLUDE_FID_ONLY", defaults.alignment_include_fid_only),
+            tic_plot_show_compound=_bool("ANALYSIS_TIC_PLOT_SHOW_COMPOUND", defaults.tic_plot_show_compound),
+            yield_rt_tolerance=_float("ANALYSIS_YIELD_RT_TOLERANCE", defaults.yield_rt_tolerance),
         )
 
 

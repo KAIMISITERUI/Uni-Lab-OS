@@ -4,7 +4,7 @@
 功能:
     将积分结果汇总为 Excel (.xlsx) 表格.
     按任务汇总, 每个任务生成一个 xlsx 文件,
-    包含 TIC 峰表, FID 峰表, 样品汇总三个 Sheet.
+    包含 TIC 峰表, FID 峰表, TIC-FID 对照表, 样品汇总四个 Sheet.
 参数:
     无.
 返回:
@@ -14,7 +14,7 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -55,12 +55,11 @@ class SampleResult:
     fid_plot_path: Optional[Path] = None
     ms_plot_paths: Dict[int, Path] = field(default_factory=dict)  # 峰号(1-based) -> 质谱图路径
 
-
 class ReportGenerator:
     """
     功能:
         将积分结果汇总为 Excel 表格.
-        按任务汇总, 生成包含 TIC峰表/FID峰表/样品汇总 三个 Sheet 的 xlsx 文件.
+        按任务汇总, 生成包含 TIC峰表/FID峰表/TIC-FID对照表/样品汇总 四个 Sheet 的 xlsx 文件.
     参数:
         无.
     返回:
@@ -93,12 +92,23 @@ class ReportGenerator:
         "TIC色谱图", "FID色谱图",
     ]
 
+    # TIC-FID 对照表列定义
+    _ALIGNMENT_HEADERS = [
+        "样品名", "FID峰号", "FID保留时间(min)",
+        "TIC峰号", "TIC保留时间(min)", "FID峰面积",
+        "化合物1(名称)", "化合物1(匹配度)", "化合物1(分子式)", "化合物1(分子量)",
+        "化合物2(名称)", "化合物2(匹配度)", "化合物2(分子式)", "化合物2(分子量)",
+    ]
+
     def generate_task_report(
         self,
         task_id: str,
         sample_results: List[SampleResult],
         output_dir: Path,
         structure_images: Optional[Dict[str, Path]] = None,
+        alignment_tolerance: float = 0.05,
+        include_tic_only: bool = True,
+        include_fid_only: bool = True,
     ) -> Path:
         """
         功能:
@@ -108,6 +118,9 @@ class ReportGenerator:
             sample_results: 各样品的积分结果列表.
             output_dir: 输出目录.
             structure_images: CAS 号 -> 结构图 PNG 路径的映射, None 表示不嵌入结构图.
+            alignment_tolerance: FID 与 TIC 峰保留时间对齐容差(min).
+            include_tic_only: 对照表是否输出 TIC 有峰但 FID 无峰的行.
+            include_fid_only: 对照表是否输出 FID 有峰但 TIC 无峰的行.
         返回:
             Path: 生成的 xlsx 文件路径.
         """
@@ -125,7 +138,12 @@ class ReportGenerator:
         ws_fid = wb.create_sheet("FID峰表")
         self._write_fid_sheet(ws_fid, sample_results)
 
-        # Sheet 3: 样品汇总
+        # Sheet 3: TIC-FID 对照表
+        ws_align = wb.create_sheet("TIC-FID对照表")
+        self._write_alignment_sheet(ws_align, sample_results, alignment_tolerance,
+                                    include_tic_only, include_fid_only)
+
+        # Sheet 4: 样品汇总
         ws_summary = wb.create_sheet("样品汇总")
         self._write_summary_sheet(ws_summary, sample_results)
 
@@ -288,6 +306,134 @@ class ReportGenerator:
                 cell = ws.cell(row=row_idx, column=8, value="查看色谱图")
                 cell.hyperlink = str(sr.fid_plot_path)
                 cell.font = Font(color="0563C1", underline="single")
+
+        self._auto_column_width(ws)
+
+    @staticmethod
+    def _align_fid_tic_peaks(
+        fid_peaks: List[PeakResult],
+        tic_peaks: List[PeakResult],
+        tolerance: float = 0.05,
+    ) -> List[Tuple[Optional[PeakResult], Optional[int],
+                     Optional[PeakResult], Optional[int]]]:
+        """
+        功能:
+            按保留时间对齐 FID 峰和 TIC 峰.
+            贪心匹配: 遍历 FID 峰, 对每个 FID 峰在未匹配的 TIC 峰中
+            找保留时间最接近且在容差内的峰进行配对.
+        参数:
+            fid_peaks: FID 峰列表.
+            tic_peaks: TIC 峰列表.
+            tolerance: 保留时间容差(min), 在此范围内视为同一峰.
+        返回:
+            List of (fid_peak, fid_peak_num, tic_peak, tic_peak_num).
+            未匹配的峰对应字段为 None.
+        """
+        matched_tic: set = set()  # 已匹配的 TIC 峰索引集合
+        pairs: List[Tuple[Optional[PeakResult], Optional[int],
+                          Optional[PeakResult], Optional[int]]] = []
+
+        # 遍历 FID 峰, 贪心匹配最近的 TIC 峰
+        for fi, fp in enumerate(fid_peaks):
+            best_ti: Optional[int] = None
+            best_diff = tolerance + 1.0
+            for ti, tp in enumerate(tic_peaks):
+                if ti in matched_tic:
+                    continue
+                diff = abs(fp.retention_time - tp.retention_time)
+                if diff <= tolerance and diff < best_diff:
+                    best_diff = diff
+                    best_ti = ti
+            if best_ti is not None:
+                # FID-TIC 配对成功
+                pairs.append((fp, fi + 1, tic_peaks[best_ti], best_ti + 1))
+                matched_tic.add(best_ti)
+            else:
+                # FID 峰无对应 TIC 峰
+                pairs.append((fp, fi + 1, None, None))
+
+        # 收集未匹配的 TIC 峰
+        for ti, tp in enumerate(tic_peaks):
+            if ti not in matched_tic:
+                pairs.append((None, None, tp, ti + 1))
+
+        # 按保留时间排序 (取非 None 峰的 RT)
+        pairs.sort(key=lambda x: (x[0] or x[2]).retention_time)
+        return pairs
+
+    def _write_alignment_sheet(
+        self,
+        ws,
+        sample_results: List[SampleResult],
+        tolerance: float = 0.05,
+        include_tic_only: bool = True,
+        include_fid_only: bool = True,
+    ) -> None:
+        """
+        功能:
+            写入 TIC-FID 对照表 Sheet, 按保留时间对齐 FID 和 TIC 峰,
+            并展示 TIC 峰对应的 Top2 化合物预测结果.
+        参数:
+            ws: openpyxl Worksheet.
+            sample_results: 各样品积分结果列表.
+            tolerance: FID-TIC 峰保留时间对齐容差(min).
+            include_tic_only: 是否输出 TIC 有峰但 FID 无峰的行.
+            include_fid_only: 是否输出 FID 有峰但 TIC 无峰的行.
+        返回:
+            无.
+        """
+        self._write_header(ws, self._ALIGNMENT_HEADERS)
+
+        row = 2
+        for sr in sample_results:
+            aligned = self._align_fid_tic_peaks(
+                sr.fid_peaks, sr.tic_peaks, tolerance
+            )
+            for fid_peak, fid_num, tic_peak, tic_num in aligned:
+                # 根据配置过滤仅单侧有峰的行
+                if fid_peak is None and not include_tic_only:
+                    continue
+                if tic_peak is None and not include_fid_only:
+                    continue
+
+                ws.cell(row=row, column=1, value=sr.sample_name)
+
+                # FID 峰信息
+                if fid_peak is not None:
+                    ws.cell(row=row, column=2, value=fid_num)
+                    ws.cell(row=row, column=3,
+                            value=round(fid_peak.retention_time, 3))
+                    ws.cell(row=row, column=6,
+                            value=round(fid_peak.area, 6))
+
+                # TIC 峰信息
+                if tic_peak is not None:
+                    ws.cell(row=row, column=4, value=tic_num)
+                    ws.cell(row=row, column=5,
+                            value=round(tic_peak.retention_time, 3))
+
+                    # 查找化合物匹配结果
+                    match_list = self._find_match_list(
+                        tic_peak.retention_time, sr.compound_matches
+                    )
+                    # 填充 Top2 化合物 (每个化合物占4列: 名称/匹配度/分子式/分子量)
+                    for i in range(2):
+                        col_name = 7 + i * 4      # 列 7, 11
+                        col_score = 8 + i * 4     # 列 8, 12
+                        col_formula = 9 + i * 4   # 列 9, 13
+                        col_mw = 10 + i * 4       # 列 10, 14
+                        if match_list is not None and i < len(match_list):
+                            m = match_list[i]
+                            ws.cell(row=row, column=col_name,
+                                    value=m.compound_name)
+                            ws.cell(row=row, column=col_score,
+                                    value=round(m.match_score, 1))
+                            ws.cell(row=row, column=col_formula,
+                                    value=m.formula)
+                            ws.cell(row=row, column=col_mw,
+                                    value=round(m.mw, 2) if m.mw else "")
+
+                row += 1
 
         self._auto_column_width(ws)
 

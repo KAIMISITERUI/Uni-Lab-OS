@@ -30,6 +30,7 @@ from ..processor.data_reader import GCMSDataReader
 from ..processor.peak_integrator import PeakIntegrator, PeakResult
 from ..processor.nist_matcher import NISTMatcher
 from ..processor.report_generator import ReportGenerator, SampleResult
+from ..processor.yield_calculator import YieldCalculator
 
 
 def _natural_sort_key(path: Path) -> list:
@@ -757,7 +758,7 @@ class AnalysisStationController:
                     tic_plot = plot_dir / f"{sample_name}_tic.png"
                     result.tic_plot_path = plotter.plot_chromatogram(
                         tic_times, tic_intensities, result.tic_peaks,
-                        compound_matches=result.compound_matches or None,
+                        compound_matches=(result.compound_matches or None) if self._settings.tic_plot_show_compound else None,
                         title=f"TIC Chromatogram - {sample_name}",
                         ylabel="TIC Intensity",
                         output_path=tic_plot,
@@ -882,6 +883,9 @@ class AnalysisStationController:
             report_path = generator.generate_task_report(
                 resolved_id, sample_results, local_report_dir,
                 structure_images=structure_images,
+                alignment_tolerance=self._settings.alignment_tolerance,
+                include_tic_only=self._settings.alignment_include_tic_only,
+                include_fid_only=self._settings.alignment_include_fid_only,
             )
 
             # 同步到合成任务目录
@@ -890,6 +894,9 @@ class AnalysisStationController:
                 syn_report = generator.generate_task_report(
                     resolved_id, sample_results, syn_dir,
                     structure_images=structure_images,
+                    alignment_tolerance=self._settings.alignment_tolerance,
+                    include_tic_only=self._settings.alignment_include_tic_only,
+                    include_fid_only=self._settings.alignment_include_fid_only,
                 )
                 self._logger.info("报告已同步至合成任务目录: %s", syn_report)
 
@@ -905,6 +912,9 @@ class AnalysisStationController:
             )
             self._logger.info(msg)
 
+            # 尝试自动触发产率计算
+            self._try_auto_yield_calculation(resolved_id)
+
             return {
                 "success": True,
                 "return_info": msg,
@@ -915,6 +925,98 @@ class AnalysisStationController:
             msg = f"结果处理失败: {exc}"
             self._logger.error(msg)
             return {"success": False, "return_info": msg}
+
+    def calculate_yields(self, task_id: Optional[str] = None) -> Dict:
+        """
+        功能:
+            产率计算入口, 定位实验方案/积分报告/化学品清单后调用 YieldCalculator.
+            实验方案中需包含 "产率计算" Sheet, 否则跳过.
+        参数:
+            task_id: 任务 ID 字符串, None 表示自动选取最新任务.
+        返回:
+            Dict: {"success": bool, "return_info": str, "report_path": str}.
+        """
+        try:
+            _, resolved_id = self._find_task_dir(task_id)
+            self._logger.info("开始产率计算, 任务: %s", resolved_id)
+
+            # 定位文件
+            syn_dir = self._settings.synthesis_tasks_dir / resolved_id
+            plan_path = syn_dir / f"{resolved_id}.xlsx"
+            report_path = syn_dir / f"integration_report_{resolved_id}.xlsx"
+            chemical_list_path = self._settings.chemical_list_path
+
+            if not plan_path.exists():
+                return {"success": False, "return_info": f"未找到实验方案: {plan_path}"}
+            if not report_path.exists():
+                # 尝试本地报告目录
+                local_report = self._settings.report_dir / resolved_id / f"integration_report_{resolved_id}.xlsx"
+                if local_report.exists():
+                    report_path = local_report
+                else:
+                    return {"success": False, "return_info": f"未找到积分报告: {report_path}"}
+            if not chemical_list_path.exists():
+                return {"success": False, "return_info": f"未找到化学品清单: {chemical_list_path}"}
+
+            # 检查实验方案是否包含 "产率计算" Sheet
+            wb_check = openpyxl.load_workbook(str(plan_path), data_only=True)
+            has_yield_sheet = "产率计算" in wb_check.sheetnames
+            wb_check.close()
+            if not has_yield_sheet:
+                return {"success": False, "return_info": "实验方案中未包含 '产率计算' Sheet, 跳过产率计算"}
+
+            # 执行产率计算
+            calc = YieldCalculator(rt_tolerance=self._settings.yield_rt_tolerance)
+            config, results = calc.process_task(plan_path, report_path, chemical_list_path)
+
+            # 按自然顺序排序 (729-1, 729-2, ..., 729-10 而非字典序 729-1, 729-10, 729-2)
+            results.sort(key=lambda r: [
+                int(p) if p.isdigit() else p.lower()
+                for p in re.split(r'(\d+)', r.sample_name)
+            ])
+
+            # 保存到合成任务目录
+            yield_path = calc.generate_yield_report(resolved_id, config, results, syn_dir)
+
+            # 同步到本地分析数据目录
+            local_report_dir = self._settings.report_dir / resolved_id
+            if local_report_dir != syn_dir:
+                calc.generate_yield_report(resolved_id, config, results, local_report_dir)
+
+            # 统计
+            valid_count = sum(1 for r in results if r.yield_percent is not None)
+            msg = f"任务 {resolved_id} 产率计算完成: {len(results)} 条结果, 其中 {valid_count} 条有效产率"
+            self._logger.info(msg)
+
+            return {
+                "success": True,
+                "return_info": msg,
+                "report_path": str(yield_path),
+            }
+
+        except Exception as exc:
+            msg = f"产率计算失败: {exc}"
+            self._logger.error(msg)
+            return {"success": False, "return_info": msg}
+
+    def _try_auto_yield_calculation(self, resolved_id: str) -> None:
+        """
+        功能:
+            在积分报告生成后尝试自动触发产率计算.
+            仅当实验方案包含 "产率计算" Sheet 时执行, 失败不影响积分报告.
+        参数:
+            resolved_id: 任务 ID 字符串.
+        返回:
+            无.
+        """
+        try:
+            result = self.calculate_yields(resolved_id)
+            if result["success"]:
+                self._logger.info("自动产率计算成功: %s", result["return_info"])
+            else:
+                self._logger.info("自动产率计算跳过: %s", result["return_info"])
+        except Exception as exc:
+            self._logger.warning("自动产率计算失败(不影响积分报告): %s", exc)
 
     def poll_analysis_run(
         self, task_id: Optional[str] = None, poll_interval: float = 30.0
@@ -1045,7 +1147,7 @@ def main() -> None:
     """
     功能:
         交互式菜单, 用于手动测试 run_analysis / process_gc_ms_results /
-        poll_analysis_run / get_status / get_methods.
+        poll_analysis_run / get_status / get_methods / calculate_yields.
         用户可选择功能并输入 task_id, 输入 q 退出.
     参数:
         无.
@@ -1062,9 +1164,10 @@ def main() -> None:
         "\n===== 分析站交互式测试菜单 =====\n"
         "  1. run_analysis          - 统一分析入口(生成CSV并提交至仪器)\n"
         "  2. process_gc_ms_results - GC-MS结果处理(积分+定性+报告)\n"
-        "  3. poll_analysis_run    - 轮询GC-MS分析任务状态并自动处理结果\n"
+        "  3. poll_analysis_run     - 轮询GC-MS分析任务状态并自动处理结果\n"
         "  4. get_status            - 获取GC-MS设备当前状态\n"
         "  5. get_methods           - 获取当前Project的方法列表\n"
+        "  6. calculate_yields      - 产率计算\n"
         "  q. 退出\n"
         "================================"
     )
@@ -1077,8 +1180,8 @@ def main() -> None:
             print("已退出测试.")
             break
 
-        if choice not in ("1", "2", "3", "4", "5"):
-            print("无效选择, 请输入 1/2/3/4/5 或 q.")
+        if choice not in ("1", "2", "3", "4", "5", "6"):
+            print("无效选择, 请输入 1/2/3/4/5/6 或 q.")
             continue
 
         # 选项 4/5 直接操作设备驱动, 不需要 task_id
@@ -1136,6 +1239,11 @@ def main() -> None:
             result = controller.poll_analysis_run(
                 task_id=task_id, poll_interval=interval
             )
+            _print_result(result)
+
+        elif choice == "6":
+            print(f"\n>>> 调用 calculate_yields(task_id={task_id!r})")
+            result = controller.calculate_yields(task_id=task_id)
             _print_result(result)
 
 
