@@ -66,6 +66,10 @@ class Settings:
     nist_max_hits: int = 5
     nist_search_timeout: float = 120.0
     nist_avg_scans: int = 3
+    pim_enable: bool = True
+    pim_ab_m: float = 0.3
+    pim_beta: float = 5.0
+    pim_epsilon_f: float = 0.0
 
     # ---------- 峰检测与积分参数 ----------
     peak_smoothing_window: int = 11
@@ -158,6 +162,8 @@ class Settings:
             ANALYSIS_REPORT_DIR, ANALYSIS_STRUCTURE_CACHE_DIR,
             ANALYSIS_NIST_PATH, ANALYSIS_NIST_MAX_HITS,
             ANALYSIS_NIST_SEARCH_TIMEOUT, ANALYSIS_NIST_AVG_SCANS,
+            ANALYSIS_PIM_ENABLE, ANALYSIS_PIM_AB_M,
+            ANALYSIS_PIM_BETA, ANALYSIS_PIM_EPSILON_F,
             ANALYSIS_ALIGNMENT_INCLUDE_TIC_ONLY,
             ANALYSIS_ALIGNMENT_INCLUDE_FID_ONLY,
             ANALYSIS_TIC_PLOT_SHOW_COMPOUND.
@@ -242,6 +248,10 @@ class Settings:
             nist_max_hits=_int("ANALYSIS_NIST_MAX_HITS", defaults.nist_max_hits),
             nist_search_timeout=_float("ANALYSIS_NIST_SEARCH_TIMEOUT", defaults.nist_search_timeout),
             nist_avg_scans=_int("ANALYSIS_NIST_AVG_SCANS", defaults.nist_avg_scans),
+            pim_enable=_bool("ANALYSIS_PIM_ENABLE", defaults.pim_enable),
+            pim_ab_m=_float("ANALYSIS_PIM_AB_M", defaults.pim_ab_m),
+            pim_beta=_float("ANALYSIS_PIM_BETA", defaults.pim_beta),
+            pim_epsilon_f=_float("ANALYSIS_PIM_EPSILON_F", defaults.pim_epsilon_f),
             peak_rt_min=_opt_float("ANALYSIS_PEAK_RT_MIN", defaults.peak_rt_min),
             peak_rt_max=_opt_float("ANALYSIS_PEAK_RT_MAX", defaults.peak_rt_max),
             tic_area_min=_opt_float("ANALYSIS_TIC_AREA_MIN", defaults.tic_area_min),

@@ -27,9 +27,10 @@ from ..config.setting import Settings, configure_logging
 from ..driver.zhida_driver import ZhidaClient
 from ..processor.chromatogram_plotter import ChromatogramPlotter
 from ..processor.data_reader import GCMSDataReader
+from ..processor.molecular_mass_predictor import PIMPredictor
 from ..processor.peak_integrator import PeakIntegrator, PeakResult
 from ..processor.nist_matcher import NISTMatcher
-from ..processor.report_generator import ReportGenerator, SampleResult
+from ..processor.report_generator import PIMPrediction, ReportGenerator, SampleResult
 from ..processor.yield_calculator import YieldCalculator
 
 
@@ -707,6 +708,18 @@ class AnalysisStationController:
         tic_times = tic_intensities = None
         fid_times = fid_intensities = None
         tic_baseline = fid_baseline = None  # 积分基线, 供绘图使用
+        peak_ms_cache: Dict[int, Tuple] = {}
+
+        pim_predictor: Optional[PIMPredictor] = None
+        if self._settings.pim_enable is True:
+            try:
+                pim_predictor = PIMPredictor(
+                    ab_m=self._settings.pim_ab_m,
+                    beta=self._settings.pim_beta,
+                    epsilon_f=self._settings.pim_epsilon_f,
+                )
+            except Exception as e:
+                self._logger.error("样品 %s PIM 预测器初始化失败: %s", sample_name, e)
 
         # TIC 积分
         try:
@@ -799,6 +812,37 @@ class AnalysisStationController:
         except Exception as e:
             self._logger.error("样品 %s NIST 匹配失败: %s", sample_name, e)
 
+        # 提取 TIC 峰质谱并执行 PIM 预测
+        if len(result.tic_peaks) > 0:
+            for peak_num, peak in enumerate(result.tic_peaks, start=1):
+                try:
+                    mz_values, ms_intensities = reader.read_ms_spectra_at_peak(
+                        d_dir, peak.start_time, peak.end_time,
+                        avg_scans=self._settings.nist_avg_scans,
+                    )
+                    peak_ms_cache[peak_num] = (mz_values, ms_intensities)
+                except Exception as e:
+                    self._logger.error("样品 %s 峰%d 质谱提取失败: %s", sample_name, peak_num, e)
+                    if pim_predictor is not None:
+                        result.pim_predictions[peak.retention_time] = PIMPrediction(
+                            status="error",
+                            message=f"质谱提取失败: {e}",
+                        )
+                    continue
+
+                if pim_predictor is None:
+                    continue
+
+                try:
+                    prediction = pim_predictor.predict(mz_values, ms_intensities)
+                    result.pim_predictions[peak.retention_time] = prediction
+                except Exception as e:
+                    self._logger.error("样品 %s 峰%d PIM 预测失败: %s", sample_name, peak_num, e)
+                    result.pim_predictions[peak.retention_time] = PIMPrediction(
+                        status="error",
+                        message=f"PIM 预测失败: {e}",
+                    )
+
         # 生成色谱图 (TIC + FID)
         if report_dir is not None:
             plotter = ChromatogramPlotter()
@@ -846,10 +890,14 @@ class AnalysisStationController:
                 ms_plot_dir = report_dir / "ms_plots"
                 for peak_num, peak in enumerate(result.tic_peaks, start=1):
                     try:
-                        mz, ms_intensities = reader.read_ms_spectra_at_peak(
-                            d_dir, peak.start_time, peak.end_time,
-                            avg_scans=self._settings.nist_avg_scans,
-                        )
+                        cached_spectrum = peak_ms_cache.get(peak_num)
+                        if cached_spectrum is None:
+                            mz, ms_intensities = reader.read_ms_spectra_at_peak(
+                                d_dir, peak.start_time, peak.end_time,
+                                avg_scans=self._settings.nist_avg_scans,
+                            )
+                        else:
+                            mz, ms_intensities = cached_spectrum
                         if len(mz) > 0:
                             ms_plot_path = ms_plot_dir / f"{sample_name}_peak{peak_num}_ms.png"
                             plotter.plot_ms_spectrum(

@@ -27,6 +27,27 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class PIMPrediction:
+    """
+    功能:
+        存储单个峰的 PIM 分子量预测结果.
+    参数:
+        predicted_mz: 预测分子离子峰 m/z.
+        predicted_mw: 预测分子量(Da).
+        confidence_index: PIM 置信指数.
+        status: 结果状态, 可选 ok/no_spectrum/error.
+        message: 状态说明.
+    返回:
+        PIMPrediction.
+    """
+    predicted_mz: Optional[int] = None
+    predicted_mw: Optional[int] = None
+    confidence_index: Optional[float] = None
+    status: str = ""
+    message: str = ""
+
+
+@dataclass
 class SampleResult:
     """
     功能:
@@ -41,6 +62,7 @@ class SampleResult:
         nist_result_path: NIST SRCRESLT 结果文件副本路径.
         tic_plot_path: TIC 色谱图图片路径.
         fid_plot_path: FID 色谱图图片路径.
+        pim_predictions: 保留时间 -> PIM 预测结果字典.
     返回:
         SampleResult.
     """
@@ -54,6 +76,7 @@ class SampleResult:
     tic_plot_path: Optional[Path] = None
     fid_plot_path: Optional[Path] = None
     ms_plot_paths: Dict[int, Path] = field(default_factory=dict)  # 峰号(1-based) -> 质谱图路径
+    pim_predictions: Dict[float, PIMPrediction] = field(default_factory=dict)  # 保留时间 -> PIM 预测结果
 
 class ReportGenerator:
     """
@@ -78,6 +101,7 @@ class ReportGenerator:
         "化合物1(名称)", "化合物1(匹配度)", "化合物1(结构)", "化合物1(分子式)", "化合物1(分子量)",
         "化合物2(名称)", "化合物2(匹配度)", "化合物2(结构)", "化合物2(分子式)", "化合物2(分子量)",
         "质谱图",
+        "PIM预测分子量(Da)", "PIM置信指数",
     ]
 
     # FID 峰表列定义
@@ -249,6 +273,16 @@ class ReportGenerator:
                         cell = ws.cell(row=row, column=20, value="查看质谱")
                         cell.hyperlink = str(ms_path)
                         cell.font = Font(color="0563C1", underline="single")
+
+                # PIM 预测结果 (列 21-22: 预测分子量, 置信指数)
+                pim_prediction = self._find_pim_prediction(
+                    peak.retention_time, sr.pim_predictions
+                )
+                if pim_prediction is not None:
+                    if pim_prediction.predicted_mw is not None:
+                        ws.cell(row=row, column=21, value=pim_prediction.predicted_mw)
+                    if pim_prediction.confidence_index is not None:
+                        ws.cell(row=row, column=22, value=round(pim_prediction.confidence_index, 4))
 
                 row += 1
 
@@ -449,6 +483,29 @@ class ReportGenerator:
         closest_rt = min(matches.keys(), key=lambda r: abs(r - rt))
         if abs(closest_rt - rt) <= tolerance:
             return matches[closest_rt]
+        return None
+
+    @staticmethod
+    def _find_pim_prediction(
+        rt: float,
+        predictions: Dict[float, PIMPrediction],
+        tolerance: float = 0.05,
+    ) -> Optional[PIMPrediction]:
+        """
+        功能:
+            按保留时间在 PIM 预测字典中查找最接近结果.
+        参数:
+            rt: 目标保留时间(min).
+            predictions: 保留时间 -> PIM 预测结果.
+            tolerance: 保留时间容差(min).
+        返回:
+            Optional[PIMPrediction], 容差内最近结果.
+        """
+        if len(predictions) == 0:
+            return None
+        closest_rt = min(predictions.keys(), key=lambda key_rt: abs(key_rt - rt))
+        if abs(closest_rt - rt) <= tolerance:
+            return predictions[closest_rt]
         return None
 
 
