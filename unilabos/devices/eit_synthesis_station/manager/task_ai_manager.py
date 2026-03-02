@@ -114,6 +114,7 @@ class ReactionPlan:
     flash_filter_solvent: str
     flash_filter_volume_ul: Optional[float]
     sample_volume_ul: float
+    flash_filter_experiment_numbers: str  # "全部" 或 "1-12,24,28"
 
     # 右侧实验行
     experiments: List[ExperimentRow]
@@ -509,10 +510,12 @@ class ReactionTemplateWriter:
                 self._set_param(ws, param_row_map, "闪滤液种类", plan.flash_filter_solvent)
                 self._set_param(ws, param_row_map, "闪滤液用量(μL)", plan.flash_filter_volume_ul)
                 self._set_param(ws, param_row_map, "取样量(μL)", plan.sample_volume_ul)
+                self._set_param(ws, param_row_map, "闪滤实验编号", plan.flash_filter_experiment_numbers)
             else:
                 self._set_param(ws, param_row_map, "闪滤液种类", "")
                 self._set_param(ws, param_row_map, "闪滤液用量(μL)", "")
                 self._set_param(ws, param_row_map, "取样量(μL)", plan.sample_volume_ul)
+                self._set_param(ws, param_row_map, "闪滤实验编号", "全部")
 
         # 写入右侧试剂区: 每个实验行对应 global_experiment_no
         for ws in sheets:
@@ -750,6 +753,7 @@ def _plan_from_model_json(model_json: Dict[str, Any]) -> ReactionPlan:
         flash_filter_solvent=flash_filter_solvent,
         flash_filter_volume_ul=flash_filter_volume_ul,
         sample_volume_ul=sample_volume_ul,
+        flash_filter_experiment_numbers="全部",
         experiments=experiments,
     )
 

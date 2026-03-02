@@ -48,6 +48,46 @@ class PIMPrediction:
 
 
 @dataclass
+class SSHMPrediction:
+    """
+    功能:
+        存储单个峰的 SS-HM (Simple Search Hitlist Method) 分子量预测结果.
+    参数:
+        predicted_mw: SS-HM 预测分子量(Da).
+        confidence: 概率置信度 (0-1).
+        correction: 最佳修正值 (sigma = PIM + correction).
+        status: 结果状态, 可选 ok/no_spectrum/error.
+        message: 状态说明.
+    返回:
+        SSHMPrediction.
+    """
+    predicted_mw: Optional[int] = None
+    confidence: Optional[float] = None
+    correction: Optional[int] = None
+    status: str = ""
+    message: str = ""
+
+
+@dataclass
+class iHSHMPrediction:
+    """
+    功能:
+        存储单个峰的 iHS-HM (iterative Hybrid Search Hitlist Method) 分子量预测结果.
+    参数:
+        predicted_mw: iHS-HM 预测分子量(Da).
+        confidence: 置信度 (Omega1 - Omega2) / 999.
+        status: 结果状态, 可选 ok/no_spectrum/error.
+        message: 状态说明.
+    返回:
+        iHSHMPrediction.
+    """
+    predicted_mw: Optional[int] = None
+    confidence: Optional[float] = None
+    status: str = ""
+    message: str = ""
+
+
+@dataclass
 class SampleResult:
     """
     功能:
@@ -77,6 +117,8 @@ class SampleResult:
     fid_plot_path: Optional[Path] = None
     ms_plot_paths: Dict[int, Path] = field(default_factory=dict)  # 峰号(1-based) -> 质谱图路径
     pim_predictions: Dict[float, PIMPrediction] = field(default_factory=dict)  # 保留时间 -> PIM 预测结果
+    sshm_predictions: Dict[float, SSHMPrediction] = field(default_factory=dict)  # 保留时间 -> SS-HM 预测结果
+    ihshm_predictions: Dict[float, iHSHMPrediction] = field(default_factory=dict)  # 保留时间 -> iHS-HM 预测结果
 
 class ReportGenerator:
     """
@@ -102,6 +144,8 @@ class ReportGenerator:
         "化合物2(名称)", "化合物2(匹配度)", "化合物2(结构)", "化合物2(分子式)", "化合物2(分子量)",
         "质谱图",
         "PIM预测分子量(Da)", "PIM置信指数",
+        "SS-HM预测分子量(Da)", "SS-HM置信度",
+        "iHS-HM预测分子量(Da)", "iHS-HM置信度",
     ]
 
     # FID 峰表列定义
@@ -283,6 +327,26 @@ class ReportGenerator:
                         ws.cell(row=row, column=21, value=pim_prediction.predicted_mw)
                     if pim_prediction.confidence_index is not None:
                         ws.cell(row=row, column=22, value=round(pim_prediction.confidence_index, 4))
+
+                # SS-HM 预测结果 (列 23-24: 预测分子量, 置信度)
+                sshm_prediction = self._find_prediction_by_rt(
+                    peak.retention_time, sr.sshm_predictions
+                )
+                if sshm_prediction is not None:
+                    if sshm_prediction.predicted_mw is not None:
+                        ws.cell(row=row, column=23, value=sshm_prediction.predicted_mw)
+                    if sshm_prediction.confidence is not None:
+                        ws.cell(row=row, column=24, value=round(sshm_prediction.confidence, 4))
+
+                # iHS-HM 预测结果 (列 25-26: 预测分子量, 置信度)
+                ihshm_prediction = self._find_prediction_by_rt(
+                    peak.retention_time, sr.ihshm_predictions
+                )
+                if ihshm_prediction is not None:
+                    if ihshm_prediction.predicted_mw is not None:
+                        ws.cell(row=row, column=25, value=ihshm_prediction.predicted_mw)
+                    if ihshm_prediction.confidence is not None:
+                        ws.cell(row=row, column=26, value=round(ihshm_prediction.confidence, 6))
 
                 row += 1
 
@@ -500,6 +564,29 @@ class ReportGenerator:
             tolerance: 保留时间容差(min).
         返回:
             Optional[PIMPrediction], 容差内最近结果.
+        """
+        if len(predictions) == 0:
+            return None
+        closest_rt = min(predictions.keys(), key=lambda key_rt: abs(key_rt - rt))
+        if abs(closest_rt - rt) <= tolerance:
+            return predictions[closest_rt]
+        return None
+
+    @staticmethod
+    def _find_prediction_by_rt(
+        rt: float,
+        predictions: Dict,
+        tolerance: float = 0.05,
+    ):
+        """
+        功能:
+            按保留时间在预测字典中查找最接近结果 (通用版, 支持任意预测类型).
+        参数:
+            rt: 目标保留时间(min).
+            predictions: 保留时间 -> 预测结果字典.
+            tolerance: 保留时间容差(min).
+        返回:
+            容差内最近的预测结果, 或 None.
         """
         if len(predictions) == 0:
             return None

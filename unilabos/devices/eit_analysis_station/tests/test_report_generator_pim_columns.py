@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 功能:
-    验证 TIC 峰表中的 PIM 预测列写入行为.
+    验证 TIC 峰表中的 PIM/SS-HM/iHS-HM 预测列写入行为.
 参数:
     无.
 返回:
@@ -17,15 +17,17 @@ import openpyxl
 from eit_analysis_station.processor.peak_integrator import PeakResult
 from eit_analysis_station.processor.report_generator import (
     PIMPrediction,
+    SSHMPrediction,
+    iHSHMPrediction,
     ReportGenerator,
     SampleResult,
 )
 
 
-class TestReportGeneratorPIMColumns(unittest.TestCase):
+class TestReportGeneratorPredictionColumns(unittest.TestCase):
     """
     功能:
-        覆盖 PIM 列头与结果写入.
+        覆盖 PIM/SS-HM/iHS-HM 列头与结果写入.
     参数:
         无.
     返回:
@@ -36,7 +38,7 @@ class TestReportGeneratorPIMColumns(unittest.TestCase):
     def _build_sample_ok() -> SampleResult:
         """
         功能:
-            构建包含 ok 状态 PIM 预测的样品对象.
+            构建包含 ok 状态预测的样品对象.
         参数:
             无.
         返回:
@@ -66,13 +68,30 @@ class TestReportGeneratorPIMColumns(unittest.TestCase):
                     message="PIM 预测成功",
                 )
             },
+            sshm_predictions={
+                5.001: SSHMPrediction(
+                    predicted_mw=182,
+                    confidence=0.8765,
+                    correction=2,
+                    status="ok",
+                    message="SS-HM 预测成功, 25 个命中",
+                )
+            },
+            ihshm_predictions={
+                5.001: iHSHMPrediction(
+                    predicted_mw=183,
+                    confidence=0.012345,
+                    status="ok",
+                    message="iHS-HM 预测成功, 范围 162-250 Da",
+                )
+            },
         )
 
     @staticmethod
     def _build_sample_error() -> SampleResult:
         """
         功能:
-            构建包含 error 状态 PIM 预测的样品对象.
+            构建包含 error 状态预测的样品对象.
         参数:
             无.
         返回:
@@ -102,44 +121,89 @@ class TestReportGeneratorPIMColumns(unittest.TestCase):
                     message="PIM 置信指数计算失败",
                 )
             },
+            sshm_predictions={
+                6.210: SSHMPrediction(
+                    status="error",
+                    message="MSPepSearch 不可用",
+                )
+            },
+            ihshm_predictions={
+                6.210: iHSHMPrediction(
+                    status="error",
+                    message="MSPepSearch 不可用",
+                )
+            },
         )
 
-    def test_tic_sheet_contains_pim_headers_and_ok_values(self) -> None:
+    def test_tic_sheet_contains_prediction_headers(self) -> None:
         """
         功能:
-            验证列头存在且 ok 状态可写入数值.
+            验证 PIM/SS-HM/iHS-HM 列头存在且位置正确.
         """
         workbook = openpyxl.Workbook()
         ws = workbook.active
 
         ReportGenerator()._write_tic_sheet(ws, [self._build_sample_ok()])
 
-        self.assertEqual(ws.cell(row=1, column=21).value, "PIM预测分子离子峰(m/z)")
-        self.assertEqual(ws.cell(row=1, column=22).value, "PIM预测分子量(Da)")
-        self.assertEqual(ws.cell(row=1, column=23).value, "PIM置信指数")
-        self.assertEqual(ws.cell(row=1, column=24).value, "PIM状态")
+        # PIM 列 (col 21-22)
+        self.assertEqual(ws.cell(row=1, column=21).value, "PIM预测分子量(Da)")
+        self.assertEqual(ws.cell(row=1, column=22).value, "PIM置信指数")
 
-        self.assertEqual(ws.cell(row=2, column=21).value, 180)
-        self.assertEqual(ws.cell(row=2, column=22).value, 180)
-        self.assertAlmostEqual(ws.cell(row=2, column=23).value, 1.2346, places=4)
-        self.assertEqual(ws.cell(row=2, column=24).value, "ok: PIM 预测成功")
+        # SS-HM 列 (col 23-24)
+        self.assertEqual(ws.cell(row=1, column=23).value, "SS-HM预测分子量(Da)")
+        self.assertEqual(ws.cell(row=1, column=24).value, "SS-HM置信度")
+
+        # iHS-HM 列 (col 25-26)
+        self.assertEqual(ws.cell(row=1, column=25).value, "iHS-HM预测分子量(Da)")
+        self.assertEqual(ws.cell(row=1, column=26).value, "iHS-HM置信度")
 
         workbook.close()
 
-    def test_tic_sheet_writes_error_status_without_numeric_values(self) -> None:
+    def test_tic_sheet_ok_values(self) -> None:
         """
         功能:
-            验证 error/no_spectrum 状态下仅输出状态说明.
+            验证 ok 状态下所有预测列写入正确数值.
+        """
+        workbook = openpyxl.Workbook()
+        ws = workbook.active
+
+        ReportGenerator()._write_tic_sheet(ws, [self._build_sample_ok()])
+
+        # PIM: col 21=MW, col 22=confidence
+        self.assertEqual(ws.cell(row=2, column=21).value, 180)
+        self.assertAlmostEqual(ws.cell(row=2, column=22).value, 1.2346, places=4)
+
+        # SS-HM: col 23=MW, col 24=confidence
+        self.assertEqual(ws.cell(row=2, column=23).value, 182)
+        self.assertAlmostEqual(ws.cell(row=2, column=24).value, 0.8765, places=4)
+
+        # iHS-HM: col 25=MW, col 26=confidence
+        self.assertEqual(ws.cell(row=2, column=25).value, 183)
+        self.assertAlmostEqual(ws.cell(row=2, column=26).value, 0.012345, places=6)
+
+        workbook.close()
+
+    def test_tic_sheet_error_status_without_numeric_values(self) -> None:
+        """
+        功能:
+            验证 error 状态下预测列无数值输出.
         """
         workbook = openpyxl.Workbook()
         ws = workbook.active
 
         ReportGenerator()._write_tic_sheet(ws, [self._build_sample_error()])
 
+        # PIM: error 状态不写入数值
         self.assertIsNone(ws.cell(row=2, column=21).value)
         self.assertIsNone(ws.cell(row=2, column=22).value)
+
+        # SS-HM: error 状态不写入数值
         self.assertIsNone(ws.cell(row=2, column=23).value)
-        self.assertEqual(ws.cell(row=2, column=24).value, "error: PIM 置信指数计算失败")
+        self.assertIsNone(ws.cell(row=2, column=24).value)
+
+        # iHS-HM: error 状态不写入数值
+        self.assertIsNone(ws.cell(row=2, column=25).value)
+        self.assertIsNone(ws.cell(row=2, column=26).value)
 
         workbook.close()
 

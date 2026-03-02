@@ -33,9 +33,10 @@ class Settings:
     gc_ms_timeout: float = 10.0
 
     # ---------- UPLC_QTOF 设备(预留) ----------
-    uplc_qtof_host: str = "192.168.3.185"
+    uplc_qtof_host: str = "10.40.8.69"
     uplc_qtof_port: int = 5792
     uplc_qtof_timeout: float = 10.0
+    uplc_qtof_append_wash_stop: bool = False
 
     # ---------- HPLC 设备(预留) ----------
     hplc_host: str = "192.168.3.186"
@@ -70,6 +71,27 @@ class Settings:
     pim_ab_m: float = 0.3
     pim_beta: float = 5.0
     pim_epsilon_f: float = 0.0
+
+    # ---------- MSPepSearch 预测配置 ----------
+    mspepsearch_enable: bool = True
+    mspepsearch_exe: Path = field(
+        default_factory=lambda: Path(
+            r"D:\EIMS-mass-predictions\R_ShinyApplication\shiny\wrk"
+            r"\MSPepSearch\2017_05_15_MSPepSearch\x64\MSPepSearch64.exe"
+        )
+    )
+    mspepsearch_lib_path: Path = field(
+        default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib")
+    )
+    mspepsearch_lib_type: str = "MAIN"  # MAIN / REPL / LIB
+    nist_mainlib_msp: Path = field(
+        default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.msp")
+    )
+    sshm_hits: int = 25        # SS-HM 搜索返回命中数
+    sshm_b_ss: int = 75        # SS-HM 概率加权参数 B_SS
+    ihshm_hits: int = 25       # iHS-HM 搜索返回命中数
+    ihshm_mEMF: int = 700      # iHS-HM 最小匹配因子阈值
+    mspepsearch_timeout: float = 120.0
 
     # ---------- 峰检测与积分参数 ----------
     peak_smoothing_window: int = 11
@@ -143,6 +165,7 @@ class Settings:
         环境变量:
             ANALYSIS_GC_MS_HOST, ANALYSIS_GC_MS_PORT, ANALYSIS_GC_MS_TIMEOUT,
             ANALYSIS_UPLC_QTOF_HOST, ANALYSIS_UPLC_QTOF_PORT, ANALYSIS_UPLC_QTOF_TIMEOUT,
+            ANALYSIS_UPLC_QTOF_APPEND_WASH_STOP,
             ANALYSIS_HPLC_HOST, ANALYSIS_HPLC_PORT, ANALYSIS_HPLC_TIMEOUT,
             ANALYSIS_GC_MS_DATA_DIR, ANALYSIS_UPLC_QTOF_DATA_DIR, ANALYSIS_HPLC_DATA_DIR,
             ANALYSIS_SYNTHESIS_TASKS_DIR, ANALYSIS_DATA_DIR, ANALYSIS_LOG_LEVEL,
@@ -166,7 +189,12 @@ class Settings:
             ANALYSIS_PIM_BETA, ANALYSIS_PIM_EPSILON_F,
             ANALYSIS_ALIGNMENT_INCLUDE_TIC_ONLY,
             ANALYSIS_ALIGNMENT_INCLUDE_FID_ONLY,
-            ANALYSIS_TIC_PLOT_SHOW_COMPOUND.
+            ANALYSIS_TIC_PLOT_SHOW_COMPOUND,
+            ANALYSIS_MSPEPSEARCH_ENABLE, ANALYSIS_MSPEPSEARCH_EXE,
+            ANALYSIS_MSPEPSEARCH_LIB_PATH, ANALYSIS_MSPEPSEARCH_LIB_TYPE,
+            ANALYSIS_NIST_MAINLIB_MSP, ANALYSIS_SSHM_HITS,
+            ANALYSIS_SSHM_B_SS, ANALYSIS_IHSHM_HITS,
+            ANALYSIS_IHSHM_MEMF, ANALYSIS_MSPEPSEARCH_TIMEOUT.
         """
         defaults = Settings()
 
@@ -213,6 +241,9 @@ class Settings:
             uplc_qtof_host=_str("ANALYSIS_UPLC_QTOF_HOST", defaults.uplc_qtof_host),
             uplc_qtof_port=_int("ANALYSIS_UPLC_QTOF_PORT", defaults.uplc_qtof_port),
             uplc_qtof_timeout=_float("ANALYSIS_UPLC_QTOF_TIMEOUT", defaults.uplc_qtof_timeout),
+            uplc_qtof_append_wash_stop=_bool(
+                "ANALYSIS_UPLC_QTOF_APPEND_WASH_STOP", defaults.uplc_qtof_append_wash_stop
+            ),
             hplc_host=_str("ANALYSIS_HPLC_HOST", defaults.hplc_host),
             hplc_port=_int("ANALYSIS_HPLC_PORT", defaults.hplc_port),
             hplc_timeout=_float("ANALYSIS_HPLC_TIMEOUT", defaults.hplc_timeout),
@@ -252,6 +283,16 @@ class Settings:
             pim_ab_m=_float("ANALYSIS_PIM_AB_M", defaults.pim_ab_m),
             pim_beta=_float("ANALYSIS_PIM_BETA", defaults.pim_beta),
             pim_epsilon_f=_float("ANALYSIS_PIM_EPSILON_F", defaults.pim_epsilon_f),
+            mspepsearch_enable=_bool("ANALYSIS_MSPEPSEARCH_ENABLE", defaults.mspepsearch_enable),
+            mspepsearch_exe=_path("ANALYSIS_MSPEPSEARCH_EXE", defaults.mspepsearch_exe),
+            mspepsearch_lib_path=_path("ANALYSIS_MSPEPSEARCH_LIB_PATH", defaults.mspepsearch_lib_path),
+            mspepsearch_lib_type=_str("ANALYSIS_MSPEPSEARCH_LIB_TYPE", defaults.mspepsearch_lib_type),
+            nist_mainlib_msp=_path("ANALYSIS_NIST_MAINLIB_MSP", defaults.nist_mainlib_msp),
+            sshm_hits=_int("ANALYSIS_SSHM_HITS", defaults.sshm_hits),
+            sshm_b_ss=_int("ANALYSIS_SSHM_B_SS", defaults.sshm_b_ss),
+            ihshm_hits=_int("ANALYSIS_IHSHM_HITS", defaults.ihshm_hits),
+            ihshm_mEMF=_int("ANALYSIS_IHSHM_MEMF", defaults.ihshm_mEMF),
+            mspepsearch_timeout=_float("ANALYSIS_MSPEPSEARCH_TIMEOUT", defaults.mspepsearch_timeout),
             peak_rt_min=_opt_float("ANALYSIS_PEAK_RT_MIN", defaults.peak_rt_min),
             peak_rt_max=_opt_float("ANALYSIS_PEAK_RT_MAX", defaults.peak_rt_max),
             tic_area_min=_opt_float("ANALYSIS_TIC_AREA_MIN", defaults.tic_area_min),

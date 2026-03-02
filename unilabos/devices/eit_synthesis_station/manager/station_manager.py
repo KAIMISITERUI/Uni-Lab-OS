@@ -745,6 +745,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             ("闪滤液种类", "乙腈"),
             ("闪滤液用量(μL)", 500),
             ("取样量(μL)", 1),
+            ("闪滤实验编号", "全部"),   # 空/"全部"=全部实验闪滤; 支持 "1-12,24,28" 格式
             ("", ""),  # 空行
         ]
         left_param_rows = len(left_params)

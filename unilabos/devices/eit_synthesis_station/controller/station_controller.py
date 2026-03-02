@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from collections import OrderedDict
 from datetime import datetime
 
@@ -17,6 +17,56 @@ import math
 import uuid
 
 JsonDict = Dict[str, Any]
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_filter_experiment_numbers(raw_text: Any) -> Optional[Set[int]]:
+    """
+    功能:
+        解析闪滤实验编号字符串, 支持范围和逗号分隔, 兼容中文标点.
+        空字符串或"全部"返回 None, 表示全部实验均需闪滤.
+    参数:
+        raw_text: Any, 用户输入, 例如 "1-12,24,28" 或 "1-12，24，28" 或 "全部".
+    返回:
+        Optional[Set[int]], 实验编号集合; None 表示全部实验均需闪滤.
+    """
+    text = str(raw_text).strip() if raw_text is not None else ""
+    if text == "" or text == "全部":
+        return None
+
+    # 统一中文标点为英文标点
+    text = text.replace("，", ",")
+    text = text.replace("、", ",")
+    text = text.replace("—", "-")
+    text = text.replace("－", "-")
+    text = text.replace("\u2013", "-")  # en-dash
+    text = text.replace("\u2014", "-")  # em-dash
+    text = text.replace(" ", "")
+
+    result: Set[int] = set()
+    for segment in text.split(","):
+        segment = segment.strip()
+        if segment == "":
+            continue
+        if "-" in segment:
+            parts = segment.split("-", 1)
+            try:
+                start = int(parts[0])
+                end = int(parts[1])
+                if start > end:
+                    start, end = end, start
+                result.update(range(start, end + 1))
+            except ValueError:
+                logger.warning("闪滤实验编号解析失败, 无法识别范围: '%s'", segment)
+        else:
+            try:
+                result.add(int(segment))
+            except ValueError:
+                logger.warning("闪滤实验编号解析失败, 无法识别编号: '%s'", segment)
+
+    return result if len(result) > 0 else None
+
 
 class SynthesisStationController:
     """
@@ -3357,6 +3407,11 @@ class SynthesisStationController:
         fixed_order = str(params.get("固定加料顺序", "否")).strip() == "是"
         exp_count = len(data_rows)
 
+        # 解析闪滤实验编号, None 表示全部实验均需闪滤
+        filter_exp_numbers = _parse_filter_experiment_numbers(
+            params.get("闪滤实验编号", "")
+        )
+
         if exp_count not in [12, 24, 36, 48]:
             self._logger.warning(f"实验数量 {exp_count} 非标准(12/24/36/48).")
 
@@ -3684,15 +3739,18 @@ class SynthesisStationController:
             # 闪滤操作: 闪滤液种类 + 闪滤液用量(μL) + 取样量(μL)
             filter_name = str(params.get("闪滤液种类", "")).strip()
             if filter_name != "":
-                self._add_filter_unit(
-                    layout_list,
-                    common_fields,
-                    unit_column,
-                    ROW_IDX_FILTER,
-                    filter_name,
-                    chemical_db,
-                    params,
-                )
+                current_exp_no = exp_idx + 1  # 实验编号从1开始
+                # filter_exp_numbers 为 None 时表示全部实验都需要闪滤
+                if filter_exp_numbers is None or current_exp_no in filter_exp_numbers:
+                    self._add_filter_unit(
+                        layout_list,
+                        common_fields,
+                        unit_column,
+                        ROW_IDX_FILTER,
+                        filter_name,
+                        chemical_db,
+                        params,
+                    )
 
         return {
             "task_id": 0,

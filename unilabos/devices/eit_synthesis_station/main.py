@@ -195,27 +195,34 @@ def _update_task_id(result):
 
 # ===================== 工作流执行器 =====================
 
-def _run_workflow(steps):
+def _run_workflow(steps, quick=False):
     """
     功能:
-        按顺序执行工作流步骤, 每步可跳过或终止
+        按顺序执行工作流步骤, 每步可跳过或终止;
+        quick=True 时跳过逐步确认, 直接连续执行
     参数:
         steps: list[tuple[str, callable]], (步骤名, 执行函数) 列表
+        quick: bool, 是否跳过逐步确认直接执行
     返回:
         None
     """
     for i, (name, action) in enumerate(steps, 1):
         print(f"\n--- 步骤 {i}/{len(steps)}: {name} ---")
-        confirm = input("继续执行? (y/n/q) [默认: y]: ").strip().lower()
-        if confirm == "n":
-            print(f"已跳过: {name}")
-            continue
-        if confirm == "q":
-            print("工作流已终止")
-            return
+        if quick is False:
+            confirm = input("继续执行? (y/n/q) [默认: y]: ").strip().lower()
+            if confirm == "n":
+                print(f"已跳过: {name}")
+                continue
+            if confirm == "q":
+                print("工作流已终止")
+                return
         result = _safe_run(action)
         if result is None:
-            retry = input("该步骤可能未成功, 是否继续后续步骤? (y/n) [默认: n]: ").strip().lower()
+            if quick is True:
+                # 快速模式下步骤失败, 询问是否继续
+                continue
+            else:
+                retry = input("该步骤可能未成功, 是否继续后续步骤? (y/n) [默认: n]: ").strip().lower()
             if retry != "y":
                 print("工作流已终止")
                 return
@@ -231,7 +238,7 @@ def _menu_quick_workflow(manager):
         ("1", "完整合成流程(AGV上料)"),
         ("2", "完整合成流程(手动上料)"),
         ("3", "提交任务流程"),
-        ("4", "AGV执行流程"),
+        ("4", "合成任务+分析执行流程"),
         ("0", "返回上级菜单"),
     ]
 
@@ -262,7 +269,7 @@ def _menu_quick_workflow(manager):
                 ("提交分析任务", lambda: manager.run_analysis()),
                 ("谱图数据处理", lambda: manager.poll_analysis_run()),
             ]
-            _run_workflow(steps)
+            _run_workflow(steps, quick=True)
 
         elif choice == "2":
             # 完整合成流程(手动上料)
@@ -280,7 +287,7 @@ def _menu_quick_workflow(manager):
                 ("提交分析任务", lambda: manager.run_analysis()),
                 ("谱图数据处理", lambda: manager.poll_analysis_run()),
             ]
-            _run_workflow(steps)
+            _run_workflow(steps, quick=True)
 
         elif choice == "3":
             # 提交任务流程
@@ -289,7 +296,7 @@ def _menu_quick_workflow(manager):
                 ("上传任务到工站", lambda: _update_task_id(manager.create_task_by_file(task_tpl, chem_db))),
                 ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
             ]
-            _run_workflow(steps)
+            _run_workflow(steps, quick=True)
 
         elif choice == "4":
             # AGV执行流程
@@ -305,7 +312,7 @@ def _menu_quick_workflow(manager):
                 ("提交分析任务", lambda: manager.run_analysis()),
                 ("谱图数据处理", lambda: manager.poll_analysis_run()),
             ]
-            _run_workflow(steps)
+            _run_workflow(steps, quick=True)
 
         else:
             print("无效选择, 请重新输入")

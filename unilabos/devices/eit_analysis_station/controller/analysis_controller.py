@@ -4,7 +4,7 @@
 功能:
     分析站上层控制器, 读取合成任务 xlsx 中的实验信息和仪器方法配置,
     自动生成分析任务 CSV 并通过 ZhidaClient 提交至对应仪器.
-    当前已实现 GC_MS 接入, UPLC_QTOF 和 HPLC 预留占位.
+    当前已实现 GC_MS 和 UPLC_QTOF 提交, HPLC 自动提交流程预留占位.
 参数:
     无(通过 Settings 传入配置).
 返回:
@@ -28,9 +28,14 @@ from ..driver.zhida_driver import ZhidaClient
 from ..processor.chromatogram_plotter import ChromatogramPlotter
 from ..processor.data_reader import GCMSDataReader
 from ..processor.molecular_mass_predictor import PIMPredictor
+from ..processor.mspepsearch_predictor import MSPepSearchPredictor
+from ..processor.nist_library_reader import NistLibraryReader
 from ..processor.peak_integrator import PeakIntegrator, PeakResult
 from ..processor.nist_matcher import NISTMatcher
-from ..processor.report_generator import PIMPrediction, ReportGenerator, SampleResult
+from ..processor.report_generator import (
+    PIMPrediction, SSHMPrediction, iHSHMPrediction,
+    ReportGenerator, SampleResult,
+)
 from ..processor.yield_calculator import YieldCalculator
 
 
@@ -56,7 +61,7 @@ class AnalysisStationController:
         2. 检查任务状态(非 COMPLETED 时发出 warning 但继续).
         3. 解析任务 xlsx, 提取实验数量及各仪器方法名称.
         4. 生成分析任务 CSV, 双路保存.
-        5. 通过 ZhidaClient 提交 CSV 给 GC_MS 仪器.
+        5. 通过 ZhidaClient 提交 CSV 给 GC_MS 和 UPLC_QTOF 仪器.
     参数:
         settings: Settings 实例, 为 None 时从环境变量读取.
     返回:
@@ -219,8 +224,11 @@ class AnalysisStationController:
                 task_id (str): 任务 ID.
                 exp_count (int): 实验数量.
                 gc_ms_method (str|None): GC_MS 方法名, None 表示不使用.
+                gc_ms_exp_nums (List[int]|None): GC_MS 实验编号过滤列表.
                 uplc_qtof_method (str|None): UPLC_QTOF 方法名.
+                uplc_qtof_exp_nums (List[int]|None): UPLC_QTOF 实验编号过滤列表.
                 hplc_method (str|None): HPLC 方法名.
+                hplc_exp_nums (List[int]|None): HPLC 实验编号过滤列表.
         """
         # 优先查找新命名 xlsx, 兼容旧命名和 .csv
         xlsx_path = task_dir / f"{task_id}_experiment_plan.xlsx"
@@ -244,9 +252,9 @@ class AnalysisStationController:
         ws = wb.active
 
         exp_count = 0
-        gc_ms_method: Optional[str] = None
-        uplc_qtof_method: Optional[str] = None
-        hplc_method: Optional[str] = None
+        gc_ms_method_raw: Optional[str] = None
+        uplc_qtof_method_raw: Optional[str] = None
+        hplc_method_raw: Optional[str] = None
 
         for row in ws.iter_rows(values_only=True):
             col_a = row[0] if len(row) > 0 else None
@@ -269,27 +277,159 @@ class AnalysisStationController:
 
             if col_a_str == "GC_MS":
                 # col B 为方法名, 空值则跳过该仪器
-                gc_ms_method = str(col_b).strip() if col_b is not None else None
+                gc_ms_method_raw = str(col_b).strip() if col_b is not None else None
             elif col_a_str == "UPLC_QTOF":
-                uplc_qtof_method = str(col_b).strip() if col_b is not None else None
+                uplc_qtof_method_raw = str(col_b).strip() if col_b is not None else None
             elif col_a_str == "HPLC":
-                hplc_method = str(col_b).strip() if col_b is not None else None
+                hplc_method_raw = str(col_b).strip() if col_b is not None else None
 
         if exp_count == 0:
             raise ValueError(f"未能从 {file_path} 中读取到有效实验编号, 请检查 col C 数据.")
 
+        # 支持 Method(1-8,9) 写法, 提取方法名与实验编号过滤列表.
+        gc_ms_method, gc_ms_exp_nums = self._parse_method_and_exp_filter(
+            gc_ms_method_raw, exp_count, "GC_MS"
+        )
+        uplc_qtof_method, uplc_qtof_exp_nums = self._parse_method_and_exp_filter(
+            uplc_qtof_method_raw, exp_count, "UPLC_QTOF"
+        )
+        hplc_method, hplc_exp_nums = self._parse_method_and_exp_filter(
+            hplc_method_raw, exp_count, "HPLC"
+        )
+
         self._logger.info(
-            "任务解析完成: 实验数=%d, GC_MS方法=%s, UPLC_QTOF方法=%s, HPLC方法=%s",
-            exp_count, gc_ms_method, uplc_qtof_method, hplc_method
+            "任务解析完成: 实验数=%d, GC_MS方法=%s, GC_MS实验=%s, UPLC_QTOF方法=%s, "
+            "UPLC_QTOF实验=%s, HPLC方法=%s, HPLC实验=%s",
+            exp_count,
+            gc_ms_method,
+            gc_ms_exp_nums if gc_ms_exp_nums is not None else "ALL",
+            uplc_qtof_method,
+            uplc_qtof_exp_nums if uplc_qtof_exp_nums is not None else "ALL",
+            hplc_method,
+            hplc_exp_nums if hplc_exp_nums is not None else "ALL",
         )
 
         return {
             "task_id": task_id,
             "exp_count": exp_count,
             "gc_ms_method": gc_ms_method,
+            "gc_ms_exp_nums": gc_ms_exp_nums,
             "uplc_qtof_method": uplc_qtof_method,
+            "uplc_qtof_exp_nums": uplc_qtof_exp_nums,
             "hplc_method": hplc_method,
+            "hplc_exp_nums": hplc_exp_nums,
         }
+
+    def _parse_method_and_exp_filter(
+        self,
+        raw_method: Optional[str],
+        exp_count: int,
+        instrument: str,
+    ) -> Tuple[Optional[str], Optional[List[int]]]:
+        """
+        功能:
+            解析方法字符串中的实验编号过滤表达式.
+            支持 `Generic_15min(1-8,9)` 和 `Generic_15min（1-8，9）` 等写法.
+            仅当括号内容为数字范围表达式时启用过滤, 否则保持原方法名不变.
+        参数:
+            raw_method: 原始方法字符串, None 或空字符串表示未配置.
+            exp_count: 实验总数, 用于校验编号范围.
+            instrument: 仪器名称, 用于日志和错误信息.
+        返回:
+            Tuple[Optional[str], Optional[List[int]]]:
+                第一个值为去掉过滤后的方法名, 第二个值为过滤实验编号列表.
+                若未配置过滤, 第二个值为 None.
+        """
+        if raw_method is None:
+            return None, None
+
+        method_text = raw_method.strip()
+        if method_text == "":
+            return None, None
+
+        # 仅匹配结尾一对括号, 避免干扰方法名中间内容.
+        match = re.match(r"^(.*?)[\(（]\s*(.*?)\s*[\)）]\s*$", method_text)
+        if match is None:
+            return method_text, None
+
+        method_name = match.group(1).strip()
+        selector_text = match.group(2).strip()
+
+        if selector_text == "":
+            return method_text, None
+
+        # 仅当括号中是编号表达式时才按过滤处理, 其余情况保持原方法名.
+        if re.fullmatch(r"[0-9０-９\s,，、;；\-－—–~～到至]+", selector_text) is None:
+            return method_text, None
+
+        if method_name == "":
+            raise ValueError(f"{instrument} 方法配置无效, 括号前方法名不能为空: {raw_method}")
+
+        exp_nums = self._parse_exp_selector(selector_text, exp_count, instrument)
+        return method_name, exp_nums
+
+    def _parse_exp_selector(self, selector_text: str, exp_count: int, instrument: str) -> List[int]:
+        """
+        功能:
+            将实验编号过滤表达式解析为有序去重的实验编号列表.
+            支持中英文括号内的中文标点, 例如 `1-8,9` `1～8，9` `1到8、9`.
+        参数:
+            selector_text: 括号内原始表达式文本.
+            exp_count: 实验总数, 用于范围校验.
+            instrument: 仪器名称, 用于错误提示.
+        返回:
+            List[int], 有序去重后的实验编号列表.
+        """
+        full_width_digits = str.maketrans("０１２３４５６７８９", "0123456789")
+        normalized = selector_text.translate(full_width_digits)
+
+        # 统一分隔符与范围连接符, 简化后续解析.
+        normalized = normalized.replace("，", ",").replace("、", ",").replace("；", ",").replace(";", ",")
+        for range_sep in ("－", "—", "–", "~", "～", "到", "至"):
+            normalized = normalized.replace(range_sep, "-")
+        normalized = normalized.replace(" ", "")
+
+        if normalized == "":
+            raise ValueError(f"{instrument} 方法实验编号为空, 请检查括号内容: {selector_text}")
+
+        exp_num_set = set()
+        for token in normalized.split(","):
+            if token == "":
+                continue
+
+            if "-" in token:
+                parts = token.split("-")
+                if len(parts) != 2 or parts[0] == "" or parts[1] == "":
+                    raise ValueError(f"{instrument} 方法实验编号格式无效: {selector_text}")
+
+                try:
+                    start_num = int(parts[0])
+                    end_num = int(parts[1])
+                except ValueError as exc:
+                    raise ValueError(f"{instrument} 方法实验编号格式无效: {selector_text}") from exc
+
+                if start_num > end_num:
+                    raise ValueError(f"{instrument} 方法实验编号范围无效: {selector_text}")
+
+                for exp_num in range(start_num, end_num + 1):
+                    exp_num_set.add(exp_num)
+            else:
+                try:
+                    exp_num_set.add(int(token))
+                except ValueError as exc:
+                    raise ValueError(f"{instrument} 方法实验编号格式无效: {selector_text}") from exc
+
+        if len(exp_num_set) == 0:
+            raise ValueError(f"{instrument} 方法实验编号为空, 请检查括号内容: {selector_text}")
+
+        exp_nums = sorted(exp_num_set)
+        invalid_nums = [num for num in exp_nums if num < 1 or num > exp_count]
+        if len(invalid_nums) > 0:
+            raise ValueError(
+                f"{instrument} 方法实验编号超出范围(1-{exp_count}): {invalid_nums}, 原始表达式: {selector_text}"
+            )
+
+        return exp_nums
 
     # ------------------------------------------------------------------
     # VialPos 计算
@@ -328,15 +468,23 @@ class AnalysisStationController:
     # CSV 生成
     # ------------------------------------------------------------------
 
-    def _generate_gc_ms_csv(self, task_id: str, exp_count: int, method: str) -> str:
+    def _generate_gc_ms_csv(
+        self,
+        task_id: str,
+        exp_count: int,
+        method: str,
+        exp_nums: Optional[List[int]] = None,
+    ) -> str:
         """
         功能:
             生成 GC_MS 分析任务 CSV 字符串.
             每一行对应一个实验样品, VialPos 由蛇形映射公式计算.
+            当传入 exp_nums 时, 仅为指定实验编号生成提交行.
         参数:
             task_id: 任务 ID, 用于拼接 SampleName/OutputFile.
             exp_count: 实验数量.
             method: GC_MS 方法名称.
+            exp_nums: 可选实验编号列表, None 表示 1..exp_count 全量提交.
         返回:
             str: CSV 文本内容(含列头).
         """
@@ -346,7 +494,9 @@ class AnalysisStationController:
         # 写入列头
         writer.writerow(self._CSV_HEADERS)
 
-        for exp_num in range(1, exp_count + 1):
+        target_exp_nums = exp_nums if exp_nums is not None else list(range(1, exp_count + 1))
+
+        for exp_num in target_exp_nums:
             sample_name = f"{task_id}-{exp_num}"          # 如 "719-1"
             vial_pos = self._calc_vial_pos(exp_num)        # VialPos 蛇形映射
             writer.writerow([
@@ -422,9 +572,11 @@ class AnalysisStationController:
             self._logger.info(msg)
             return {"success": True, "return_info": msg}
 
+        gc_ms_exp_nums = task_info.get("gc_ms_exp_nums")
+
         # 步骤1: 生成并保存 CSV
         csv_content = self._generate_gc_ms_csv(
-            resolved_id, task_info["exp_count"], gc_ms_method
+            resolved_id, task_info["exp_count"], gc_ms_method, gc_ms_exp_nums
         )
         saved_paths = self._save_csv(csv_content, resolved_id, "gc_ms")
 
@@ -437,6 +589,8 @@ class AnalysisStationController:
         self._logger.info(
             "连接 GC_MS: %s:%d", self._settings.gc_ms_host, self._settings.gc_ms_port
         )
+        if gc_ms_exp_nums is not None:
+            self._logger.info("GC_MS 按实验编号过滤提交: %s", gc_ms_exp_nums)
 
         try:
             client.connect()
@@ -479,6 +633,147 @@ class AnalysisStationController:
             return {"success": False, "return_info": msg}
 
     # ------------------------------------------------------------------
+    # UPLC_QTOF 提交流程
+    # ------------------------------------------------------------------
+
+    def _do_submit_uplc_qtof(self, resolved_id: str, task_info: Dict) -> Dict:
+        """
+        功能:
+            UPLC_QTOF 提交核心逻辑(内部方法), 接收已解析的任务信息直接执行.
+            通过复用统一 CSV 协议格式, 避免 run_analysis 统一调度时重复解析 xlsx.
+        参数:
+            resolved_id: 任务 ID 字符串.
+            task_info: _parse_task_xlsx 返回的任务信息字典.
+        返回:
+            Dict: {"success": bool, "return_info": str}.
+        """
+        uplc_qtof_method = task_info["uplc_qtof_method"]
+
+        if uplc_qtof_method is None:
+            msg = f"任务 {resolved_id} 未配置 UPLC_QTOF 方法, 跳过 UPLC_QTOF 提交."
+            self._logger.info(msg)
+            return {"success": True, "return_info": msg}
+
+        uplc_qtof_exp_nums = task_info.get("uplc_qtof_exp_nums")
+
+        # UPLC_QTOF 与 GC_MS 使用一致的 CSV 协议格式.
+        csv_content = self._generate_gc_ms_csv(
+            resolved_id, task_info["exp_count"], uplc_qtof_method, uplc_qtof_exp_nums
+        )
+
+        if self._settings.uplc_qtof_append_wash_stop is True:
+            # 末尾追加 wash_stop 行, 仅写方法名, 不填进样信息.
+            wash_buf = io.StringIO()
+            wash_writer = csv.writer(wash_buf, lineterminator="\n")
+            wash_writer.writerow(["", "wash_stop", "", "", "", ""])
+            csv_content += wash_buf.getvalue()
+            self._logger.info("UPLC_QTOF 已追加停止方法行: wash_stop")
+        else:
+            self._logger.info("UPLC_QTOF 已关闭追加停止方法")
+
+        saved_paths = self._save_csv(csv_content, resolved_id, "uplc_qtof")
+
+        client = ZhidaClient(
+            host=self._settings.uplc_qtof_host,
+            port=self._settings.uplc_qtof_port,
+            timeout=self._settings.uplc_qtof_timeout,
+        )
+        self._logger.info(
+            "连接 UPLC_QTOF: %s:%d",
+            self._settings.uplc_qtof_host,
+            self._settings.uplc_qtof_port,
+        )
+        if uplc_qtof_exp_nums is not None:
+            self._logger.info("UPLC_QTOF 按实验编号过滤提交: %s", uplc_qtof_exp_nums)
+
+        try:
+            client.connect()
+            submit_path = str(saved_paths[0])
+            result = client.start_with_csv_file(string=submit_path)
+        finally:
+            client.close()
+
+        self._logger.info("UPLC_QTOF 提交结果: %s", result)
+        return result
+
+    def submit_uplc_qtof(self, task_id: Optional[str] = None) -> Dict:
+        """
+        功能:
+            UPLC_QTOF 分析任务完整提交流程(公开入口, 独立调用时使用):
+            1. 定位任务目录(task_id 或最新).
+            2. 检查 task_info.json 状态, 非 COMPLETED 时 warning 后继续.
+            3. 解析 xlsx, 若无 uplc_qtof_method 则跳过提交.
+            4. 生成分析 CSV 并双路保存.
+            5. ZhidaClient 连接 UPLC_QTOF 并调用 start_with_csv_file 提交.
+        参数:
+            task_id: 任务 ID 字符串, None 表示自动选取最新任务.
+        返回:
+            Dict: {"success": bool, "return_info": str}.
+        """
+        try:
+            task_dir, resolved_id = self._find_task_dir(task_id)
+            self._check_task_status(task_dir)
+            task_info = self._parse_task_xlsx(task_dir, resolved_id)
+            return self._do_submit_uplc_qtof(resolved_id, task_info)
+        except Exception as exc:
+            msg = f"UPLC_QTOF 提交失败: {exc}"
+            self._logger.error(msg)
+            return {"success": False, "return_info": msg}
+
+    def submit_by_csv_path(self, instrument: str, csv_file_path: str) -> Dict:
+        """
+        功能:
+            按指定仪器和 CSV 文件路径直接提交分析任务.
+            支持 gc_ms, uplc_qtof, hplc 三种仪器.
+        参数:
+            instrument: 仪器标识, 可选值为 gc_ms/uplc_qtof/hplc.
+            csv_file_path: CSV 文件路径.
+        返回:
+            Dict: {"success": bool, "return_info": str}.
+        """
+        instrument_key = instrument.strip().lower()
+        instrument_configs = {
+            "gc_ms": ("GC_MS", self._settings.gc_ms_host, self._settings.gc_ms_port, self._settings.gc_ms_timeout),
+            "uplc_qtof": (
+                "UPLC_QTOF",
+                self._settings.uplc_qtof_host,
+                self._settings.uplc_qtof_port,
+                self._settings.uplc_qtof_timeout,
+            ),
+            "hplc": ("HPLC", self._settings.hplc_host, self._settings.hplc_port, self._settings.hplc_timeout),
+        }
+
+        if instrument_key not in instrument_configs:
+            msg = "仪器参数无效, 可选值: gc_ms, uplc_qtof, hplc."
+            self._logger.error(msg)
+            return {"success": False, "return_info": msg}
+
+        csv_path = Path(csv_file_path)
+        if csv_path.exists() is False or csv_path.is_file() is False:
+            msg = f"CSV 文件不存在或不是文件: {csv_file_path}"
+            self._logger.error(msg)
+            return {"success": False, "return_info": msg}
+
+        instrument_name, host, port, timeout = instrument_configs[instrument_key]
+        client = ZhidaClient(host=host, port=port, timeout=timeout)
+        self._logger.info(
+            "按路径提交 CSV, 仪器=%s, 地址=%s:%d, 文件=%s",
+            instrument_name, host, port, csv_path,
+        )
+
+        try:
+            client.connect()
+            result = client.start_with_csv_file(string=str(csv_path))
+            self._logger.info("%s 手工 CSV 提交结果: %s", instrument_name, result)
+            return result
+        except Exception as exc:
+            msg = f"{instrument_name} CSV 提交失败: {exc}"
+            self._logger.error(msg)
+            return {"success": False, "return_info": msg}
+        finally:
+            client.close()
+
+    # ------------------------------------------------------------------
     # 统一分析入口
     # ------------------------------------------------------------------
 
@@ -487,8 +782,9 @@ class AnalysisStationController:
         功能:
             统一分析入口, 依据 xlsx 中各仪器方法配置依次处理.
             xlsx 仅解析一次, 各仪器提交直接调用内部核心方法避免重复解析.
-            当前已实现: GC_MS.
-            预留未实现: UPLC_QTOF, HPLC(方法存在时发出 warning).
+            支持方法写法 `Method(1-8,9)`, 仅提交括号中实验编号对应样品.
+            当前已实现: GC_MS, UPLC_QTOF.
+            预留未实现: HPLC 自动提交流程(方法存在时发出 warning).
         参数:
             task_id: 任务 ID 字符串, None 表示自动选取最新任务.
         返回:
@@ -517,13 +813,13 @@ class AnalysisStationController:
         else:
             results["gc_ms"] = {"success": True, "return_info": "未配置 GC_MS 方法, 已跳过."}
 
-        # ---------- UPLC_QTOF(预留) ----------
+        # ---------- UPLC_QTOF ----------
         if task_info["uplc_qtof_method"] is not None:
-            self._logger.warning(
-                "任务 %s 配置了 UPLC_QTOF 方法 [%s], 但 UPLC_QTOF 接入尚未实现, 已跳过.",
-                resolved_id, task_info["uplc_qtof_method"]
-            )
-            results["uplc_qtof"] = {"success": False, "return_info": "UPLC_QTOF 接入尚未实现."}
+            self._logger.info("开始提交 UPLC_QTOF 分析任务...")
+            try:
+                results["uplc_qtof"] = self._do_submit_uplc_qtof(resolved_id, task_info)
+            except Exception as exc:
+                results["uplc_qtof"] = {"success": False, "return_info": f"UPLC_QTOF 提交失败: {exc}"}
         else:
             results["uplc_qtof"] = {"success": True, "return_info": "未配置 UPLC_QTOF 方法, 已跳过."}
 
@@ -680,14 +976,16 @@ class AnalysisStationController:
 
     def _process_single_sample(
         self, d_dir: Path, nist: NISTMatcher, report_dir: Optional[Path] = None,
+        mspepsearch_predictor: Optional[MSPepSearchPredictor] = None,
     ) -> SampleResult:
         """
         功能:
-            处理单个 .D 目录: 读取 TIC/FID, 积分, NIST 匹配, 生成色谱图.
+            处理单个 .D 目录: 读取 TIC/FID, 积分, NIST 匹配, PIM/SS-HM/iHS-HM 预测, 生成色谱图.
         参数:
             d_dir: .D 目录路径.
             nist: NISTMatcher 实例 (由外部传入, 保持状态复用).
             report_dir: 报告输出目录, 用于保存色谱图. None 则不生成图.
+            mspepsearch_predictor: MSPepSearchPredictor 实例, None 则跳过 SS-HM/iHS-HM 预测.
         返回:
             SampleResult: 该样品的完整积分结果.
         """
@@ -843,6 +1141,35 @@ class AnalysisStationController:
                         message=f"PIM 预测失败: {e}",
                     )
 
+        # SS-HM / iHS-HM 预测 (复用已缓存的峰质谱)
+        if mspepsearch_predictor is not None and mspepsearch_predictor.available:
+            for peak_num, peak in enumerate(result.tic_peaks, start=1):
+                cached_spectrum = peak_ms_cache.get(peak_num)
+                if cached_spectrum is None:
+                    continue
+
+                mz_vals, ms_ints = cached_spectrum
+
+                # SS-HM
+                try:
+                    sshm_pred = mspepsearch_predictor.predict_sshm(mz_vals, ms_ints)
+                    result.sshm_predictions[peak.retention_time] = sshm_pred
+                except Exception as e:
+                    self._logger.error("样品 %s 峰%d SS-HM 预测失败: %s", sample_name, peak_num, e)
+                    result.sshm_predictions[peak.retention_time] = SSHMPrediction(
+                        status="error", message=f"SS-HM 预测失败: {e}",
+                    )
+
+                # iHS-HM
+                try:
+                    ihshm_pred = mspepsearch_predictor.predict_ihshm(mz_vals, ms_ints)
+                    result.ihshm_predictions[peak.retention_time] = ihshm_pred
+                except Exception as e:
+                    self._logger.error("样品 %s 峰%d iHS-HM 预测失败: %s", sample_name, peak_num, e)
+                    result.ihshm_predictions[peak.retention_time] = iHSHMPrediction(
+                        status="error", message=f"iHS-HM 预测失败: {e}",
+                    )
+
         # 生成色谱图 (TIC + FID)
         if report_dir is not None:
             plotter = ChromatogramPlotter()
@@ -949,11 +1276,48 @@ class AnalysisStationController:
             # 本地报告目录 (色谱图也保存在此)
             local_report_dir = self._settings.report_dir / resolved_id
 
+            # 初始化 MSPepSearch 预测器 (SS-HM / iHS-HM)
+            mspepsearch_predictor: Optional[MSPepSearchPredictor] = None
+            if self._settings.mspepsearch_enable is True:
+                try:
+                    # PIMPredictor 供 MSPepSearchPredictor 内部复用
+                    pim_for_mspep = PIMPredictor(
+                        ab_m=self._settings.pim_ab_m,
+                        beta=self._settings.pim_beta,
+                        epsilon_f=self._settings.pim_epsilon_f,
+                    )
+                    # 库谱读取器 (SS-HM 完整版需要, 不可用时自动降级)
+                    nist_lib_reader = NistLibraryReader(self._settings.nist_mainlib_msp)
+
+                    mspepsearch_predictor = MSPepSearchPredictor(
+                        mspepsearch_exe=self._settings.mspepsearch_exe,
+                        lib_path=self._settings.mspepsearch_lib_path,
+                        lib_type=self._settings.mspepsearch_lib_type,
+                        pim_predictor=pim_for_mspep,
+                        nist_lib_reader=nist_lib_reader,
+                        work_dir=local_report_dir,
+                        sshm_hits=self._settings.sshm_hits,
+                        sshm_b_ss=self._settings.sshm_b_ss,
+                        ihshm_hits=self._settings.ihshm_hits,
+                        ihshm_mEMF=self._settings.ihshm_mEMF,
+                        timeout=self._settings.mspepsearch_timeout,
+                    )
+                    if mspepsearch_predictor.available:
+                        self._logger.info("MSPepSearch 预测器初始化成功")
+                    else:
+                        self._logger.warning("MSPepSearch 预测器不可用, 将跳过 SS-HM/iHS-HM 预测")
+                except Exception as exc:
+                    self._logger.warning("MSPepSearch 预测器初始化失败, 将跳过 SS-HM/iHS-HM: %s", exc)
+                    mspepsearch_predictor = None
+
             # 逐样品处理
             sample_results: List[SampleResult] = []
             for d_dir in d_dirs:
                 self._logger.info("处理样品: %s", d_dir.name)
-                sr = self._process_single_sample(d_dir, nist, report_dir=local_report_dir)
+                sr = self._process_single_sample(
+                    d_dir, nist, report_dir=local_report_dir,
+                    mspepsearch_predictor=mspepsearch_predictor,
+                )
                 sample_results.append(sr)
 
             # 收集所有唯一 CAS 号, 批量获取化合物结构图
@@ -1250,7 +1614,8 @@ def main() -> None:
     """
     功能:
         交互式菜单, 用于手动测试 run_analysis / process_gc_ms_results /
-        poll_analysis_run / get_status / get_methods / calculate_yields.
+        poll_analysis_run / get_status / get_methods / calculate_yields /
+        submit_by_csv_path.
         用户可选择功能并输入 task_id, 输入 q 退出.
     参数:
         无.
@@ -1271,6 +1636,7 @@ def main() -> None:
         "  4. get_status            - 获取GC-MS设备当前状态\n"
         "  5. get_methods           - 获取当前Project的方法列表\n"
         "  6. calculate_yields      - 产率计算\n"
+        "  7. submit_by_csv_path    - 选择仪器并按CSV路径直接提交任务\n"
         "  0. 退出\n"
         "================================"
     )
@@ -1283,8 +1649,8 @@ def main() -> None:
             print("已退出测试.")
             break
 
-        if choice not in ("1", "2", "3", "4", "5", "6"):
-            print("无效选择, 请输入 0/1/2/3/4/5/6.")
+        if choice not in ("1", "2", "3", "4", "5", "6", "7"):
+            print("无效选择, 请输入 0/1/2/3/4/5/6/7.")
             continue
 
         # 选项 4/5 直接操作设备驱动, 不需要 task_id
@@ -1310,6 +1676,33 @@ def main() -> None:
                 print(f"\n  操作失败: {exc}\n")
             finally:
                 client.close()
+            continue
+
+        if choice == "7":
+            instrument_options = {
+                "1": ("gc_ms", "GC-MS"),
+                "2": ("uplc_qtof", "UPLC_QTOF"),
+                "3": ("hplc", "HPLC"),
+            }
+            print("\n请选择仪器:")
+            for option, (_, instrument_name) in instrument_options.items():
+                print(f"  {option}. {instrument_name}")
+
+            instrument_choice = input("请输入仪器编号(1/2/3): ").strip()
+            if instrument_choice not in instrument_options:
+                print("无效选择, 请输入 1/2/3.")
+                continue
+
+            instrument = instrument_options[instrument_choice][0]
+            csv_file_path = input("请输入CSV文件路径: ").strip()
+            print(
+                f"\n>>> 调用 submit_by_csv_path("
+                f"instrument={instrument!r}, csv_file_path={csv_file_path!r})"
+            )
+            result = controller.submit_by_csv_path(
+                instrument=instrument, csv_file_path=csv_file_path
+            )
+            _print_result(result)
             continue
 
         # 获取 task_id, 空字符串视为 None(自动选取最新任务)
