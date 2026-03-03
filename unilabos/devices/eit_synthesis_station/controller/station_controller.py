@@ -6,7 +6,16 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from collections import OrderedDict
 from datetime import datetime
 
-from ..config.constants import TaskStatus,StationState,DeviceModuleStatus, ResourceCode, TraySpec,TRAY_CODE_DISPLAY_NAME
+from ..config.constants import (
+    CONSUMABLE_CODE_DISPLAY_NAME,
+    CONSUMABLE_CODE_TO_TRAY_CODE,
+    TaskStatus,
+    StationState,
+    DeviceModuleStatus,
+    ResourceCode,
+    TraySpec,
+    TRAY_CODE_DISPLAY_NAME,
+)
 from ..config.setting import Settings, configure_logging
 from ..driver.api_client import ApiClient
 from ..driver.exceptions import AuthorizationExpiredError, ValidationError
@@ -4487,14 +4496,8 @@ class SynthesisStationController:
             filtered_resource_rows.append(row)
 
         tray_to_consumable = {
-            int(ResourceCode.TIP_TRAY_50UL): int(ResourceCode.TIP_50UL),
-            int(ResourceCode.TIP_TRAY_1ML): int(ResourceCode.TIP_1ML),
-            int(ResourceCode.TIP_TRAY_5ML): int(ResourceCode.TIP_5ML),
-            int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML): int(ResourceCode.TEST_TUBE_MAGNET_2ML),
-            int(ResourceCode.REACTION_SEAL_CAP_TRAY): int(ResourceCode.REACTION_SEAL_CAP),
-            int(ResourceCode.REACTION_TUBE_TRAY_2ML): int(ResourceCode.REACTION_TUBE_2ML),
-            int(ResourceCode.FLASH_FILTER_INNER_BOTTLE_TRAY): int(ResourceCode.FLASH_FILTER_INNER_BOTTLE),
-            int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY): int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE),
+            tray_code: consumable_code
+            for consumable_code, tray_code in CONSUMABLE_CODE_TO_TRAY_CODE.items()
         }
 
         consumable_stock: Dict[int, int] = {}
@@ -4612,39 +4615,30 @@ class SynthesisStationController:
             )
 
         consumable_report: List[JsonDict] = []
-        consumable_name_map = {
-            int(ResourceCode.TIP_50UL): "50uL枪头",
-            int(ResourceCode.TIP_1ML): "1mL枪头",
-            int(ResourceCode.TIP_5ML): "5mL枪头",
-            int(ResourceCode.TEST_TUBE_MAGNET_2ML): "2mL反应管磁子",
-            int(ResourceCode.REACTION_TUBE_2ML): "2mL反应管",
-            int(ResourceCode.REACTION_SEAL_CAP): "反应盖板",
-            int(ResourceCode.FLASH_FILTER_INNER_BOTTLE): "闪滤内瓶",
-            int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE): "闪滤外瓶",
-        }
         need_consumables: List[JsonDict] = []
 
         for code, need_cnt in consumable_need.items():
+            consumable_name = CONSUMABLE_CODE_DISPLAY_NAME.get(code, str(code))
             avail_cnt = consumable_stock.get(code, 0)
             diff_cnt = avail_cnt - need_cnt
             if diff_cnt < 0:
-                missing_items.append(f"{consumable_name_map.get(code, code)}:{abs(diff_cnt)}件")
+                missing_items.append(f"{consumable_name}:{abs(diff_cnt)}件")
                 status = "lack"
             else:
                 status = "satisfy"
-                redundant_items.append(f"{consumable_name_map.get(code, code)}:{diff_cnt}件")
+                redundant_items.append(f"{consumable_name}:{diff_cnt}件")
 
             need_consumables.append(
                 {
                     "code": code,
-                    "name": consumable_name_map.get(code, str(code)),
+                    "name": consumable_name,
                     "need": int(need_cnt),
                 }
             )
             consumable_report.append(
                 {
                     "code": code,
-                    "name": consumable_name_map.get(code, str(code)),
+                    "name": consumable_name,
                     "need": int(need_cnt),
                     "available": int(avail_cnt),
                     "diff": int(diff_cnt),

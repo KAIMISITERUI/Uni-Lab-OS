@@ -160,6 +160,75 @@ TRAY_CODE_DISPLAY_NAME = {
     int(ResourceCode.REAGENT_BOTTLE_TRAY_125ML): "125 mL试剂瓶托盘",
 }
 
+# 耗材编码到标准中文名称映射.
+CONSUMABLE_CODE_DISPLAY_NAME = {
+    int(ResourceCode.TIP_50UL): "50 μL Tip头",
+    int(ResourceCode.TIP_1ML): "1 mL Tip头",
+    int(ResourceCode.TIP_5ML): "5 mL Tip头",
+    int(ResourceCode.TEST_TUBE_MAGNET_2ML): "2 mL反应管磁子",
+    int(ResourceCode.REACTION_TUBE_2ML): "2 mL反应管",
+    int(ResourceCode.REACTION_SEAL_CAP): "反应密封盖",
+    int(ResourceCode.FLASH_FILTER_INNER_BOTTLE): "闪滤瓶内瓶",
+    int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE): "闪滤瓶外瓶",
+}
+
+# 耗材编码到托盘编码映射.
+CONSUMABLE_CODE_TO_TRAY_CODE = {
+    int(ResourceCode.TIP_50UL): int(ResourceCode.TIP_TRAY_50UL),
+    int(ResourceCode.TIP_1ML): int(ResourceCode.TIP_TRAY_1ML),
+    int(ResourceCode.TIP_5ML): int(ResourceCode.TIP_TRAY_5ML),
+    int(ResourceCode.TEST_TUBE_MAGNET_2ML): int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML),
+    int(ResourceCode.REACTION_TUBE_2ML): int(ResourceCode.REACTION_TUBE_TRAY_2ML),
+    int(ResourceCode.REACTION_SEAL_CAP): int(ResourceCode.REACTION_SEAL_CAP_TRAY),
+    int(ResourceCode.FLASH_FILTER_INNER_BOTTLE): int(ResourceCode.FLASH_FILTER_INNER_BOTTLE_TRAY),
+    int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE): int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY),
+}
+
+# 归一化后的耗材别名到耗材编码映射.
+CONSUMABLE_ALIAS_TO_CODE = {
+    # 50 μL Tip头
+    "50ul枪头": int(ResourceCode.TIP_50UL),
+    "50ul吸头": int(ResourceCode.TIP_50UL),
+    "50ultip": int(ResourceCode.TIP_50UL),
+    "50ultip头": int(ResourceCode.TIP_50UL),
+    "50ultip枪头": int(ResourceCode.TIP_50UL),
+    "50ultip吸头": int(ResourceCode.TIP_50UL),
+    # 1 mL Tip头
+    "1ml枪头": int(ResourceCode.TIP_1ML),
+    "1ml吸头": int(ResourceCode.TIP_1ML),
+    "1mltip": int(ResourceCode.TIP_1ML),
+    "1mltip头": int(ResourceCode.TIP_1ML),
+    "1mltip枪头": int(ResourceCode.TIP_1ML),
+    "1mltip吸头": int(ResourceCode.TIP_1ML),
+    # 5 mL Tip头
+    "5ml枪头": int(ResourceCode.TIP_5ML),
+    "5ml吸头": int(ResourceCode.TIP_5ML),
+    "5mltip": int(ResourceCode.TIP_5ML),
+    "5mltip头": int(ResourceCode.TIP_5ML),
+    "5mltip枪头": int(ResourceCode.TIP_5ML),
+    "5mltip吸头": int(ResourceCode.TIP_5ML),
+    # 反应管及磁子
+    "2ml反应管": int(ResourceCode.REACTION_TUBE_2ML),
+    "2ml反应试管": int(ResourceCode.REACTION_TUBE_2ML),
+    "反应管": int(ResourceCode.REACTION_TUBE_2ML),
+    "反应试管": int(ResourceCode.REACTION_TUBE_2ML),
+    "2ml反应管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
+    "2ml试管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
+    "反应管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
+    "试管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
+    # 反应密封盖
+    "反应密封盖": int(ResourceCode.REACTION_SEAL_CAP),
+    "反应盖板": int(ResourceCode.REACTION_SEAL_CAP),
+    "密封盖": int(ResourceCode.REACTION_SEAL_CAP),
+    # 闪滤瓶
+    "闪滤瓶内瓶": int(ResourceCode.FLASH_FILTER_INNER_BOTTLE),
+    "闪滤内瓶": int(ResourceCode.FLASH_FILTER_INNER_BOTTLE),
+    "内瓶": int(ResourceCode.FLASH_FILTER_INNER_BOTTLE),
+    "闪滤瓶外瓶": int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE),
+    "闪滤外瓶": int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE),
+    "外瓶": int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE),
+}
+
 class TraySpec:
     """
     功能:

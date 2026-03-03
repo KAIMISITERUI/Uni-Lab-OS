@@ -16,7 +16,14 @@ from typing import Any, Dict, List, Optional, Tuple
 # 引入底层的控制器
 from ..controller.station_controller import SynthesisStationController
 from ..config.setting import Settings, configure_logging
-from ..config.constants import ResourceCode, TRAY_CODE_DISPLAY_NAME, TraySpec
+from ..config.constants import (
+    CONSUMABLE_ALIAS_TO_CODE,
+    CONSUMABLE_CODE_DISPLAY_NAME,
+    CONSUMABLE_CODE_TO_TRAY_CODE,
+    ResourceCode,
+    TRAY_CODE_DISPLAY_NAME,
+    TraySpec,
+)
 from .synchronizer import EITSynthesisWorkstation
 
 from ..driver.exceptions import ValidationError,ApiError
@@ -1164,6 +1171,22 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             logger.info(f"分配新料盘 {new_position}, 类型 {tray_type_name}")
             return new_position, new_shelf_position, slot_name
 
+        def _normalize_consumable_name(raw_name: str) -> str:
+            """
+            功能:
+                将耗材名称归一化, 用于在统一别名表中稳定匹配.
+            参数:
+                raw_name: str, 原始耗材名称.
+            返回:
+                str, 归一化后的耗材名称.
+            """
+            normalized_name = str(raw_name).strip().lower()
+            normalized_name = normalized_name.replace("μ", "u").replace("µ", "u")
+            normalized_name = normalized_name.replace(" ", "")
+            normalized_name = normalized_name.replace("-", "")
+            normalized_name = normalized_name.replace("_", "")
+            return normalized_name
+
         # 5. 解析missing列表并生成上料数据
         # 使用字典来按位置分组物资: {position: {"tray_type": ..., "contents": [...], "shelf_position": ..., "storages": [...]}}
         position_groups = {}
@@ -1358,6 +1381,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             logger.info(f"添加液体上料项: {substance} -> {position} {slot_name}, {final_amount}{final_unit}")
 
         # 第四遍: 处理耗材
+        unrecognized_consumable_names: List[str] = []
         for substance, amount_str in consumable_items:
             # 耗材处理: 解析数量
             import re
@@ -1368,37 +1392,22 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
             consumable_count = int(float(match.group(1)))
 
-            # 根据耗材名称确定托盘类型
-            tray_type_code = None
-            tray_type_name = ""
-
-            if ("反应试管" in substance or "反应管" in substance or "2mL反应试管" in substance or "2mL反应管" in substance or "2 mL反应试管" in substance or "2 mL反应管" in substance) and "磁子" not in substance:
-                tray_type_code = int(ResourceCode.REACTION_TUBE_TRAY_2ML)
-                tray_type_name = f"2 mL反应试管托盘({tray_type_code})"
-            elif "试管磁子" in substance or "反应管磁子" in substance or "2mL试管磁子" in substance or "2mL反应管磁子" in substance or "2 mL试管磁子" in substance or "2 mL反应管磁子" in substance:
-                tray_type_code = int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML)
-                tray_type_name = f"2 mL试管磁子托盘({tray_type_code})"
-            elif "密封盖" in substance or "反应密封盖" in substance or "反应盖板" in substance:
-                tray_type_code = int(ResourceCode.REACTION_SEAL_CAP_TRAY)
-                tray_type_name = f"反应密封盖托盘({tray_type_code})"
-            elif "闪滤瓶内瓶" in substance or "内瓶" in substance:
-                tray_type_code = int(ResourceCode.FLASH_FILTER_INNER_BOTTLE_TRAY)
-                tray_type_name = f"闪滤瓶内瓶托盘({tray_type_code})"
-            elif "闪滤瓶外瓶" in substance or "外瓶" in substance:
-                tray_type_code = int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY)
-                tray_type_name = f"闪滤瓶外瓶托盘({tray_type_code})"
-            elif "50" in substance and ("tip" in substance.lower() or "吸头" in substance):
-                tray_type_code = int(ResourceCode.TIP_TRAY_50UL)
-                tray_type_name = f"50 μL Tip 头托盘({tray_type_code})"
-            elif "1ml" in substance.lower() or "1 ml" in substance.lower():
-                tray_type_code = int(ResourceCode.TIP_TRAY_1ML)
-                tray_type_name = f"1 mL Tip 头托盘({tray_type_code})"
-            elif "5ml" in substance.lower() or "5 ml" in substance.lower():
-                tray_type_code = int(ResourceCode.TIP_TRAY_5ML)
-                tray_type_name = f"5 mL Tip 头托盘({tray_type_code})"
-            else:
-                logger.warning(f"无法识别耗材类型: {substance}, 跳过")
+            normalized_substance = _normalize_consumable_name(substance)
+            consumable_code = CONSUMABLE_ALIAS_TO_CODE.get(normalized_substance)
+            if consumable_code is None:
+                logger.error("无法识别耗材类型: %s, 请先在constants.py中注册别名", substance)
+                unrecognized_consumable_names.append(substance)
                 continue
+
+            tray_type_code = CONSUMABLE_CODE_TO_TRAY_CODE.get(consumable_code)
+            if tray_type_code is None:
+                logger.error("耗材缺少托盘映射: %s(code=%s), 请检查constants.py", substance, consumable_code)
+                unrecognized_consumable_names.append(substance)
+                continue
+
+            tray_display_name = TRAY_CODE_DISPLAY_NAME.get(tray_type_code, f"未知托盘")
+            tray_type_name = f"{tray_display_name}({tray_type_code})"
+            consumable_display_name = CONSUMABLE_CODE_DISPLAY_NAME.get(consumable_code, substance)
 
             # 获取托盘规格，计算满盘数量
             spec = tray_spec_map.get(tray_type_code)
@@ -1429,8 +1438,26 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 }
 
             position_groups[position]["contents"].append(slot_content)
-            position_groups[position]["storages"].append(f"{substance}|耗材库")
-            logger.info(f"添加耗材上料项: {substance} -> {position}, 满盘数量 {full_tray_capacity} (需求 {consumable_count})")
+            position_groups[position]["storages"].append(f"{consumable_display_name}|耗材库")
+            logger.info(
+                "添加耗材上料项: %s -> %s, 标准名=%s, 满盘数量 %s(需求 %s)",
+                substance,
+                position,
+                consumable_display_name,
+                full_tray_capacity,
+                consumable_count,
+            )
+
+        if len(unrecognized_consumable_names) > 0:
+            unknown_consumables = sorted(set(unrecognized_consumable_names))
+            supported_consumables = sorted(set(CONSUMABLE_CODE_DISPLAY_NAME.values()))
+            raise ValidationError(
+                "检测到无法识别的耗材类型: "
+                + ", ".join(unknown_consumables)
+                + ". 请先在constants.py的CONSUMABLE_ALIAS_TO_CODE中注册后再试. "
+                + "当前支持的标准耗材: "
+                + ", ".join(supported_consumables)
+            )
 
         # 6. 合并同一位置的内容并生成最终数据
         batch_in_data = []
