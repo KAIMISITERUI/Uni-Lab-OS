@@ -145,17 +145,17 @@ class TestReportGeneratorPredictionColumns(unittest.TestCase):
 
         ReportGenerator()._write_tic_sheet(ws, [self._build_sample_ok()])
 
-        # PIM 列 (col 21-22)
-        self.assertEqual(ws.cell(row=1, column=21).value, "PIM预测分子量(Da)")
-        self.assertEqual(ws.cell(row=1, column=22).value, "PIM置信指数")
+        # PIM 列 (col 19-20)
+        self.assertEqual(ws.cell(row=1, column=19).value, "PIM预测分子量(Da)")
+        self.assertEqual(ws.cell(row=1, column=20).value, "PIM置信指数")
 
-        # SS-HM 列 (col 23-24)
-        self.assertEqual(ws.cell(row=1, column=23).value, "SS-HM预测分子量(Da)")
-        self.assertEqual(ws.cell(row=1, column=24).value, "SS-HM置信度")
+        # SS-HM 列 (col 21-22)
+        self.assertEqual(ws.cell(row=1, column=21).value, "SS-HM预测分子量(Da)")
+        self.assertEqual(ws.cell(row=1, column=22).value, "SS-HM置信度")
 
-        # iHS-HM 列 (col 25-26)
-        self.assertEqual(ws.cell(row=1, column=25).value, "iHS-HM预测分子量(Da)")
-        self.assertEqual(ws.cell(row=1, column=26).value, "iHS-HM置信度")
+        # iHS-HM 列 (col 23-24)
+        self.assertEqual(ws.cell(row=1, column=23).value, "iHS-HM预测分子量(Da)")
+        self.assertEqual(ws.cell(row=1, column=24).value, "iHS-HM置信度")
 
         workbook.close()
 
@@ -169,17 +169,17 @@ class TestReportGeneratorPredictionColumns(unittest.TestCase):
 
         ReportGenerator()._write_tic_sheet(ws, [self._build_sample_ok()])
 
-        # PIM: col 21=MW, col 22=confidence
-        self.assertEqual(ws.cell(row=2, column=21).value, 180)
-        self.assertAlmostEqual(ws.cell(row=2, column=22).value, 1.2346, places=4)
+        # PIM: col 19=MW, col 20=confidence
+        self.assertEqual(ws.cell(row=2, column=19).value, 180)
+        self.assertAlmostEqual(ws.cell(row=2, column=20).value, 1.2346, places=4)
 
-        # SS-HM: col 23=MW, col 24=confidence
-        self.assertEqual(ws.cell(row=2, column=23).value, 182)
-        self.assertAlmostEqual(ws.cell(row=2, column=24).value, 0.8765, places=4)
+        # SS-HM: col 21=MW, col 22=confidence
+        self.assertEqual(ws.cell(row=2, column=21).value, 182)
+        self.assertAlmostEqual(ws.cell(row=2, column=22).value, 0.8765, places=4)
 
-        # iHS-HM: col 25=MW, col 26=confidence
-        self.assertEqual(ws.cell(row=2, column=25).value, 183)
-        self.assertAlmostEqual(ws.cell(row=2, column=26).value, 0.012345, places=6)
+        # iHS-HM: col 23=MW, col 24=confidence
+        self.assertEqual(ws.cell(row=2, column=23).value, 183)
+        self.assertAlmostEqual(ws.cell(row=2, column=24).value, 0.012345, places=6)
 
         workbook.close()
 
@@ -194,16 +194,16 @@ class TestReportGeneratorPredictionColumns(unittest.TestCase):
         ReportGenerator()._write_tic_sheet(ws, [self._build_sample_error()])
 
         # PIM: error 状态不写入数值
+        self.assertIsNone(ws.cell(row=2, column=19).value)
+        self.assertIsNone(ws.cell(row=2, column=20).value)
+
+        # SS-HM: error 状态不写入数值
         self.assertIsNone(ws.cell(row=2, column=21).value)
         self.assertIsNone(ws.cell(row=2, column=22).value)
 
-        # SS-HM: error 状态不写入数值
+        # iHS-HM: error 状态不写入数值
         self.assertIsNone(ws.cell(row=2, column=23).value)
         self.assertIsNone(ws.cell(row=2, column=24).value)
-
-        # iHS-HM: error 状态不写入数值
-        self.assertIsNone(ws.cell(row=2, column=25).value)
-        self.assertIsNone(ws.cell(row=2, column=26).value)
 
         workbook.close()
 

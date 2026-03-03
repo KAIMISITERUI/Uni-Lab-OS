@@ -36,6 +36,7 @@ from ..processor.report_generator import (
     PIMPrediction, SSHMPrediction, iHSHMPrediction,
     ReportGenerator, SampleResult,
 )
+from ..processor.structure_fetcher import NistLocalStructureFetcher
 from ..processor.yield_calculator import YieldCalculator
 
 
@@ -1143,6 +1144,8 @@ class AnalysisStationController:
 
         # SS-HM / iHS-HM 预测 (复用已缓存的峰质谱)
         if mspepsearch_predictor is not None and mspepsearch_predictor.available:
+            enable_sshm_search = self._settings.process_gc_ms_enable_sshm_search
+            enable_ihshm_search = self._settings.process_gc_ms_enable_ihshm_search
             for peak_num, peak in enumerate(result.tic_peaks, start=1):
                 cached_spectrum = peak_ms_cache.get(peak_num)
                 if cached_spectrum is None:
@@ -1151,24 +1154,26 @@ class AnalysisStationController:
                 mz_vals, ms_ints = cached_spectrum
 
                 # SS-HM
-                try:
-                    sshm_pred = mspepsearch_predictor.predict_sshm(mz_vals, ms_ints)
-                    result.sshm_predictions[peak.retention_time] = sshm_pred
-                except Exception as e:
-                    self._logger.error("样品 %s 峰%d SS-HM 预测失败: %s", sample_name, peak_num, e)
-                    result.sshm_predictions[peak.retention_time] = SSHMPrediction(
-                        status="error", message=f"SS-HM 预测失败: {e}",
-                    )
+                if enable_sshm_search is True:
+                    try:
+                        sshm_pred = mspepsearch_predictor.predict_sshm(mz_vals, ms_ints)
+                        result.sshm_predictions[peak.retention_time] = sshm_pred
+                    except Exception as e:
+                        self._logger.error("样品 %s 峰%d SS-HM 预测失败: %s", sample_name, peak_num, e)
+                        result.sshm_predictions[peak.retention_time] = SSHMPrediction(
+                            status="error", message=f"SS-HM 预测失败: {e}",
+                        )
 
                 # iHS-HM
-                try:
-                    ihshm_pred = mspepsearch_predictor.predict_ihshm(mz_vals, ms_ints)
-                    result.ihshm_predictions[peak.retention_time] = ihshm_pred
-                except Exception as e:
-                    self._logger.error("样品 %s 峰%d iHS-HM 预测失败: %s", sample_name, peak_num, e)
-                    result.ihshm_predictions[peak.retention_time] = iHSHMPrediction(
-                        status="error", message=f"iHS-HM 预测失败: {e}",
-                    )
+                if enable_ihshm_search is True:
+                    try:
+                        ihshm_pred = mspepsearch_predictor.predict_ihshm(mz_vals, ms_ints)
+                        result.ihshm_predictions[peak.retention_time] = ihshm_pred
+                    except Exception as e:
+                        self._logger.error("样品 %s 峰%d iHS-HM 预测失败: %s", sample_name, peak_num, e)
+                        result.ihshm_predictions[peak.retention_time] = iHSHMPrediction(
+                            status="error", message=f"iHS-HM 预测失败: {e}",
+                        )
 
         # 生成色谱图 (TIC + FID)
         if report_dir is not None:
@@ -1278,7 +1283,13 @@ class AnalysisStationController:
 
             # 初始化 MSPepSearch 预测器 (SS-HM / iHS-HM)
             mspepsearch_predictor: Optional[MSPepSearchPredictor] = None
-            if self._settings.mspepsearch_enable is True:
+            if (
+                self._settings.mspepsearch_enable is True
+                and (
+                    self._settings.process_gc_ms_enable_sshm_search is True
+                    or self._settings.process_gc_ms_enable_ihshm_search is True
+                )
+            ):
                 try:
                     # PIMPredictor 供 MSPepSearchPredictor 内部复用
                     pim_for_mspep = PIMPredictor(
@@ -1309,6 +1320,13 @@ class AnalysisStationController:
                 except Exception as exc:
                     self._logger.warning("MSPepSearch 预测器初始化失败, 将跳过 SS-HM/iHS-HM: %s", exc)
                     mspepsearch_predictor = None
+            else:
+                self._logger.info(
+                    "已跳过 SS-HM/iHS-HM 预测, mspepsearch_enable=%s, process_gc_ms_enable_sshm_search=%s, process_gc_ms_enable_ihshm_search=%s",
+                    self._settings.mspepsearch_enable,
+                    self._settings.process_gc_ms_enable_sshm_search,
+                    self._settings.process_gc_ms_enable_ihshm_search,
+                )
 
             # 逐样品处理
             sample_results: List[SampleResult] = []
@@ -1320,23 +1338,24 @@ class AnalysisStationController:
                 )
                 sample_results.append(sr)
 
-            # 收集所有唯一 CAS 号, 批量获取化合物结构图
+            # 收集所有命中项并按本地索引批量获取结构图.
             structure_images = {}
-            all_cas_numbers = set()
+            all_matches = []
             for sr in sample_results:
                 for match_list in sr.compound_matches.values():
                     for m in match_list:
-                        if m.cas_number:
-                            all_cas_numbers.add(m.cas_number)
+                        all_matches.append(m)
 
-            if all_cas_numbers:
+            if all_matches:
                 try:
-                    from ..processor.structure_fetcher import StructureFetcher
-                    fetcher = StructureFetcher(
+                    fetcher = NistLocalStructureFetcher(
                         task_cache_dir=local_report_dir / "structures",
+                        index_dir=self._settings.nist_structure_index_dir,
+                        seed_mol_dir=self._settings.nist_structure_seed_mol_dir,
+                        offline_only=self._settings.structure_offline_only,
                         global_cache_dir=self._settings.structure_cache_dir,
                     )
-                    structure_images = fetcher.fetch_batch(list(all_cas_numbers))
+                    structure_images = fetcher.fetch_batch_from_matches(all_matches)
                 except Exception as e:
                     self._logger.warning("化合物结构图获取失败, 报告将不含结构图: %s", e)
 

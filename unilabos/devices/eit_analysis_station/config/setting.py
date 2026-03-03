@@ -74,6 +74,8 @@ class Settings:
 
     # ---------- MSPepSearch 预测配置 ----------
     mspepsearch_enable: bool = True
+    process_gc_ms_enable_sshm_search: bool = True
+    process_gc_ms_enable_ihshm_search: bool = False
     mspepsearch_exe: Path = field(
         default_factory=lambda: Path(
             r"D:\EIMS-mass-predictions\R_ShinyApplication\shiny\wrk"
@@ -87,6 +89,16 @@ class Settings:
     nist_mainlib_msp: Path = field(
         default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.msp")
     )
+    nist_structure_seed_msp: Path = field(
+        default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.msp")
+    )
+    nist_structure_seed_mol_dir: Path = field(
+        default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.MOL")
+    )
+    nist_structure_index_dir: Path = field(
+        default_factory=lambda: Path(__file__).parent.parent / "data" / "nist_structure_index"
+    )
+    structure_offline_only: bool = True
     sshm_hits: int = 25        # SS-HM 搜索返回命中数
     sshm_b_ss: int = 75        # SS-HM 概率加权参数 B_SS
     ihshm_hits: int = 25       # iHS-HM 搜索返回命中数
@@ -191,10 +203,14 @@ class Settings:
             ANALYSIS_ALIGNMENT_INCLUDE_FID_ONLY,
             ANALYSIS_TIC_PLOT_SHOW_COMPOUND,
             ANALYSIS_MSPEPSEARCH_ENABLE, ANALYSIS_MSPEPSEARCH_EXE,
+            ANALYSIS_PROCESS_GC_MS_ENABLE_SSHM_SEARCH,
+            ANALYSIS_PROCESS_GC_MS_ENABLE_IHSHM_SEARCH,
             ANALYSIS_MSPEPSEARCH_LIB_PATH, ANALYSIS_MSPEPSEARCH_LIB_TYPE,
             ANALYSIS_NIST_MAINLIB_MSP, ANALYSIS_SSHM_HITS,
             ANALYSIS_SSHM_B_SS, ANALYSIS_IHSHM_HITS,
-            ANALYSIS_IHSHM_MEMF, ANALYSIS_MSPEPSEARCH_TIMEOUT.
+            ANALYSIS_IHSHM_MEMF, ANALYSIS_MSPEPSEARCH_TIMEOUT,
+            ANALYSIS_NIST_STRUCTURE_SEED_MSP, ANALYSIS_NIST_STRUCTURE_SEED_MOL_DIR,
+            ANALYSIS_NIST_STRUCTURE_INDEX_DIR, ANALYSIS_STRUCTURE_OFFLINE_ONLY.
         """
         defaults = Settings()
 
@@ -284,10 +300,30 @@ class Settings:
             pim_beta=_float("ANALYSIS_PIM_BETA", defaults.pim_beta),
             pim_epsilon_f=_float("ANALYSIS_PIM_EPSILON_F", defaults.pim_epsilon_f),
             mspepsearch_enable=_bool("ANALYSIS_MSPEPSEARCH_ENABLE", defaults.mspepsearch_enable),
+            process_gc_ms_enable_sshm_search=_bool(
+                "ANALYSIS_PROCESS_GC_MS_ENABLE_SSHM_SEARCH",
+                defaults.process_gc_ms_enable_sshm_search
+            ),
+            process_gc_ms_enable_ihshm_search=_bool(
+                "ANALYSIS_PROCESS_GC_MS_ENABLE_IHSHM_SEARCH",
+                defaults.process_gc_ms_enable_ihshm_search
+            ),
             mspepsearch_exe=_path("ANALYSIS_MSPEPSEARCH_EXE", defaults.mspepsearch_exe),
             mspepsearch_lib_path=_path("ANALYSIS_MSPEPSEARCH_LIB_PATH", defaults.mspepsearch_lib_path),
             mspepsearch_lib_type=_str("ANALYSIS_MSPEPSEARCH_LIB_TYPE", defaults.mspepsearch_lib_type),
             nist_mainlib_msp=_path("ANALYSIS_NIST_MAINLIB_MSP", defaults.nist_mainlib_msp),
+            nist_structure_seed_msp=_path(
+                "ANALYSIS_NIST_STRUCTURE_SEED_MSP", defaults.nist_structure_seed_msp
+            ),
+            nist_structure_seed_mol_dir=_path(
+                "ANALYSIS_NIST_STRUCTURE_SEED_MOL_DIR", defaults.nist_structure_seed_mol_dir
+            ),
+            nist_structure_index_dir=_path(
+                "ANALYSIS_NIST_STRUCTURE_INDEX_DIR", defaults.nist_structure_index_dir
+            ),
+            structure_offline_only=_bool(
+                "ANALYSIS_STRUCTURE_OFFLINE_ONLY", defaults.structure_offline_only
+            ),
             sshm_hits=_int("ANALYSIS_SSHM_HITS", defaults.sshm_hits),
             sshm_b_ss=_int("ANALYSIS_SSHM_B_SS", defaults.sshm_b_ss),
             ihshm_hits=_int("ANALYSIS_IHSHM_HITS", defaults.ihshm_hits),

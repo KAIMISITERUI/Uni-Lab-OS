@@ -42,6 +42,7 @@ class CompoundMatch:
         formula: 分子式.
         mw: 分子量.
         library: 匹配来源谱库名称.
+        nist_id: NIST 库命中编号 (Id 字段).
     返回:
         CompoundMatch.
     """
@@ -53,6 +54,7 @@ class CompoundMatch:
     formula: str = ""
     mw: float = 0.0
     library: str = ""
+    nist_id: Optional[int] = None
 
 
 class NISTMatcher:
@@ -491,9 +493,30 @@ class NISTMatcher:
             mf = self._extract_float_field(line, r"MF:\s*([\d.]+)")
             rmf = self._extract_float_field(line, r"RMF:\s*([\d.]+)")
             prob = self._extract_float_field(line, r"Prob:\s*([\d.]+)")
-            cas = self._extract_field(line, r"CAS:\s*([\d-]+)")
+            cas_raw = self._extract_field(line, r"CAS:\s*([\d-]+)")
             mw = self._extract_float_field(line, r"Mw:\s*([\d.]+)")
             lib = self._extract_field(line, r"Lib:\s*<<(.+?)>>")
+            nist_id = self._extract_int_field(line, r"Id:\s*(\d+)")
+
+            # CAS=0 表示无有效 CAS, 统一按空字符串处理.
+            cas = cas_raw or ""
+            if cas in ("0", "0-00-0"):
+                logger.debug(
+                    "NIST 命中 CAS 无效(CAS=0), Unknown=%s, 化合物=%s, 行=%s",
+                    current_name or "(未知)",
+                    compound or "(未知)",
+                    line,
+                )
+                cas = ""
+
+            # Id 缺失时记录可追踪日志, 便于后续结构链路排查.
+            if nist_id is None:
+                logger.debug(
+                    "NIST 命中缺少 Id 字段, Unknown=%s, 化合物=%s, 行=%s",
+                    current_name or "(未知)",
+                    compound or "(未知)",
+                    line,
+                )
 
             match = CompoundMatch(
                 compound_name=compound or "",
@@ -504,6 +527,7 @@ class NISTMatcher:
                 formula=formula or "",
                 mw=mw or 0.0,
                 library=lib or "",
+                nist_id=nist_id,
             )
 
             if current_name not in results:
@@ -527,6 +551,17 @@ class NISTMatcher:
         if m:
             try:
                 return float(m.group(1))
+            except ValueError:
+                pass
+        return None
+
+    @staticmethod
+    def _extract_int_field(text: str, pattern: str) -> Optional[int]:
+        """用正则从文本中提取整数字段."""
+        m = re.search(pattern, text)
+        if m:
+            try:
+                return int(m.group(1))
             except ValueError:
                 pass
         return None
