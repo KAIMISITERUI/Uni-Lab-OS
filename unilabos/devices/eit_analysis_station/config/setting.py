@@ -28,28 +28,28 @@ class Settings:
     """
 
     # ---------- GC_MS 设备 ----------
-    gc_ms_host: str = "10.40.6.101"
-    gc_ms_port: int = 5792
-    gc_ms_timeout: float = 10.0
+    gc_ms_host: str = "10.40.6.101"  # GC-MS 控制端地址, 修改后切换仪器目标主机.
+    gc_ms_port: int = 5792  # GC-MS 控制端端口, 修改后切换连接端口.
+    gc_ms_timeout: float = 10.0  # GC-MS 通信超时秒数, 调大可降低慢响应误判.
 
-    # ---------- UPLC_QTOF 设备(预留) ----------
-    uplc_qtof_host: str = "10.40.8.69"
-    uplc_qtof_port: int = 5792
-    uplc_qtof_timeout: float = 10.0
-    uplc_qtof_append_wash_stop: bool = False
+    # ---------- UPLC_QTOF 设备 ----------
+    uplc_qtof_host: str = "10.40.8.69"  # UPLC_QTOF 控制端地址, 修改后流程切换主机.
+    uplc_qtof_port: int = 5792  # UPLC_QTOF 控制端端口, 修改后流程切换端口.
+    uplc_qtof_timeout: float = 10.0  # UPLC_QTOF 通信超时秒数, 调大可降低超时告警.
+    uplc_qtof_append_wash_stop: bool = False  # 是否追加 Wash stop 方法, 打开后序列会追加停机步骤.
 
     # ---------- HPLC 设备(预留) ----------
-    hplc_host: str = "192.168.3.186"
-    hplc_port: int = 5792
-    hplc_timeout: float = 10.0
+    hplc_host: str = "192.168.3.186"  # HPLC 控制端地址, 预留流程切换主机.
+    hplc_port: int = 5792  # HPLC 控制端端口, 预留流程切换端口.
+    hplc_timeout: float = 10.0  # HPLC 通信超时秒数, 调大可降低超时告警.
 
     # ---------- 仪器侧数据目录 ----------
-    gc_ms_data_dir: Path = field(default_factory=lambda: Path(r"\\10.37.2.2\Autolab_Database\Auto_GC_MS\data"))
-    uplc_qtof_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_UPLC_QTOF/data"))
-    hplc_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_HPLC/data"))
+    gc_ms_data_dir: Path = field(default_factory=lambda: Path(r"\\10.37.2.2\Autolab_Database\Auto_GC_MS\data"))  # GC-MS 仪器导出目录, 修改后切换采集源路径.
+    uplc_qtof_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_UPLC_QTOF/data"))  # UPLC_QTOF 仪器导出目录, 修改后切换采集源路径.
+    hplc_data_dir: Path = field(default_factory=lambda: Path("Z:/Auto_HPLC/data"))  # HPLC 仪器导出目录, 修改后切换采集源路径.
 
     # ---------- 合成任务目录 ----------
-    synthesis_tasks_dir: Path = field(
+    synthesis_tasks_dir: Path = field(  # 合成站任务目录, 修改后会改变任务同步目标.
         default_factory=lambda: Path(__file__).parent.parent.parent
         / "eit_synthesis_station"
         / "data"
@@ -57,103 +57,108 @@ class Settings:
     )
 
     # ---------- 分析站本地数据目录 ----------
-    data_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")
+    data_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")  # 分析站本地数据根目录, 修改后影响本地缓存与中间产物位置.
 
     # ---------- 日志 ----------
-    log_level: str = "INFO"
+    log_level: str = "INFO"  # 日志等级, 调为 DEBUG 可输出更详细排障信息.
 
     # ---------- NIST 配置 ----------
-    nist_path: Path = field(default_factory=lambda: Path(r"D:\NIST23\MSSEARCH"))
-    nist_max_hits: int = 5
-    nist_search_timeout: float = 120.0
-    nist_avg_scans: int = 3
-    pim_enable: bool = True
-    pim_ab_m: float = 0.3
-    pim_beta: float = 5.0
-    pim_epsilon_f: float = 0.0
+    nist_path: Path = field(default_factory=lambda: Path(r"D:\NIST23\MSSEARCH"))  # NIST 安装目录, 修改后切换检索程序与库路径基准.
+    nist_max_hits: int = 5  # NIST 每峰返回命中数, 调大可保留更多候选.
+    nist_search_timeout: float = 120.0  # NIST 单峰搜索超时秒数, 调大可降低超时中断.
+    nist_avg_scans: int = 3  # 质谱平均扫描数, 调大可提升信噪比但会平滑细节.
+    pim_enable: bool = True  # 是否启用 PIM 预测, 关闭后不输出 PIM 列结果.
+    pim_ab_m: float = 0.3  # PIM 参数 ab_m, 调整后影响分子离子峰判定敏感度. 调大: 只允许更强的高 m/z 峰参与判断, 抗噪更强, 但更容易把真实分子离子峰(弱峰)跳过, 预测质量偏低.
+    pim_beta: float = 5.0  # PIM 参数 beta, 调整后影响高质量峰加权强度.
+    pim_epsilon_f: float = 0.0  # PIM 参数 epsilon_f, 调整后影响峰筛选阈值.
 
     # ---------- MSPepSearch 预测配置 ----------
-    mspepsearch_enable: bool = True
-    process_gc_ms_enable_sshm_search: bool = True
-    process_gc_ms_enable_ihshm_search: bool = False
-    mspepsearch_exe: Path = field(
+    mspepsearch_enable: bool = True  # 是否启用 MSPepSearch 预测链路, 关闭后不执行 SS-HM/iHS-HM.
+    process_gc_ms_enable_sshm_search: bool = True  # 是否启用 SS-HM 预测, 关闭后报告不写 SS-HM 结果.
+    process_gc_ms_enable_ihshm_search: bool = False  # 是否启用 iHS-HM 预测, 打开后增加 iHS-HM 计算耗时.
+    mspepsearch_exe: Path = field(  # MSPepSearch 可执行文件路径, 修改后切换调用程序.
         default_factory=lambda: Path(
             r"D:\EIMS-mass-predictions\R_ShinyApplication\shiny\wrk"
             r"\MSPepSearch\2017_05_15_MSPepSearch\x64\MSPepSearch64.exe"
         )
     )
-    mspepsearch_lib_path: Path = field(
+    mspepsearch_lib_path: Path = field(  # MSPepSearch 库目录, 修改后切换检索库来源.
         default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib")
     )
-    mspepsearch_lib_type: str = "MAIN"  # MAIN / REPL / LIB
-    nist_mainlib_msp: Path = field(
+    mspepsearch_lib_type: str = "MAIN"  # MSPepSearch 库类型, 改为 REPL/LIB 会改变命中空间.
+    nist_mainlib_msp: Path = field(  # mainlib 导出 MSP 路径, 修改后影响离线库解析来源.
         default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.msp")
     )
-    nist_structure_seed_msp: Path = field(
+    nist_structure_seed_msp: Path = field(  # 结构映射 seed MSP 路径, 修改后影响 NIST# 到 CAS 映射.
         default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.msp")
     )
-    nist_structure_seed_mol_dir: Path = field(
+    nist_structure_seed_mol_dir: Path = field(  # 结构映射 seed MOL 目录, 修改后影响本地结构图渲染命中率.
         default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.MOL")
     )
-    nist_structure_runtime_cache_path: Path = field(
+    nist_structure_runtime_cache_path: Path = field(  # 运行时结构映射缓存路径, 修改后影响映射复用位置.
         default_factory=lambda: Path(__file__).parent.parent / "data" / "nist_runtime_map.pkl"
     )
-    structure_offline_only: bool = False
-    sshm_hits: int = 25        # SS-HM 搜索返回命中数
-    sshm_b_ss: int = 75        # SS-HM 概率加权参数 B_SS
-    ihshm_hits: int = 25       # iHS-HM 搜索返回命中数
-    ihshm_mEMF: int = 700      # iHS-HM 最小匹配因子阈值
-    mspepsearch_timeout: float = 120.0
+    structure_offline_only: bool = False  # 是否严格离线结构模式, 打开后禁用 PubChem 网络回退.
+    sshm_hits: int = 25  # SS-HM 搜索返回命中数, 调大可增加候选覆盖.
+    sshm_b_ss: int = 75  # SS-HM 概率加权参数 B_SS, 调整后影响置信度分布.
+    ihshm_hits: int = 25  # iHS-HM 搜索返回命中数, 调大可增加候选覆盖.
+    ihshm_mEMF: int = 700  # iHS-HM 最小匹配因子阈值, 调高会更严格过滤低质量命中.
+    mspepsearch_timeout: float = 120.0  # MSPepSearch 超时秒数, 调大可降低复杂谱图超时失败.
 
     # ---------- 峰检测与积分参数 ----------
-    peak_smoothing_window: int = 11
-    peak_prominence: float = 10000.0
-    peak_min_distance: int = 5
-    peak_width_rel_height: float = 0.99
-    fid_peak_prominence: float = 0.5
-    fid_peak_min_distance: int = 50
+    peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
+    peak_prominence: float = 10000.0  # TIC 最小峰显著性阈值, 调高会减少弱峰识别.
+    peak_min_distance: int = 5  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
+    peak_width_rel_height: float = 0.99  # 峰宽计算相对高度, 调整后影响峰边界与面积.
+    fid_peak_prominence: float = 0.5  # FID 最小峰显著性阈值, 调高会减少弱峰识别.
+    fid_peak_min_distance: int = 50  # FID 相邻峰最小点距, 调大可减少近邻峰分裂.
 
     # ---------- legacy 参数 ----------
-    use_als_baseline: bool = True
-    als_lambda: float = 1e7
-    als_p: float = 0.01
-    use_valley_boundary: bool = False
+    use_als_baseline: bool = True  # 是否使用 ALS 基线, 关闭后使用替代基线策略.
+    als_lambda: float = 1e7  # ALS 平滑参数 lambda, 调大可使基线更平滑.
+    als_p: float = 0.01  # ALS 非对称参数 p, 调整后影响正负残差惩罚.
+    use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
     # ---------- robust_v2 参数 ----------
-    integration_mode: str = "robust_v2"
-    baseline_method: str = "rolling_quantile"
-    baseline_quantile: float = 20.0
-    baseline_window_min: float = 0.9
-    boundary_sigma_factor: float = 3.0
-    boundary_edge_ratio: float = 0.01
-    boundary_expand_factor: float = 6.0
-    boundary_min_span_min: float = 0.08
-    boundary_max_span_min: float = 0.80
+    integration_mode: str = "robust_v2"  # 积分模式, 切换后改变峰检测与边界算法路径.
+    baseline_method: str = "rolling_quantile"  # robust_v2 基线方法, 修改后改变背景估计方式.
+    baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
+    baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.
+    boundary_sigma_factor: float = 3.0  # 边界 sigma 系数, 调大通常会扩展积分边界.
+    boundary_edge_ratio: float = 0.01  # 边缘阈值比例, 调整后影响峰起止截断位置.
+    boundary_expand_factor: float = 6.0  # 边界扩展系数, 调大可覆盖更多拖尾区域.
+    boundary_min_span_min: float = 0.08  # 峰最小宽度(min), 调大可过滤过窄噪声峰.
+    boundary_max_span_min: float = 1.00  # 峰最大宽度(min), 调小可抑制异常宽峰.
 
     # ---------- 峰过滤参数 ----------
-    peak_rt_min: Optional[float] = 4.0
-    peak_rt_max: Optional[float] = 10.0
-    tic_area_min: Optional[float] = 10000.0
-    tic_area_max: Optional[float] = None
-    fid_area_min: Optional[float] = 0.01
-    fid_area_max: Optional[float] = None
+    peak_rt_min: Optional[float] = 4.0  # 峰保留时间下限(min), 调大可忽略前段溶剂峰.
+    peak_rt_max: Optional[float] = 10.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
+    tic_area_min: Optional[float] = 10000.0  # TIC 峰面积下限, 调大可过滤小面积峰.
+    tic_area_max: Optional[float] = None  # TIC 峰面积上限, 设置后可过滤过载峰.
+    fid_area_min: Optional[float] = 0.01  # FID 峰面积下限, 调大可过滤微小峰.
+    fid_area_max: Optional[float] = None  # FID 峰面积上限, 设置后可过滤异常大峰.
 
     # ---------- TIC-FID 峰对齐参数 ----------
-    alignment_tolerance: float = 0.05  # FID与TIC峰保留时间对齐容差(min)
-    alignment_include_tic_only: bool = False   # 对照表是否输出TIC有峰但FID无峰的行
-    alignment_include_fid_only: bool = True   # 对照表是否输出FID有峰但TIC无峰的行
+    alignment_tolerance: float = 0.05  # FID 与 TIC 峰保留时间对齐容差(min), 调大可提高配对成功率.
+    alignment_include_tic_only: bool = False  # 是否输出仅 TIC 有峰行, 打开后对照表会增加 TIC-only 记录.
+    alignment_include_fid_only: bool = True  # 是否输出仅 FID 有峰行, 关闭后对照表会隐藏 FID-only 记录.
 
     # ---------- 产率计算参数 ----------
-    yield_rt_tolerance: float = 0.1  # 产率计算时保留时间匹配容差(min)
+    yield_rt_tolerance: float = 0.1  # 产率计算 RT 匹配容差(min), 调大可放宽目标峰匹配.
 
     # ---------- TIC 绘图参数 ----------
-    tic_plot_show_compound: bool = True       # TIC色谱图是否标注化合物名称
+    tic_plot_show_compound: bool = True  # TIC 色谱图是否标注化合物名称, 关闭后图面更简洁.
+
+    # ---------- 图片导出参数 ----------
+    chromatogram_plot_ppi: int = 300  # 色谱图导出 PPI, 调高可提升 TIC/FID 图清晰度并增大文件体积.
+    ms_spectrum_plot_ppi: int = 300  # 质谱图导出 PPI, 调高可提升棒图与标签清晰度并增大文件体积.
+    structure_image_ppi: int = 300  # 结构图导出 PPI, 调高可提升本地渲染结构图清晰度并增大文件体积.
 
     # ---------- 报告目录 ----------
-    report_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")
+    report_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")  # 报告输出根目录, 修改后改变报告与图像落盘位置.
 
     # ---------- 化学品库目录 ----------
-    chemical_list_path: Path = field(
+    chemical_list_path: Path = field(  # 化学品清单路径, 修改后切换产率计算的物性来源.
         default_factory=lambda: Path(__file__).parent.parent.parent
         / "eit_synthesis_station"
         / "sheet"
@@ -161,7 +166,7 @@ class Settings:
     )
 
     # ---------- 结构图缓存目录 ----------
-    structure_cache_dir: Path = field(
+    structure_cache_dir: Path = field(  # 全局结构图缓存目录, 修改后影响跨任务复用缓存位置.
         default_factory=lambda: Path(__file__).parent.parent / "data" / "structure_cache"
     )
 
@@ -202,6 +207,8 @@ class Settings:
             ANALYSIS_ALIGNMENT_INCLUDE_TIC_ONLY,
             ANALYSIS_ALIGNMENT_INCLUDE_FID_ONLY,
             ANALYSIS_TIC_PLOT_SHOW_COMPOUND,
+            ANALYSIS_CHROMATOGRAM_PLOT_PPI, ANALYSIS_MS_SPECTRUM_PLOT_PPI,
+            ANALYSIS_STRUCTURE_IMAGE_PPI,
             ANALYSIS_MSPEPSEARCH_ENABLE, ANALYSIS_MSPEPSEARCH_EXE,
             ANALYSIS_PROCESS_GC_MS_ENABLE_SSHM_SEARCH,
             ANALYSIS_PROCESS_GC_MS_ENABLE_IHSHM_SEARCH,
@@ -340,6 +347,9 @@ class Settings:
             alignment_include_tic_only=_bool("ANALYSIS_ALIGNMENT_INCLUDE_TIC_ONLY", defaults.alignment_include_tic_only),
             alignment_include_fid_only=_bool("ANALYSIS_ALIGNMENT_INCLUDE_FID_ONLY", defaults.alignment_include_fid_only),
             tic_plot_show_compound=_bool("ANALYSIS_TIC_PLOT_SHOW_COMPOUND", defaults.tic_plot_show_compound),
+            chromatogram_plot_ppi=_int("ANALYSIS_CHROMATOGRAM_PLOT_PPI", defaults.chromatogram_plot_ppi),
+            ms_spectrum_plot_ppi=_int("ANALYSIS_MS_SPECTRUM_PLOT_PPI", defaults.ms_spectrum_plot_ppi),
+            structure_image_ppi=_int("ANALYSIS_STRUCTURE_IMAGE_PPI", defaults.structure_image_ppi),
             yield_rt_tolerance=_float("ANALYSIS_YIELD_RT_TOLERANCE", defaults.yield_rt_tolerance),
         )
 

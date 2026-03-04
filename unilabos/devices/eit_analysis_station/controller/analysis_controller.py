@@ -1177,7 +1177,10 @@ class AnalysisStationController:
 
         # 生成色谱图 (TIC + FID)
         if report_dir is not None:
-            plotter = ChromatogramPlotter()
+            plotter = ChromatogramPlotter(
+                chromatogram_ppi=self._settings.chromatogram_plot_ppi,
+                ms_spectrum_ppi=self._settings.ms_spectrum_plot_ppi,
+            )
             plot_dir = report_dir / "plots"
 
             # TIC 色谱图
@@ -1355,6 +1358,7 @@ class AnalysisStationController:
                         runtime_cache_path=self._settings.nist_structure_runtime_cache_path,
                         offline_only=self._settings.structure_offline_only,
                         global_cache_dir=self._settings.structure_cache_dir,
+                        image_ppi=self._settings.structure_image_ppi,
                     )
                     structure_images = fetcher.fetch_batch_from_matches(all_matches)
                 except Exception as e:

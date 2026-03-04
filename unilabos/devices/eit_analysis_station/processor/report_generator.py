@@ -170,6 +170,7 @@ class ReportGenerator:
         "PIM预测分子量(Da)", "PIM置信指数",
         "SS-HM预测分子量(Da)", "SS-HM置信度",
         "iHS-HM预测分子量(Da)", "iHS-HM置信度",
+        "质谱图",
     ]
 
     def generate_task_report(
@@ -565,6 +566,15 @@ class ReportGenerator:
                             ws.cell(row=row, column=19, value=ihshm_prediction.predicted_mw)
                         if ihshm_prediction.confidence is not None:
                             ws.cell(row=row, column=20, value=round(ihshm_prediction.confidence, 6))
+
+                    # 质谱图超链接 (列 21: 表尾追加)
+                    if tic_num is not None:
+                        if tic_num in sr.ms_plot_paths:
+                            ms_plot_path = sr.ms_plot_paths[tic_num]
+                            if ms_plot_path.exists() is True:
+                                ms_cell = ws.cell(row=row, column=21, value="查看质谱图")
+                                ms_cell.hyperlink = str(ms_plot_path)
+                                ms_cell.font = Font(color="0563C1", underline="single")
 
                 row += 1
 

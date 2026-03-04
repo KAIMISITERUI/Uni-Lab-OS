@@ -197,7 +197,7 @@ class TestReportGeneratorAlignmentPredictions(unittest.TestCase):
     def test_alignment_sheet_headers_values_and_hyperlinks(self) -> None:
         """
         功能:
-            验证新增 6 列列头、预测值和化合物名称超链接写入.
+            验证新增列列头、预测值、结构图和质谱图超链接写入.
         参数:
             无.
         返回:
@@ -207,8 +207,11 @@ class TestReportGeneratorAlignmentPredictions(unittest.TestCase):
         tmp_dir = self._make_tmp_dir()
         nist_png = tmp_dir / "NIST_22326.png"
         cas_png = tmp_dir / "CAS_100618.png"
+        ms_png = tmp_dir / "sample_1_ms.png"
         nist_png.write_bytes(b"png")
         cas_png.write_bytes(b"png")
+        ms_png.write_bytes(b"png")
+        sample.ms_plot_paths = {1: ms_png}
 
         workbook = openpyxl.Workbook()
         ws = workbook.active
@@ -228,6 +231,7 @@ class TestReportGeneratorAlignmentPredictions(unittest.TestCase):
         self.assertEqual(ws.cell(row=1, column=18).value, "SS-HM置信度")
         self.assertEqual(ws.cell(row=1, column=19).value, "iHS-HM预测分子量(Da)")
         self.assertEqual(ws.cell(row=1, column=20).value, "iHS-HM置信度")
+        self.assertEqual(ws.cell(row=1, column=21).value, "质谱图")
 
         name_cell_1 = ws.cell(row=2, column=7)
         name_cell_2 = ws.cell(row=2, column=11)
@@ -242,6 +246,9 @@ class TestReportGeneratorAlignmentPredictions(unittest.TestCase):
         self.assertAlmostEqual(ws.cell(row=2, column=18).value, 0.8765, places=4)
         self.assertEqual(ws.cell(row=2, column=19).value, 183)
         self.assertAlmostEqual(ws.cell(row=2, column=20).value, 0.012345, places=6)
+        ms_cell = ws.cell(row=2, column=21)
+        self.assertEqual(ms_cell.value, "查看质谱图")
+        self.assertEqual(ms_cell.hyperlink.target, str(ms_png))
         workbook.close()
 
     def test_alignment_sheet_fid_only_row_keeps_prediction_columns_empty(self) -> None:
@@ -259,7 +266,7 @@ class TestReportGeneratorAlignmentPredictions(unittest.TestCase):
 
         ReportGenerator()._write_alignment_sheet(ws, [sample])
 
-        for col in range(15, 21):
+        for col in range(15, 22):
             self.assertIsNone(ws.cell(row=2, column=col).value)
         workbook.close()
 
@@ -278,7 +285,7 @@ class TestReportGeneratorAlignmentPredictions(unittest.TestCase):
 
         ReportGenerator()._write_alignment_sheet(ws, [sample])
 
-        for col in range(15, 21):
+        for col in range(15, 22):
             self.assertIsNone(ws.cell(row=2, column=col).value)
         workbook.close()
 

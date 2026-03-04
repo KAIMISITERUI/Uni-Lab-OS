@@ -84,6 +84,7 @@ class NistLocalStructureFetcher:
         offline_only: 是否严格离线, True 时禁止回退 PubChem.
         global_cache_dir: 历史链路全局缓存目录, 仅 offline_only=False 时用于回退.
         image_size: 回退 PubChem 下载尺寸.
+        image_ppi: 结构图写盘分辨率, 仅本地渲染路径生效.
         timeout: 回退 PubChem 超时.
         request_interval: 回退 PubChem 请求间隔.
     返回:
@@ -99,6 +100,7 @@ class NistLocalStructureFetcher:
         offline_only: bool = False,
         global_cache_dir: Optional[Path] = None,
         image_size: int = 200,
+        image_ppi: int = 150,
         timeout: float = 10.0,
         request_interval: float = 0.2,
     ) -> None:
@@ -110,6 +112,7 @@ class NistLocalStructureFetcher:
         )
         self._offline_only = offline_only
         self._image_size = image_size
+        self._image_ppi = image_ppi
 
         self._task_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -124,6 +127,7 @@ class NistLocalStructureFetcher:
                 task_cache_dir=self._task_cache_dir,
                 global_cache_dir=global_cache_dir,
                 image_size=image_size,
+                image_ppi=image_ppi,
                 timeout=timeout,
                 request_interval=request_interval,
             )
@@ -632,7 +636,7 @@ class NistLocalStructureFetcher:
 
             target_path.parent.mkdir(parents=True, exist_ok=True)
             image = Draw.MolToImage(mol, size=(self._image_size, self._image_size))
-            image.save(str(target_path))
+            image.save(str(target_path), dpi=(self._image_ppi, self._image_ppi))
             logger.info("按需生成结构图成功, key=%s, 来源=%s", structure_key, mol_path.name)
             return target_path
         except Exception as exc:
@@ -734,6 +738,7 @@ class StructureFetcher:
         task_cache_dir: 任务级缓存目录 (如 report_dir/task_id/structures/).
         global_cache_dir: 全局缓存目录, 跨任务共享. None 表示不使用全局缓存.
         image_size: PubChem 下载图片尺寸 (正方形边长, 像素).
+        image_ppi: 结构图写盘分辨率, 仅本地渲染路径生效.
         timeout: 单次 HTTP 请求超时时间 (秒).
         request_interval: 连续请求间的最小间隔 (秒), 遵守 PubChem 速率限制.
     返回:
@@ -748,12 +753,14 @@ class StructureFetcher:
         task_cache_dir: Path,
         global_cache_dir: Optional[Path] = None,
         image_size: int = 200,
+        image_ppi: int = 150,
         timeout: float = 10.0,
         request_interval: float = 0.2,
     ) -> None:
         self._task_cache_dir = task_cache_dir
         self._global_cache_dir = global_cache_dir
         self._image_size = image_size
+        self._image_ppi = image_ppi
         self._timeout = timeout
         self._request_interval = request_interval
 

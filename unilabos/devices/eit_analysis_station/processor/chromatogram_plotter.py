@@ -38,14 +38,21 @@ class ChromatogramPlotter:
     功能:
         绘制色谱图并标注积分峰, 支持 TIC 和 FID.
     参数:
-        dpi: 图片分辨率.
+        chromatogram_ppi: TIC/FID 色谱图导出分辨率.
+        ms_spectrum_ppi: 质谱图导出分辨率.
         figsize: 图片尺寸 (宽, 高) 英寸.
     返回:
         无.
     """
 
-    def __init__(self, dpi: int = 150, figsize: tuple = (14, 6)):
-        self._dpi = dpi
+    def __init__(
+        self,
+        chromatogram_ppi: int = 150,
+        ms_spectrum_ppi: int = 150,
+        figsize: tuple = (14, 6),
+    ):
+        self._chromatogram_ppi = chromatogram_ppi
+        self._ms_spectrum_ppi = ms_spectrum_ppi
         self._figsize = figsize
 
     def plot_chromatogram(
@@ -149,7 +156,7 @@ class ChromatogramPlotter:
         if output_path is None:
             output_path = Path("chromatogram.png")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(str(output_path), dpi=self._dpi, bbox_inches="tight")
+        fig.savefig(str(output_path), dpi=self._chromatogram_ppi, bbox_inches="tight")
         plt.close(fig)
 
         logger.info("色谱图已保存: %s", output_path)
@@ -391,7 +398,7 @@ class ChromatogramPlotter:
         if output_path is None:
             output_path = Path("ms_spectrum.png")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(str(output_path), dpi=self._dpi, bbox_inches="tight")
+        fig.savefig(str(output_path), dpi=self._ms_spectrum_ppi, bbox_inches="tight")
         plt.close(fig)
 
         logger.info("质谱图已保存: %s", output_path)

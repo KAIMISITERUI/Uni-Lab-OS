@@ -62,6 +62,7 @@ class TestAnalysisControllerOfflineStructureFlow(unittest.TestCase):
             synthesis_tasks_dir=tmp_path / "tasks",
             nist_structure_runtime_cache_path=tmp_path / "runtime_map.pkl",
             structure_offline_only=True,
+            structure_image_ppi=440,
         )
         controller = AnalysisStationController(settings=settings)
 
@@ -96,7 +97,7 @@ class TestAnalysisControllerOfflineStructureFlow(unittest.TestCase):
                             with patch(
                                 "eit_analysis_station.controller.analysis_controller.NistLocalStructureFetcher",
                                 return_value=fake_fetcher,
-                            ):
+                            ) as fetcher_cls:
                                 with patch(
                                     "eit_analysis_station.processor.structure_fetcher.StructureFetcher.fetch_batch",
                                     side_effect=AssertionError("不应调用旧 CAS 批量下载链路"),
@@ -109,6 +110,8 @@ class TestAnalysisControllerOfflineStructureFlow(unittest.TestCase):
 
         self.assertEqual(result["success"], True)
         fake_fetcher.fetch_batch_from_matches.assert_called_once()
+        fetcher_cls.assert_called_once()
+        self.assertEqual(fetcher_cls.call_args.kwargs["image_ppi"], 440)
 
 
 if __name__ == "__main__":
