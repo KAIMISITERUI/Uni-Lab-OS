@@ -4,13 +4,14 @@
 功能:
     提供化合物结构图获取能力.
     1. NistLocalStructureFetcher: 运行时解析 NIST MSP 构建本地映射, 优先离线生成结构图.
-    2. StructureFetcher: 历史 CAS -> PubChem 结构下载链路, 仅作为回滚兜底保留.
+    2. StructureFetcher: 历史 CAS -> PubChem SDF 下载并渲染链路, 仅作为回滚兜底保留.
 参数:
     无.
 返回:
     无.
 """
 
+import io
 import logging
 import pickle
 import re
@@ -68,6 +69,50 @@ def build_structure_key(nist_id: Optional[int], cas_number: str) -> Optional[str
     return None
 
 
+def _load_rdkit_modules() -> Optional[Tuple[object, object]]:
+    """
+    功能:
+        动态加载 RDKit 的 Chem 与 Draw 模块.
+    参数:
+        无.
+    返回:
+        Optional[Tuple[object, object]], 成功时返回 (Chem, Draw), 失败返回 None.
+    """
+    try:
+        from rdkit import Chem
+        from rdkit.Chem import Draw
+        return Chem, Draw
+    except ImportError:
+        return None
+
+
+def _render_rdkit_mol_to_png_bytes(
+    draw_module: object,
+    mol: object,
+    image_size: int,
+    image_ppi: int,
+) -> Optional[bytes]:
+    """
+    功能:
+        将 RDKit Mol 对象渲染为 PNG 二进制数据, 并写入指定 DPI 元数据.
+    参数:
+        draw_module: RDKit Draw 模块对象.
+        mol: RDKit Mol 对象.
+        image_size: 输出图片尺寸, 单位像素.
+        image_ppi: 输出图片 DPI.
+    返回:
+        Optional[bytes], 成功时返回 PNG 二进制数据, 失败返回 None.
+    """
+    try:
+        image = draw_module.MolToImage(mol, size=(image_size, image_size))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG", dpi=(image_ppi, image_ppi))
+        return buffer.getvalue()
+    except Exception as exc:
+        logger.warning("结构图 PNG 编码失败: %s", exc)
+        return None
+
+
 class NistLocalStructureFetcher:
     """
     功能:
@@ -83,8 +128,8 @@ class NistLocalStructureFetcher:
         runtime_cache_path: 运行时映射缓存文件路径.
         offline_only: 是否严格离线, True 时禁止回退 PubChem.
         global_cache_dir: 历史链路全局缓存目录, 仅 offline_only=False 时用于回退.
-        image_size: 回退 PubChem 下载尺寸.
-        image_ppi: 结构图写盘分辨率, 仅本地渲染路径生效.
+        image_size: 回退 PubChem SDF 渲染尺寸.
+        image_ppi: 结构图写盘分辨率, 本地 MOL 与 PubChem SDF 渲染链路均生效.
         timeout: 回退 PubChem 超时.
         request_interval: 回退 PubChem 请求间隔.
     返回:
@@ -619,24 +664,32 @@ class NistLocalStructureFetcher:
         返回:
             Optional[Path], 渲染成功返回目标路径.
         """
-        try:
-            from rdkit import Chem
-            from rdkit.Chem import Draw
-        except ImportError:
+        rdkit_modules = _load_rdkit_modules()
+        if rdkit_modules is None:
             logger.warning("未安装 RDKit, 无法按需生成结构图.")
             return None
+        chem_module, draw_module = rdkit_modules
 
         try:
-            mol = Chem.MolFromMolFile(str(mol_path), sanitize=True, removeHs=False)
+            mol = chem_module.MolFromMolFile(str(mol_path), sanitize=True, removeHs=False)
             if mol is None:
-                mol = Chem.MolFromMolFile(str(mol_path), sanitize=False, removeHs=False)
+                mol = chem_module.MolFromMolFile(str(mol_path), sanitize=False, removeHs=False)
             if mol is None:
                 logger.warning("按需渲染失败, MOL 解析失败: %s", mol_path)
                 return None
 
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            image = Draw.MolToImage(mol, size=(self._image_size, self._image_size))
-            image.save(str(target_path), dpi=(self._image_ppi, self._image_ppi))
+            png_data = _render_rdkit_mol_to_png_bytes(
+                draw_module=draw_module,
+                mol=mol,
+                image_size=self._image_size,
+                image_ppi=self._image_ppi,
+            )
+            if png_data is None:
+                logger.warning("按需渲染失败, PNG 编码异常: key=%s, MOL=%s", structure_key, mol_path)
+                return None
+
+            target_path.write_bytes(png_data)
             logger.info("按需生成结构图成功, key=%s, 来源=%s", structure_key, mol_path.name)
             return target_path
         except Exception as exc:
@@ -733,12 +786,12 @@ class StructureFetcher:
     """
     功能:
         根据 CAS 号获取化合物 2D 结构图 PNG 文件.
-        优先从本地缓存读取, 未命中时通过 PubChem REST API 在线下载.
+        优先从本地缓存读取, 未命中时通过 PubChem REST API 下载 SDF 并本地渲染.
     参数:
         task_cache_dir: 任务级缓存目录 (如 report_dir/task_id/structures/).
         global_cache_dir: 全局缓存目录, 跨任务共享. None 表示不使用全局缓存.
-        image_size: PubChem 下载图片尺寸 (正方形边长, 像素).
-        image_ppi: 结构图写盘分辨率, 仅本地渲染路径生效.
+        image_size: 结构图渲染尺寸 (正方形边长, 像素).
+        image_ppi: 结构图写盘分辨率.
         timeout: 单次 HTTP 请求超时时间 (秒).
         request_interval: 连续请求间的最小间隔 (秒), 遵守 PubChem 速率限制.
     返回:
@@ -746,7 +799,7 @@ class StructureFetcher:
     """
 
     _PUBCHEM_CID_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{cas}/cids/TXT"
-    _PUBCHEM_PNG_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/PNG"
+    _PUBCHEM_SDF_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/record/SDF"
 
     def __init__(
         self,
@@ -773,7 +826,7 @@ class StructureFetcher:
         """
         功能:
             根据 CAS 号获取化合物结构图 PNG 文件路径.
-            查找顺序: 任务缓存 -> 全局缓存 -> PubChem 在线下载.
+            查找顺序: 任务缓存 -> 全局缓存 -> PubChem 下载 SDF 并本地渲染.
         参数:
             cas_number: CAS 注册号, 如 "74-95-3".
         返回:
@@ -798,14 +851,18 @@ class StructureFetcher:
                 logger.debug("从全局缓存复制结构图: %s -> %s", global_path, task_path)
                 return task_path
 
-        # 第三级: PubChem 在线下载.
-        png_data = self._download_from_pubchem(cas_number)
+        # 第三级: PubChem 在线下载 SDF, 然后本地渲染.
+        sdf_text = self._download_sdf_from_pubchem(cas_number)
+        if sdf_text is None:
+            return None
+
+        png_data = self._render_pubchem_sdf_to_png(sdf_text)
         if png_data is None:
             return None
 
         # 写入任务缓存.
         task_path.write_bytes(png_data)
-        logger.info("结构图已下载并缓存: %s (%s)", cas_number, task_path)
+        logger.info("结构图已通过 PubChem SDF 渲染并缓存: %s (%s)", cas_number, task_path)
 
         # 同步写入全局缓存.
         if self._global_cache_dir is not None:
@@ -862,43 +919,138 @@ class StructureFetcher:
         )
         return results
 
-    def _download_from_pubchem(self, cas_number: str) -> Optional[bytes]:
+    @staticmethod
+    def _load_requests_module() -> Optional[object]:
         """
         功能:
-            通过 PubChem REST API 下载化合物 2D 结构图 PNG.
-            两步: 先由 CAS 号查 CID, 再由 CID 下载 PNG.
+            动态加载 requests 模块.
         参数:
-            cas_number: CAS 注册号.
+            无.
         返回:
-            Optional[bytes]: PNG 图片二进制数据, 失败返回 None.
+            Optional[object], 成功返回 requests 模块对象, 失败返回 None.
         """
         try:
             import requests
+            return requests
         except ImportError:
-            logger.warning("requests 库未安装, 无法从 PubChem 下载结构图")
+            logger.warning("requests 库未安装, 无法从 PubChem 下载 SDF 结构.")
             return None
 
-        # 步骤1: CAS -> CID.
+    def _download_sdf_from_pubchem(self, cas_number: str) -> Optional[str]:
+        """
+        功能:
+            通过 PubChem REST API 下载化合物 SDF.
+            两步: 先由 CAS 号查 CID, 再由 CID 下载 SDF.
+        参数:
+            cas_number: CAS 注册号.
+        返回:
+            Optional[str]: SDF 字符串, 失败返回 None.
+        """
+        requests_module = self._load_requests_module()
+        if requests_module is None:
+            return None
+
+        cid = self._query_pubchem_cid(requests_module, cas_number)
+        if cid is None:
+            return None
+        return self._query_pubchem_sdf(requests_module, cid)
+
+    def _query_pubchem_cid(self, requests_module: object, cas_number: str) -> Optional[str]:
+        """
+        功能:
+            通过 PubChem 查询 CAS 对应的 CID.
+        参数:
+            requests_module: requests 模块对象.
+            cas_number: CAS 注册号.
+        返回:
+            Optional[str], CID 字符串, 失败返回 None.
+        """
         cid_url = self._PUBCHEM_CID_URL.format(cas=cas_number)
         try:
-            resp = requests.get(cid_url, timeout=self._timeout)
+            resp = requests_module.get(cid_url, timeout=self._timeout)
             if resp.status_code != 200:
                 logger.debug("PubChem CID 查询失败: CAS=%s, HTTP %d", cas_number, resp.status_code)
                 return None
-            cid = resp.text.strip().splitlines()[0].strip()
+            lines = resp.text.strip().splitlines()
+            if len(lines) == 0:
+                logger.debug("PubChem CID 查询失败: CAS=%s, 返回内容为空", cas_number)
+                return None
+            cid = lines[0].strip()
+            if cid == "":
+                logger.debug("PubChem CID 查询失败: CAS=%s, CID 为空", cas_number)
+                return None
+            return cid
         except Exception as exc:
             logger.debug("PubChem CID 查询异常: CAS=%s, %s", cas_number, exc)
             return None
 
-        # 步骤2: CID -> PNG.
-        png_url = self._PUBCHEM_PNG_URL.format(cid=cid)
-        params = {"image_size": f"{self._image_size}x{self._image_size}"}
+    def _query_pubchem_sdf(self, requests_module: object, cid: str) -> Optional[str]:
+        """
+        功能:
+            通过 PubChem 查询 CID 对应的 SDF 结构数据.
+        参数:
+            requests_module: requests 模块对象.
+            cid: PubChem CID.
+        返回:
+            Optional[str], SDF 字符串, 失败返回 None.
+        """
+        sdf_url = self._PUBCHEM_SDF_URL.format(cid=cid)
+        params = {"record_type": "2d"}
         try:
-            resp = requests.get(png_url, params=params, timeout=self._timeout)
+            resp = requests_module.get(sdf_url, params=params, timeout=self._timeout)
             if resp.status_code != 200:
-                logger.debug("PubChem PNG 下载失败: CID=%s, HTTP %d", cid, resp.status_code)
+                logger.debug("PubChem SDF 下载失败: CID=%s, HTTP %d", cid, resp.status_code)
                 return None
-            return resp.content
+            sdf_text = resp.text
+            if sdf_text.strip() == "":
+                logger.debug("PubChem SDF 下载失败: CID=%s, 内容为空", cid)
+                return None
+            return sdf_text
         except Exception as exc:
-            logger.debug("PubChem PNG 下载异常: CID=%s, %s", cid, exc)
+            logger.debug("PubChem SDF 下载异常: CID=%s, %s", cid, exc)
+            return None
+
+    def _render_pubchem_sdf_to_png(self, sdf_text: str) -> Optional[bytes]:
+        """
+        功能:
+            将 PubChem 返回的 SDF 字符串渲染为 PNG 二进制数据.
+        参数:
+            sdf_text: PubChem SDF 字符串.
+        返回:
+            Optional[bytes], 成功时返回 PNG 二进制数据, 失败返回 None.
+        """
+        rdkit_modules = _load_rdkit_modules()
+        if rdkit_modules is None:
+            logger.warning("未安装 RDKit, 无法渲染 PubChem SDF 结构图.")
+            return None
+        chem_module, draw_module = rdkit_modules
+
+        mol_block = sdf_text
+        if "$$$$" in mol_block:
+            mol_block = mol_block.split("$$$$", 1)[0]
+        mol_block = mol_block.strip()
+        if mol_block == "":
+            logger.warning("PubChem SDF 内容为空, 无法渲染结构图.")
+            return None
+
+        try:
+            mol = chem_module.MolFromMolBlock(mol_block, sanitize=True, removeHs=False)
+            if mol is None:
+                mol = chem_module.MolFromMolBlock(mol_block, sanitize=False, removeHs=False)
+            if mol is None:
+                logger.warning("PubChem SDF 解析失败, 无法渲染结构图.")
+                return None
+
+            png_data = _render_rdkit_mol_to_png_bytes(
+                draw_module=draw_module,
+                mol=mol,
+                image_size=self._image_size,
+                image_ppi=self._image_ppi,
+            )
+            if png_data is None:
+                logger.warning("PubChem SDF 渲染失败, PNG 编码异常.")
+                return None
+            return png_data
+        except Exception as exc:
+            logger.warning("PubChem SDF 渲染异常: %s", exc)
             return None

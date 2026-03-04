@@ -256,6 +256,13 @@ unilabos/devices/eit_synthesis_station/data/
 # EIT analysis station data (chromatogram data, plots, structures, cache)
 unilabos/devices/eit_analysis_station/data/
 
+# EIT test directories
+unilabos/devices/eit_analysis_station/tests/
+unilabos/devices/eit_synthesis_station/tests/
+
+# EIT synthesis station sheet data
+unilabos/devices/eit_synthesis_station/sheet/
+
 # Backup files and directories
 backup/
 *.backup

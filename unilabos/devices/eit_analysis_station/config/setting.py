@@ -75,7 +75,7 @@ class Settings:
     # ---------- MSPepSearch 预测配置 ----------
     mspepsearch_enable: bool = True  # 是否启用 MSPepSearch 预测链路, 关闭后不执行 SS-HM/iHS-HM.
     process_gc_ms_enable_sshm_search: bool = True  # 是否启用 SS-HM 预测, 关闭后报告不写 SS-HM 结果.
-    process_gc_ms_enable_ihshm_search: bool = False  # 是否启用 iHS-HM 预测, 打开后增加 iHS-HM 计算耗时.
+    process_gc_ms_enable_ihshm_search: bool =  True # 是否启用 iHS-HM 预测, 打开后增加 iHS-HM 计算耗时.
     mspepsearch_exe: Path = field(  # MSPepSearch 可执行文件路径, 修改后切换调用程序.
         default_factory=lambda: Path(
             r"D:\EIMS-mass-predictions\R_ShinyApplication\shiny\wrk"
@@ -155,7 +155,7 @@ class Settings:
     # ---------- 图片导出参数 ----------
     chromatogram_plot_ppi: int = 300  # 色谱图导出 PPI, 调高可提升 TIC/FID 图清晰度并增大文件体积.
     ms_spectrum_plot_ppi: int = 300  # 质谱图导出 PPI, 调高可提升棒图与标签清晰度并增大文件体积.
-    structure_image_ppi: int = 300  # 结构图导出 PPI, 调高可提升本地渲染结构图清晰度并增大文件体积.
+    structure_image_ppi: int = 300  # 结构图导出 PPI, 调高可提升本地 MOL 与 PubChem SDF 渲染结构图清晰度并增大文件体积.
 
     # ---------- 报告目录 ----------
     report_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")  # 报告输出根目录, 修改后改变报告与图像落盘位置.
