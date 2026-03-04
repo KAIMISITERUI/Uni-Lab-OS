@@ -207,19 +207,24 @@ CONSUMABLE_ALIAS_TO_CODE = {
     "5mltip头": int(ResourceCode.TIP_5ML),
     "5mltip枪头": int(ResourceCode.TIP_5ML),
     "5mltip吸头": int(ResourceCode.TIP_5ML),
-    # 反应管及磁子
+
+    # 反应管
     "2ml反应管": int(ResourceCode.REACTION_TUBE_2ML),
     "2ml反应试管": int(ResourceCode.REACTION_TUBE_2ML),
     "反应管": int(ResourceCode.REACTION_TUBE_2ML),
     "反应试管": int(ResourceCode.REACTION_TUBE_2ML),
+
+    # 磁子
     "2ml反应管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
     "2ml试管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
     "反应管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
     "试管磁子": int(ResourceCode.TEST_TUBE_MAGNET_2ML),
+
     # 反应密封盖
     "反应密封盖": int(ResourceCode.REACTION_SEAL_CAP),
     "反应盖板": int(ResourceCode.REACTION_SEAL_CAP),
     "密封盖": int(ResourceCode.REACTION_SEAL_CAP),
+    
     # 闪滤瓶
     "闪滤瓶内瓶": int(ResourceCode.FLASH_FILTER_INNER_BOTTLE),
     "闪滤内瓶": int(ResourceCode.FLASH_FILTER_INNER_BOTTLE),

@@ -62,6 +62,68 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             **kwargs,
         )
 
+    def _read_table_file_with_required_columns(
+        self,
+        path: Path,
+        *,
+        required_columns: Optional[List[str]] = None,
+        preferred_sheet_name: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        功能:
+            读取 CSV/Excel 文件.
+            当为 Excel 且存在多工作表时, 根据必需列选择工作表.
+        参数:
+            path: 文件路径.
+            required_columns: 必需列名列表, None 表示直接读取默认表.
+            preferred_sheet_name: 优先工作表名.
+        返回:
+            DataFrame, 读取后的表格数据.
+        """
+        if path.suffix.lower() not in [".xlsx", ".xls"]:
+            return pd.read_csv(path)
+
+        if required_columns is None:
+            return pd.read_excel(path)
+
+        required = {str(col).strip().lower() for col in required_columns}
+        all_sheets = pd.read_excel(path, sheet_name=None)
+
+        candidate_sheet_names: List[str] = []
+        if preferred_sheet_name is not None and preferred_sheet_name in all_sheets:
+            candidate_sheet_names.append(preferred_sheet_name)
+        for sheet_name in all_sheets.keys():
+            if sheet_name not in candidate_sheet_names:
+                candidate_sheet_names.append(sheet_name)
+
+        matched_sheet_names: List[str] = []
+        for sheet_name in candidate_sheet_names:
+            df = all_sheets[sheet_name]
+            normalized_columns = {str(col).strip().lower() for col in df.columns}
+            if required.issubset(normalized_columns):
+                matched_sheet_names.append(sheet_name)
+
+        if len(matched_sheet_names) > 0:
+            selected_sheet_name = matched_sheet_names[0]
+            if len(matched_sheet_names) > 1:
+                logger.warning(
+                    "Excel命中多个候选工作表, 将按优先顺序使用 [%s], 其余候选: %s, 文件: %s",
+                    selected_sheet_name,
+                    matched_sheet_names[1:],
+                    path,
+                )
+            logger.info("Excel解析使用工作表: %s, 文件: %s", selected_sheet_name, path)
+            return all_sheets[selected_sheet_name]
+
+        fallback_sheet_name = next(iter(all_sheets.keys()))
+        logger.warning(
+            "Excel未命中必需列%s, 回退到第一张工作表: %s, 文件: %s",
+            sorted(required),
+            fallback_sheet_name,
+            path,
+        )
+        return all_sheets[fallback_sheet_name]
+
     # ---------- 1. 化合物库文件处理 ----------
     def export_chemical_list_to_file(self, output_path: str) -> None:
         """
@@ -289,13 +351,14 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         # 读取文件
         if path.suffix == '.xlsx':
             wb = openpyxl.load_workbook(path)
-            ws = wb.active
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                # 确保取前三列，且处理 None
-                pos = str(row[0]) if row[0] is not None else ""
-                t_type = str(row[1]) if len(row) > 1 and row[1] is not None else ""
-                content = str(row[2]) if len(row) > 2 and row[2] is not None else ""
-                rows.append((pos, t_type, content))
+            try:
+                ws, header_row, header_map = self._select_batch_in_sheet(wb)
+                batch_records = self._iter_batch_in_records(ws, header_row, header_map)
+            finally:
+                wb.close()
+
+            for record in batch_records:
+                rows.append((record["position"], record["tray_type"], record["content"]))
         else:
             df = pd.read_csv(path)
             df = df.fillna("")
@@ -577,7 +640,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             raise FileNotFoundError(f"未找到化学品库文件: {c_path}")
 
         # 2. 读取化学品库 -> Dict
-        chem_df = pd.read_excel(c_path) if c_path.suffix.lower() in [".xlsx", ".xls"] else pd.read_csv(c_path)
+        chem_df = self._read_table_file_with_required_columns(
+            c_path,
+            required_columns=["substance"],
+        )
         chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
 
         def _pick(row, *keys, default=None):
@@ -935,7 +1001,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if not c_path.exists():
             raise FileNotFoundError(f"未找到化学品库文件: {c_path}")
 
-        chem_df = pd.read_excel(c_path) if c_path.suffix.lower() in [".xlsx", ".xls"] else pd.read_csv(c_path)
+        chem_df = self._read_table_file_with_required_columns(
+            c_path,
+            required_columns=["substance"],
+        )
         chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
 
         def _pick(row, *keys, default=None):
@@ -1103,7 +1172,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if not chemical_list_path.exists():
             raise FileNotFoundError(f"未找到化学品列表文件: {chemical_list_path}")
 
-        chem_df = pd.read_excel(chemical_list_path)
+        chem_df = self._read_table_file_with_required_columns(
+            chemical_list_path,
+            required_columns=["substance", "physical_state", "storage_location"],
+        )
         chem_df = chem_df.fillna("")
 
         # 创建物质名到信息的映射
@@ -1531,25 +1603,39 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             logger.info(f"未找到上料模板，正在生成: {batch_in_path}")
             self._generate_batch_in_tray_template(batch_in_path)
 
-        # 读取现有模板
+        # 读取现有模板并选择目标sheet
         wb = load_workbook(batch_in_path)
-        ws = wb.active
+        try:
+            try:
+                ws, _, _ = self._select_batch_in_sheet(wb)
+            except ValueError:
+                if "batch_in_tray" in wb.sheetnames:
+                    ws = wb["batch_in_tray"]
+                else:
+                    ws = wb.create_sheet("batch_in_tray")
+                ws.cell(row=1, column=1, value="position")
+                ws.cell(row=1, column=2, value="tray_type")
+                ws.cell(row=1, column=3, value="content")
+                ws.cell(row=1, column=4, value="shelf_position")
+                ws.cell(row=1, column=5, value="storage")
 
-        # 清除现有数据（保留表头，从第2行开始清除）
-        max_row = ws.max_row
-        if max_row > 1:
-            ws.delete_rows(2, max_row - 1)
+            # 清除现有数据（保留表头，从第2行开始清除）
+            max_row = ws.max_row
+            if max_row > 1:
+                ws.delete_rows(2, max_row - 1)
 
-        # 写入新数据（从第2行开始）
-        for idx, item in enumerate(batch_in_data, start=2):
-            ws.cell(row=idx, column=1, value=item["position"])
-            ws.cell(row=idx, column=2, value=item["tray_type"])
-            ws.cell(row=idx, column=3, value=item["content"])
-            ws.cell(row=idx, column=4, value=item["shelf_position"])
-            ws.cell(row=idx, column=5, value=item["storage"])
+            # 写入新数据（从第2行开始）
+            for idx, item in enumerate(batch_in_data, start=2):
+                ws.cell(row=idx, column=1, value=item["position"])
+                ws.cell(row=idx, column=2, value=item["tray_type"])
+                ws.cell(row=idx, column=3, value=item["content"])
+                ws.cell(row=idx, column=4, value=item["shelf_position"])
+                ws.cell(row=idx, column=5, value=item["storage"])
 
-        # 保存文件
-        safe_workbook_save(wb, batch_in_path)
+            # 保存文件
+            safe_workbook_save(wb, batch_in_path)
+        finally:
+            wb.close()
 
         logger.info(f"已生成上料文件: {batch_in_path}, 共{len(batch_in_data)}行, 包含{sum(len(g['contents']) for g in position_groups.values())}个物资")
         logger.info(f"请检查文件并根据需要调整")
@@ -1627,7 +1713,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if c_path.exists() is False:
             raise FileNotFoundError(f"未找到化学品库文件: {c_path}")
 
-        chem_df = pd.read_excel(c_path) if c_path.suffix.lower() in [".xlsx", ".xls"] else pd.read_csv(c_path)
+        chem_df = self._read_table_file_with_required_columns(
+            c_path,
+            required_columns=["substance"],
+        )
         chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
 
         def _pick(row, *keys, default=None):
@@ -1798,4 +1887,3 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info("启动 GC-MS 轮询流程, task_id=%s, poll_interval=%.0fs", task_id, poll_interval)
         result = analysis_ctrl.poll_analysis_run(task_id=task_id, poll_interval=poll_interval)
         return result
-

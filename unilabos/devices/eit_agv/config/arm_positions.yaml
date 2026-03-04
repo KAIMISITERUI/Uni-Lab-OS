@@ -431,19 +431,19 @@ materials:
 
   TIP_TRAY_50UL:
     gripper: gripper_type_a
-    descend_z_offset: 85
+    descend_z_offset: 0
     lift_z_offset: 0
     description: "50 μL Tip 头托盘"
 
   TIP_TRAY_1ML:
     gripper: gripper_type_a
-    descend_z_offset: 85
+    descend_z_offset: 0
     lift_z_offset: 0
     description: "1 mL Tip 头托盘"
 
   TIP_TRAY_5ML:
     gripper: gripper_type_a
-    descend_z_offset: 103
+    descend_z_offset: 0
     lift_z_offset: 0
     description: "5 mL Tip 头托盘"
 
@@ -503,26 +503,26 @@ global_params:
   collision_level: 3  # 碰撞检测等级(0-5)
 station_calibration:
   shelf:
-    x: -2.1850484237670997
-    y: 9.128931319274947
-    z: -0.5204020207214555
-    dx: -0.0006226721038817828
-    dy: -0.0022586806820537896
-    dz: -0.007747348518371583
+    x: 0.06204668426512683
+    y: 9.277406489410446
+    z: -0.41496140411378946
+    dx: -0.0003971281280517047
+    dy: -0.002802285345161334
+    dz: -0.007336311162710191
     description: shelf工站校准偏移值
   synthesis_station:
-    x: -0.7549191486930784
-    y: -0.4553196476745347
-    z: 1.527911866149867
-    dx: -0.0027774505615232314
-    dy: -0.000841224379569292
-    dz: -0.0005240104613304097
+    x: -0.51922748208999
+    y: -1.2903807209777574
+    z: 1.5779201631164197
+    dx: -0.002233379364013466
+    dy: -0.0007843662050664424
+    dz: -0.0007386020836830098
     description: synthesis_station工站校准偏移值
   analysis_station:
-    x: -39.32093784851073
-    y: 15.202825326995795
-    z: -0.7882700059509418
-    dx: 0.0014634259338377476
-    dy: -0.002024321793213487
-    dz: 0.010332608648777011
+    x: -38.398228145065296
+    y: 13.711576719360297
+    z: -0.8103237245178363
+    dx: 0.0004439480895994663
+    dy: -0.002230390067778528
+    dz: 0.011308504321813587
     description: analysis_station工站校准偏移值

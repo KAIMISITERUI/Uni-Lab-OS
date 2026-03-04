@@ -245,9 +245,47 @@ class ChemicalLibrary:
         ChemicalLibrary 对象.
     """
 
+    @staticmethod
+    def _read_library_excel(xlsx_path: Path) -> pd.DataFrame:
+        """
+        功能:
+            读取化学品库 Excel, 当存在多工作表时按必需列自动选表.
+        参数:
+            xlsx_path: Path, 化学品库路径.
+        返回:
+            DataFrame, 选中的工作表数据.
+        """
+        all_sheets = pd.read_excel(xlsx_path, sheet_name=None)
+        required_columns = {"substance", "storage_location"}
+
+        matched_sheet_names: List[str] = []
+        for sheet_name, df in all_sheets.items():
+            normalized_columns = {str(col).strip().lower() for col in df.columns}
+            if required_columns.issubset(normalized_columns):
+                matched_sheet_names.append(sheet_name)
+
+        if len(matched_sheet_names) > 0:
+            selected_sheet_name = matched_sheet_names[0]
+            if len(matched_sheet_names) > 1:
+                logger.warning(
+                    "chemical_list.xlsx 命中多个候选工作表, 将按优先顺序使用 [%s], 其余候选: %s",
+                    selected_sheet_name,
+                    matched_sheet_names[1:],
+                )
+            logger.info("化学品库解析使用工作表: %s", selected_sheet_name)
+            return all_sheets[selected_sheet_name]
+
+        first_sheet_name = next(iter(all_sheets.keys()))
+        logger.warning(
+            "chemical_list.xlsx 未命中必需列%s, 回退到第一张工作表: %s",
+            sorted(required_columns),
+            first_sheet_name,
+        )
+        return all_sheets[first_sheet_name]
+
     def __init__(self, xlsx_path: Path) -> None:
         self.xlsx_path = xlsx_path
-        self.df = pd.read_excel(xlsx_path)
+        self.df = self._read_library_excel(xlsx_path)
         if "substance" not in self.df.columns:
             raise ValueError("chemical_list.xlsx 缺少 substance 列.")
         if "storage_location" not in self.df.columns:
@@ -446,6 +484,99 @@ class ReactionTemplateWriter:
                 continue
         return None
 
+    @staticmethod
+    def _normalize_sheet_text(value: Any) -> str:
+        """
+        功能:
+            规范化工作表文本, 用于模板关键字匹配.
+        参数:
+            value: 任意类型单元格值.
+        返回:
+            str, 去空白并转小写后的文本.
+        """
+        text = "" if value is None else str(value)
+        return (
+            text.replace(" ", "")
+            .replace("\n", "")
+            .replace("\r", "")
+            .replace("\t", "")
+            .strip()
+            .lower()
+        )
+
+    def _is_reaction_template_sheet(self, ws: Worksheet) -> bool:
+        """
+        功能:
+            判断工作表是否为可写入的反应模板工作表.
+        参数:
+            ws: Worksheet, 待判断工作表.
+        返回:
+            bool, 是否命中实验编号与试剂相关表头.
+        """
+        has_experiment_header = False
+        has_reagent_header = False
+        scan_rows = min(ws.max_row, 40)
+        scan_cols = min(ws.max_column, 20)
+
+        for row_idx in range(1, scan_rows + 1):
+            for col_idx in range(1, scan_cols + 1):
+                normalized = self._normalize_sheet_text(ws.cell(row=row_idx, column=col_idx).value)
+                if normalized == "":
+                    continue
+                if "实验编号" in normalized:
+                    has_experiment_header = True
+                if normalized == "试剂" or normalized == "试剂量":
+                    has_reagent_header = True
+
+        return has_experiment_header and has_reagent_header
+
+    def _select_template_sheet(self, workbook: Workbook) -> Worksheet:
+        """
+        功能:
+            从模板工作簿中选择可写入的工作表.
+            选择顺序: 实验方案设定 > 当前 active > 其它工作表.
+        参数:
+            workbook: Workbook, 模板工作簿.
+        返回:
+            Worksheet, 选中的模板工作表.
+        """
+        candidate_sheet_names: List[str] = []
+        preferred_sheet_name = "实验方案设定"
+        if preferred_sheet_name in workbook.sheetnames:
+            candidate_sheet_names.append(preferred_sheet_name)
+
+        active_sheet_name = workbook.active.title
+        if active_sheet_name not in candidate_sheet_names:
+            candidate_sheet_names.append(active_sheet_name)
+
+        for sheet_name in workbook.sheetnames:
+            if sheet_name not in candidate_sheet_names:
+                candidate_sheet_names.append(sheet_name)
+
+        matched_sheet_names: List[str] = []
+        for sheet_name in candidate_sheet_names:
+            worksheet = workbook[sheet_name]
+            if self._is_reaction_template_sheet(worksheet):
+                matched_sheet_names.append(sheet_name)
+
+        if len(matched_sheet_names) > 0:
+            selected_sheet_name = matched_sheet_names[0]
+            if len(matched_sheet_names) > 1:
+                logger.warning(
+                    "模板写入命中多个候选工作表, 将按优先顺序使用 [%s], 其余候选: %s",
+                    selected_sheet_name,
+                    matched_sheet_names[1:],
+                )
+            if selected_sheet_name != active_sheet_name:
+                logger.info(
+                    "模板写入使用工作表: %s, 当前活动工作表: %s",
+                    selected_sheet_name,
+                    active_sheet_name,
+                )
+            return workbook[selected_sheet_name]
+
+        raise ValueError(f"模板中未找到可写入的工作表, 可用工作表: {workbook.sheetnames}")
+
     def write(self, plan: ReactionPlan, output_path: Path) -> None:
         """
         功能:
@@ -457,7 +588,7 @@ class ReactionTemplateWriter:
             None.
         """
         wb = load_workbook(self.template_path)
-        ws1 = wb.active
+        ws1 = self._select_template_sheet(wb)
 
         # 需要的 sheet 数量
         total_rows = len(plan.experiments)

@@ -1793,6 +1793,188 @@ class SynthesisStationController:
         self._logger.info("已解析上料信息, 包含 %s 个托盘", len(resource_req_list))
         return resource_req_list
 
+    @staticmethod
+    def _normalize_batch_in_header_text(value: Any) -> str:
+        """
+        功能:
+            规范化 batch_in 表头文本, 用于跨模板兼容匹配.
+        参数:
+            value: 任意类型单元格值.
+        返回:
+            str, 去空白并去掉常见分隔符后的小写文本.
+        """
+        text = "" if value is None else str(value)
+        return (
+            text.replace(" ", "")
+            .replace("\n", "")
+            .replace("\r", "")
+            .replace("\t", "")
+            .replace("_", "")
+            .replace("-", "")
+            .strip()
+            .lower()
+        )
+
+    def _find_batch_in_header_map(
+        self,
+        worksheet: Any,
+        *,
+        max_scan_rows: int = 30,
+        max_scan_cols: int = 30,
+    ) -> Tuple[Optional[int], Optional[Dict[str, int]]]:
+        """
+        功能:
+            在单个工作表中定位 batch_in 表头行, 并返回关键列映射.
+        参数:
+            worksheet: openpyxl 工作表对象.
+            max_scan_rows: 最大扫描行数.
+            max_scan_cols: 最大扫描列数.
+        返回:
+            Tuple[Optional[int], Optional[Dict[str, int]]], 命中时返回(表头行号, 列映射), 未命中返回(None, None).
+        """
+        scan_rows = min(worksheet.max_row, max_scan_rows)
+        scan_cols = min(worksheet.max_column, max_scan_cols)
+        required_headers = {
+            "position": "position",
+            "tray_type": "traytype",
+            "content": "content",
+        }
+        optional_headers = {
+            "shelf_position": "shelfposition",
+            "storage": "storage",
+        }
+
+        for row_index in range(1, scan_rows + 1):
+            normalized_cells: Dict[int, str] = {}
+            for col_index in range(1, scan_cols + 1):
+                normalized_cells[col_index] = self._normalize_batch_in_header_text(
+                    worksheet.cell(row_index, col_index).value
+                )
+
+            header_map: Dict[str, int] = {}
+            for field_name, expected_header in required_headers.items():
+                matched_col = None
+                for col_index, normalized_text in normalized_cells.items():
+                    if normalized_text == expected_header:
+                        matched_col = col_index
+                        break
+                if matched_col is None:
+                    header_map = {}
+                    break
+                header_map[field_name] = matched_col
+
+            if len(header_map) != len(required_headers):
+                continue
+
+            for field_name, expected_header in optional_headers.items():
+                for col_index, normalized_text in normalized_cells.items():
+                    if normalized_text == expected_header:
+                        header_map[field_name] = col_index
+                        break
+
+            return row_index, header_map
+
+        return None, None
+
+    def _select_batch_in_sheet(self, workbook: Any) -> Tuple[Any, int, Dict[str, int]]:
+        """
+        功能:
+            从 batch_in 工作簿中选择可解析的工作表.
+            选择顺序: batch_in_tray > 当前 active > 其它工作表.
+        参数:
+            workbook: openpyxl Workbook 对象.
+        返回:
+            Tuple[Any, int, Dict[str, int]], (工作表对象, 表头行号, 列映射).
+        """
+        candidate_sheet_names: List[str] = []
+        preferred_sheet_name = "batch_in_tray"
+        if preferred_sheet_name in workbook.sheetnames:
+            candidate_sheet_names.append(preferred_sheet_name)
+
+        active_sheet_name = workbook.active.title
+        if active_sheet_name not in candidate_sheet_names:
+            candidate_sheet_names.append(active_sheet_name)
+
+        for sheet_name in workbook.sheetnames:
+            if sheet_name not in candidate_sheet_names:
+                candidate_sheet_names.append(sheet_name)
+
+        matched_candidates: List[Tuple[Any, int, Dict[str, int]]] = []
+        for sheet_name in candidate_sheet_names:
+            worksheet = workbook[sheet_name]
+            header_row, header_map = self._find_batch_in_header_map(worksheet)
+            if header_row is None or header_map is None:
+                continue
+
+            matched_candidates.append((worksheet, header_row, header_map))
+
+        if len(matched_candidates) > 0:
+            worksheet, header_row, header_map = matched_candidates[0]
+            if len(matched_candidates) > 1:
+                candidate_names = [item[0].title for item in matched_candidates]
+                self._logger.warning(
+                    "batch_in 命中多个候选工作表, 将按优先顺序使用 [%s], 其余候选: %s",
+                    worksheet.title,
+                    candidate_names[1:],
+                )
+            if worksheet.title != workbook.active.title:
+                self._logger.info(
+                    "batch_in 解析使用工作表: %s, 当前活动工作表: %s",
+                    worksheet.title,
+                    workbook.active.title,
+                )
+            return worksheet, header_row, header_map
+
+        raise ValueError(
+            f"未找到可解析的 batch_in 工作表, 可用工作表: {workbook.sheetnames}"
+        )
+
+    def _iter_batch_in_records(
+        self,
+        worksheet: Any,
+        header_row: int,
+        header_map: Dict[str, int],
+    ) -> List[Dict[str, str]]:
+        """
+        功能:
+            按列映射读取 batch_in 工作表数据行.
+        参数:
+            worksheet: openpyxl 工作表对象.
+            header_row: 表头所在行号.
+            header_map: 字段到列号映射.
+        返回:
+            List[Dict[str, str]], 标准化后的上料行记录.
+        """
+        records: List[Dict[str, str]] = []
+        for row_index in range(header_row + 1, worksheet.max_row + 1):
+            position = worksheet.cell(row_index, header_map["position"]).value
+            if position is None or str(position).strip() == "":
+                continue
+
+            tray_type = worksheet.cell(row_index, header_map["tray_type"]).value
+            content = worksheet.cell(row_index, header_map["content"]).value
+            shelf_position = ""
+            if "shelf_position" in header_map:
+                shelf_position_value = worksheet.cell(row_index, header_map["shelf_position"]).value
+                shelf_position = "" if shelf_position_value is None else str(shelf_position_value).strip()
+
+            storage = ""
+            if "storage" in header_map:
+                storage_value = worksheet.cell(row_index, header_map["storage"]).value
+                storage = "" if storage_value is None else str(storage_value).strip()
+
+            records.append(
+                {
+                    "position": str(position).strip(),
+                    "tray_type": "" if tray_type is None else str(tray_type).strip(),
+                    "content": "" if content is None else str(content).strip(),
+                    "shelf_position": shelf_position,
+                    "storage": storage,
+                }
+            )
+
+        return records
+
     def auto_load_trays_from_agv(
         self,
         batch_in_file: Optional[str] = None,
@@ -1841,20 +2023,20 @@ class SynthesisStationController:
             raise FileNotFoundError(f"上料信息文件不存在: {batch_in_path}")
 
         wb = openpyxl.load_workbook(batch_in_path)
-        ws = wb.active
+        try:
+            ws, header_row, header_map = self._select_batch_in_sheet(wb)
+            batch_records = self._iter_batch_in_records(ws, header_row, header_map)
+        finally:
+            wb.close()
 
         # 3. 解析上料信息
         transfer_tasks_all = []
         errors = []
 
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            # 跳过空行
-            if not row[0]:
-                continue
-
-            position = str(row[0]).strip()  # TB-x-x
-            tray_type_text = str(row[1]) if len(row) > 1 and row[1] else ""
-            shelf_position = str(row[3]) if len(row) > 3 and row[3] else ""
+        for record in batch_records:
+            position = record["position"]  # TB-x-x
+            tray_type_text = record["tray_type"]
+            shelf_position = record["shelf_position"]
 
             # 跳过没有 shelf_position 的行
             if not shelf_position:

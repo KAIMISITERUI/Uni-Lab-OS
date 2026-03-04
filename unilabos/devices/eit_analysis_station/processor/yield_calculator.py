@@ -296,8 +296,25 @@ class YieldCalculator:
         返回:
             float: 内标摩尔量(mol).
         """
-        # 读取化学品库
-        chem_df = pd.read_excel(chemical_list_path)
+        # 读取化学品库, 多工作表时按必需列优先选表.
+        chem_sheets = pd.read_excel(chemical_list_path, sheet_name=None)
+        chem_df = None
+        required_columns = {"substance", "molecular_weight", "physical_state"}
+        for sheet_name, sheet_df in chem_sheets.items():
+            normalized_columns = {str(col).strip().lower() for col in sheet_df.columns}
+            if required_columns.issubset(normalized_columns):
+                chem_df = sheet_df
+                logger.info("化学品库解析使用工作表: %s", sheet_name)
+                break
+
+        if chem_df is None:
+            first_sheet_name = next(iter(chem_sheets.keys()))
+            chem_df = chem_sheets[first_sheet_name]
+            logger.warning(
+                "chemical_list.xlsx 未命中必需列%s, 回退到第一张工作表: %s",
+                sorted(required_columns),
+                first_sheet_name,
+            )
         chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
 
         def _pick(row, *keys, default=None):
@@ -432,7 +449,7 @@ class YieldCalculator:
     # 配置解析
     # ------------------------------------------------------------------
 
-    def parse_yield_config(
+    def parse_yield_config_legacy(
         self, plan_path: Path, chemical_list_path: Path
     ) -> YieldCalcConfig:
         """
@@ -516,6 +533,202 @@ class YieldCalculator:
             response_factor=response_factor,
             products=products,
         )
+
+    @staticmethod
+    def _normalize_sheet_text(value: Any) -> str:
+        """
+        功能:
+            规范化工作表文本, 用于关键字匹配.
+        参数:
+            value: 任意类型单元格值.
+        返回:
+            str, 去空白并转小写后的文本.
+        """
+        text = "" if value is None else str(value)
+        return (
+            text.replace(" ", "")
+            .replace("\n", "")
+            .replace("\r", "")
+            .replace("\t", "")
+            .strip()
+            .lower()
+        )
+
+    def _score_main_config_sheet(self, worksheet: Any) -> int:
+        """
+        功能:
+            计算工作表作为“实验方案主配置表”的匹配分数.
+        参数:
+            worksheet: openpyxl Worksheet.
+        返回:
+            int, 命中关键字段数量.
+        """
+        keyword_flags = {
+            "反应规模(mmol)": False,
+            "内标种类": False,
+            "内标用量": False,
+        }
+        normalized_keywords = {
+            key: self._normalize_sheet_text(key) for key in keyword_flags.keys()
+        }
+
+        scan_rows = min(worksheet.max_row, 120)
+        for row_index in range(1, scan_rows + 1):
+            cell_text = self._normalize_sheet_text(worksheet.cell(row_index, 1).value)
+            if cell_text == "":
+                continue
+            for key, normalized_key in normalized_keywords.items():
+                if normalized_key in cell_text:
+                    keyword_flags[key] = True
+
+        return sum(1 for matched in keyword_flags.values() if matched)
+
+    def _select_main_config_sheet(self, workbook: Any) -> Any:
+        """
+        功能:
+            选择用于读取主参数的工作表.
+            选择顺序: 实验方案设定 > 当前 active > 其它工作表.
+            命中规则: 反应规模/内标种类/内标用量 关键字段分数最高.
+        参数:
+            workbook: openpyxl Workbook 对象.
+        返回:
+            Any, 选中的工作表对象.
+        """
+        candidate_sheet_names: List[str] = []
+        preferred_sheet_name = "实验方案设定"
+        if preferred_sheet_name in workbook.sheetnames:
+            candidate_sheet_names.append(preferred_sheet_name)
+
+        active_sheet_name = workbook.active.title
+        if active_sheet_name not in candidate_sheet_names:
+            candidate_sheet_names.append(active_sheet_name)
+
+        for sheet_name in workbook.sheetnames:
+            if sheet_name not in candidate_sheet_names:
+                candidate_sheet_names.append(sheet_name)
+
+        best_candidates: List[Any] = []
+        best_score = -1
+        for sheet_name in candidate_sheet_names:
+            worksheet = workbook[sheet_name]
+            score = self._score_main_config_sheet(worksheet)
+            if score > best_score:
+                best_score = score
+                best_candidates = [worksheet]
+                continue
+            if score == best_score:
+                best_candidates.append(worksheet)
+
+        if len(best_candidates) > 0 and best_score > 0:
+            selected_sheet = best_candidates[0]
+            if len(best_candidates) > 1:
+                candidate_names = [sheet.title for sheet in best_candidates]
+                logger.warning(
+                    "产率配置命中多个主配置候选工作表, 将按优先顺序使用 [%s], 其余候选: %s",
+                    selected_sheet.title,
+                    candidate_names[1:],
+                )
+            return selected_sheet
+
+        # 兼容历史文件: 若未命中关键字段, 回退到第一张表并记录告警.
+        fallback_sheet = workbook.worksheets[0]
+        logger.warning(
+            "未命中主配置关键字段, 回退到第一张工作表: %s, 可用工作表: %s",
+            fallback_sheet.title,
+            workbook.sheetnames,
+        )
+        return fallback_sheet
+
+    def parse_yield_config(
+        self, plan_path: Path, chemical_list_path: Path
+    ) -> YieldCalcConfig:
+        """
+        功能:
+            从实验方案 xlsx 解析产率计算配置:
+            1. 读主参数 Sheet: 反应规模(mmol), 内标种类, 内标用量(μL/mg).
+            2. 读 "GC产率计算" Sheet: 内标SMILES, 目标产物列表, 计算方法.
+            3. 查 chemical_list.xlsx, 推算内标摩尔量.
+            4. 自动计算各化合物的分子式和 ECN.
+        参数:
+            plan_path: 实验方案 xlsx 文件路径.
+            chemical_list_path: chemical_list.xlsx 文件路径.
+        返回:
+            YieldCalcConfig: 产率计算配置.
+        """
+        wb = openpyxl.load_workbook(str(plan_path), data_only=True)
+        try:
+            # ---------- 1. 从主参数 Sheet 读取已有字段 ----------
+            ws_main = self._select_main_config_sheet(wb)
+            if ws_main.title != wb.active.title:
+                logger.info(
+                    "产率配置解析使用工作表: %s, 当前活动工作表: %s",
+                    ws_main.title,
+                    wb.active.title,
+                )
+            params = self._read_kv_params(ws_main)
+
+            reaction_scale = self._parse_float(params.get("反应规模(mmol)", 0))
+            is_name = str(params.get("内标种类", "")).strip()
+            is_amount = self._parse_float(params.get("内标用量(μL/mg)", 0))
+            # 兼容可能的其它格式.
+            if is_amount == 0:
+                is_amount = self._parse_float(params.get("内标用量(ul/mg)", 0))
+                if is_amount == 0:
+                    is_amount = self._parse_float(params.get("内标用量", 0))
+
+            # ---------- 2. 读 "GC产率计算" Sheet ----------
+            if YIELD_CONFIG_SHEET_NAME not in wb.sheetnames:
+                raise ValueError(f"实验方案中未找到 '{YIELD_CONFIG_SHEET_NAME}' Sheet")
+            ws_yield = wb[YIELD_CONFIG_SHEET_NAME]
+
+            yield_params = self._read_kv_params(ws_yield)
+
+            is_smiles = str(yield_params.get("内标SMILES", "")).strip()
+            is_expected_rt = self._parse_opt_float(yield_params.get("内标预期RT(min)"))
+            calc_method = str(yield_params.get("产率计算方法", "ECN")).strip()
+            curve_slope = self._parse_opt_float(yield_params.get("标准曲线斜率"))
+            curve_intercept = self._parse_opt_float(yield_params.get("标准曲线截距"))
+            response_factor = self._parse_opt_float(yield_params.get("响应因子"))
+
+            if not is_smiles:
+                raise ValueError(f"{YIELD_CONFIG_SHEET_NAME} Sheet 中未填写 '内标SMILES'")
+
+            # ---------- 3. 读目标产物列表 ----------
+            products = self._read_product_table(ws_yield)
+
+            if len(products) == 0:
+                raise ValueError(f"{YIELD_CONFIG_SHEET_NAME} Sheet 中未找到目标产物列表")
+
+            # ---------- 4. 计算分子式和 ECN ----------
+            is_formula = self.smiles_to_formula(is_smiles)
+            is_ecn = self.calculate_ecn(is_smiles)
+            logger.info("内标 '%s': 分子式=%s, ECN=%.2f", is_name, is_formula, is_ecn)
+
+            for product in products:
+                product.formula = self.smiles_to_formula(product.smiles)
+                product.ecn = self.calculate_ecn(product.smiles)
+                logger.info("产物 '%s': 分子式=%s, ECN=%.2f", product.name, product.formula, product.ecn)
+
+            # ---------- 5. 推算内标摩尔量 ----------
+            is_moles = self._calculate_is_moles(is_name, is_amount, chemical_list_path)
+
+            return YieldCalcConfig(
+                is_name=is_name,
+                is_smiles=is_smiles,
+                is_formula=is_formula,
+                is_ecn=is_ecn,
+                is_expected_rt=is_expected_rt,
+                is_amount=is_amount,
+                is_moles=is_moles,
+                reaction_scale_mmol=reaction_scale,
+                calc_method=calc_method,
+                curve_slope=curve_slope,
+                curve_intercept=curve_intercept,
+                response_factor=response_factor,
+                products=products,
+            )
+        finally:
+            wb.close()
 
     def _read_kv_params(self, ws) -> Dict[str, Any]:
         """

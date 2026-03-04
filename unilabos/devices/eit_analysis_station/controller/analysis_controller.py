@@ -19,7 +19,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
 
@@ -211,7 +211,148 @@ class AnalysisStationController:
     # xlsx 解析
     # ------------------------------------------------------------------
 
-    def _parse_task_xlsx(self, task_dir: Path, task_id: str) -> Dict:
+    @staticmethod
+    def _normalize_sheet_text(value: Any) -> str:
+        """
+        功能:
+            规范化工作表文本, 用于表头和关键字匹配.
+        参数:
+            value: 任意类型单元格值.
+        返回:
+            str, 去空白并转小写后的文本.
+        """
+        text = "" if value is None else str(value)
+        return (
+            text.replace(" ", "")
+            .replace("\n", "")
+            .replace("\r", "")
+            .replace("\t", "")
+            .strip()
+            .lower()
+        )
+
+    def _find_header_in_sheet(
+        self,
+        worksheet: Any,
+        header_keyword: str,
+        *,
+        max_scan_rows: int = 80,
+        max_scan_cols: int = 40,
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        功能:
+            在单个工作表中查找目标表头位置.
+        参数:
+            worksheet: openpyxl 工作表对象.
+            header_keyword: 目标表头关键字, 例如 "实验编号".
+            max_scan_rows: 最大扫描行数.
+            max_scan_cols: 最大扫描列数.
+        返回:
+            Tuple[Optional[int], Optional[int]], 命中时返回(行号, 列号), 未命中返回(None, None).
+        """
+        normalized_keyword = self._normalize_sheet_text(header_keyword)
+        scan_rows = min(worksheet.max_row, max_scan_rows)
+        scan_cols = min(worksheet.max_column, max_scan_cols)
+
+        for row_index in range(1, scan_rows + 1):
+            for col_index in range(1, scan_cols + 1):
+                cell_text = self._normalize_sheet_text(worksheet.cell(row_index, col_index).value)
+                if normalized_keyword in cell_text and cell_text != "":
+                    return row_index, col_index
+
+        return None, None
+
+    def _sheet_contains_instrument_anchor(self, worksheet: Any) -> bool:
+        """
+        功能:
+            判断工作表是否包含分析仪器方法锚点字段.
+        参数:
+            worksheet: openpyxl 工作表对象.
+        返回:
+            bool, 是否命中 GC_MS/UPLC_QTOF/HPLC 任一锚点.
+        """
+        anchors = {"GC_MS", "UPLC_QTOF", "HPLC"}
+        scan_rows = min(worksheet.max_row, 300)
+
+        for row_index in range(1, scan_rows + 1):
+            cell_value = worksheet.cell(row_index, 1).value
+            if cell_value is None:
+                continue
+            if str(cell_value).strip() in anchors:
+                return True
+
+        return False
+
+    def _select_task_parse_sheet(self, workbook: Any) -> Tuple[Any, int, int]:
+        """
+        功能:
+            为任务解析选择最合适的工作表, 并返回实验编号表头位置.
+            选择顺序: 实验方案设定 > 当前 active > 其它工作表.
+            命中优先级: 同时命中实验编号表头和仪器锚点 > 仅命中实验编号表头.
+        参数:
+            workbook: openpyxl Workbook 对象.
+        返回:
+            Tuple[Any, int, int], (工作表对象, 实验编号表头行号, 实验编号列号).
+        """
+        candidate_sheet_names: List[str] = []
+        preferred_sheet_name = "实验方案设定"
+        if preferred_sheet_name in workbook.sheetnames:
+            candidate_sheet_names.append(preferred_sheet_name)
+
+        active_sheet_name = workbook.active.title
+        if active_sheet_name not in candidate_sheet_names:
+            candidate_sheet_names.append(active_sheet_name)
+
+        for sheet_name in workbook.sheetnames:
+            if sheet_name not in candidate_sheet_names:
+                candidate_sheet_names.append(sheet_name)
+
+        anchor_candidates: List[Tuple[Any, int, int]] = []
+        header_only_candidates: List[Tuple[Any, int, int]] = []
+        for sheet_name in candidate_sheet_names:
+            worksheet = workbook[sheet_name]
+            header_row, exp_no_col = self._find_header_in_sheet(worksheet, "实验编号")
+            if header_row is None or exp_no_col is None:
+                continue
+
+            has_anchor = self._sheet_contains_instrument_anchor(worksheet)
+            if has_anchor:
+                anchor_candidates.append((worksheet, header_row, exp_no_col))
+                continue
+
+            header_only_candidates.append((worksheet, header_row, exp_no_col))
+
+        if len(anchor_candidates) > 0:
+            worksheet, header_row, exp_no_col = anchor_candidates[0]
+            if len(anchor_candidates) > 1:
+                candidate_names = [item[0].title for item in anchor_candidates]
+                self._logger.warning(
+                    "任务解析命中多个候选工作表, 将按优先顺序使用 [%s], 其余候选: %s",
+                    worksheet.title,
+                    candidate_names[1:],
+                )
+            return worksheet, header_row, exp_no_col
+
+        if len(header_only_candidates) > 0:
+            worksheet, header_row, exp_no_col = header_only_candidates[0]
+            if len(header_only_candidates) > 1:
+                candidate_names = [item[0].title for item in header_only_candidates]
+                self._logger.warning(
+                    "任务解析命中多个仅含实验编号表头的工作表, 将按优先顺序使用 [%s], 其余候选: %s",
+                    worksheet.title,
+                    candidate_names[1:],
+                )
+            self._logger.warning(
+                "任务解析工作表 [%s] 命中实验编号表头, 但未检测到仪器锚点, 将按兼容模式继续解析.",
+                worksheet.title,
+            )
+            return worksheet, header_row, exp_no_col
+
+        raise ValueError(
+            f"未找到包含实验编号表头的工作表, 可用工作表: {workbook.sheetnames}"
+        )
+
+    def _parse_task_xlsx_legacy(self, task_dir: Path, task_id: str) -> Dict:
         """
         功能:
             解析合成任务 xlsx 文件, 提取实验数量及各仪器方法名称.
@@ -320,6 +461,128 @@ class AnalysisStationController:
             "hplc_method": hplc_method,
             "hplc_exp_nums": hplc_exp_nums,
         }
+
+    def _parse_task_xlsx(self, task_dir: Path, task_id: str) -> Dict:
+        """
+        功能:
+            解析合成任务 xlsx 文件, 提取实验数量及各仪器方法名称.
+            工作表选择优先级: 实验方案设定 > 当前 active > 其它工作表.
+            实验数量统计基于“实验编号”表头定位到的列, 避免误读其它表格数值列.
+        参数:
+            task_dir: 任务目录 Path.
+            task_id: 任务 ID 字符串.
+        返回:
+            Dict, 包含以下键:
+                task_id (str): 任务 ID.
+                exp_count (int): 实验数量.
+                gc_ms_method (str|None): GC_MS 方法名, None 表示不使用.
+                gc_ms_exp_nums (List[int]|None): GC_MS 实验编号过滤列表.
+                uplc_qtof_method (str|None): UPLC_QTOF 方法名.
+                uplc_qtof_exp_nums (List[int]|None): UPLC_QTOF 实验编号过滤列表.
+                hplc_method (str|None): HPLC 方法名.
+                hplc_exp_nums (List[int]|None): HPLC 实验编号过滤列表.
+        """
+        # 优先查找新命名 xlsx, 兼容旧命名和 .csv.
+        xlsx_path = task_dir / f"{task_id}_experiment_plan.xlsx"
+        legacy_xlsx_path = task_dir / f"{task_id}.xlsx"
+        csv_path = task_dir / f"{task_id}.csv"
+
+        if xlsx_path.exists():
+            file_path = xlsx_path
+        elif legacy_xlsx_path.exists():
+            file_path = legacy_xlsx_path
+        elif csv_path.exists():
+            file_path = csv_path
+        else:
+            raise FileNotFoundError(
+                f"未找到任务文件 {task_id}_experiment_plan.xlsx, {task_id}.xlsx 或 {task_id}.csv 于: {task_dir}"
+            )
+
+        self._logger.info("解析任务文件: %s", file_path)
+
+        wb = openpyxl.load_workbook(file_path, data_only=True)
+        try:
+            ws, header_row, exp_no_col = self._select_task_parse_sheet(wb)
+            if ws.title != wb.active.title:
+                self._logger.info(
+                    "任务解析使用工作表: %s, 当前活动工作表: %s",
+                    ws.title,
+                    wb.active.title,
+                )
+
+            exp_count = 0
+            gc_ms_method_raw: Optional[str] = None
+            uplc_qtof_method_raw: Optional[str] = None
+            hplc_method_raw: Optional[str] = None
+
+            for row_index, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                col_a = row[0] if len(row) > 0 else None
+                col_b = row[1] if len(row) > 1 else None
+                col_exp = row[exp_no_col - 1] if len(row) >= exp_no_col else None
+
+                # 按实验编号表头列统计实验总数, 避免误读其它表格中的数值列.
+                if row_index > header_row and col_exp is not None:
+                    try:
+                        exp_num = int(str(col_exp).strip())
+                        if exp_num > exp_count:
+                            exp_count = exp_num
+                    except (ValueError, TypeError):
+                        pass
+
+                # 定位仪器方法行: col A 中 ASCII 关键字.
+                if col_a is None:
+                    continue
+                col_a_str = str(col_a).strip()
+
+                if col_a_str == "GC_MS":
+                    # col B 为方法名, 空值则跳过该仪器.
+                    gc_ms_method_raw = str(col_b).strip() if col_b is not None else None
+                elif col_a_str == "UPLC_QTOF":
+                    uplc_qtof_method_raw = str(col_b).strip() if col_b is not None else None
+                elif col_a_str == "HPLC":
+                    hplc_method_raw = str(col_b).strip() if col_b is not None else None
+
+            if exp_count == 0:
+                raise ValueError(
+                    f"未能从工作表 [{ws.title}] 的实验编号列读取有效实验编号, "
+                    f"表头位置: row={header_row}, col={exp_no_col}, 文件: {file_path}"
+                )
+
+            # 支持 Method(1-8,9) 写法, 提取方法名与实验编号过滤列表.
+            gc_ms_method, gc_ms_exp_nums = self._parse_method_and_exp_filter(
+                gc_ms_method_raw, exp_count, "GC_MS"
+            )
+            uplc_qtof_method, uplc_qtof_exp_nums = self._parse_method_and_exp_filter(
+                uplc_qtof_method_raw, exp_count, "UPLC_QTOF"
+            )
+            hplc_method, hplc_exp_nums = self._parse_method_and_exp_filter(
+                hplc_method_raw, exp_count, "HPLC"
+            )
+
+            self._logger.info(
+                "任务解析完成: 实验数=%d, GC_MS方法=%s, GC_MS实验=%s, UPLC_QTOF方法=%s, "
+                "UPLC_QTOF实验=%s, HPLC方法=%s, HPLC实验=%s",
+                exp_count,
+                gc_ms_method,
+                gc_ms_exp_nums if gc_ms_exp_nums is not None else "ALL",
+                uplc_qtof_method,
+                uplc_qtof_exp_nums if uplc_qtof_exp_nums is not None else "ALL",
+                hplc_method,
+                hplc_exp_nums if hplc_exp_nums is not None else "ALL",
+            )
+
+            return {
+                "task_id": task_id,
+                "exp_count": exp_count,
+                "gc_ms_method": gc_ms_method,
+                "gc_ms_exp_nums": gc_ms_exp_nums,
+                "uplc_qtof_method": uplc_qtof_method,
+                "uplc_qtof_exp_nums": uplc_qtof_exp_nums,
+                "hplc_method": hplc_method,
+                "hplc_exp_nums": hplc_exp_nums,
+            }
+        finally:
+            wb.close()
 
     def _parse_method_and_exp_filter(
         self,
