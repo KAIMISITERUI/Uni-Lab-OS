@@ -486,6 +486,74 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         safe_workbook_save(wb, file_path)
         logger.info(f"已生成上料模板: {file_path}")
 
+    def _find_header_in_sheet(self, worksheet: Any, header_keyword: str) -> Tuple[Optional[int], Optional[int]]:
+        """
+        功能:
+            在单个工作表的前 50 行和前 50 列中查找目标表头.
+        参数:
+            worksheet: openpyxl 工作表对象.
+            header_keyword: 需要匹配的表头关键词, 例如"实验编号".
+        返回:
+            Tuple[Optional[int], Optional[int]], 命中时返回(行号, 列号), 未命中返回(None, None).
+        """
+        max_scan_row = min(worksheet.max_row, 50)
+        max_scan_col = min(worksheet.max_column, 50)
+
+        for row_index in range(1, max_scan_row + 1):
+            for col_index in range(1, max_scan_col + 1):
+                cell_value = worksheet.cell(row_index, col_index).value
+                if isinstance(cell_value, str) is False:
+                    continue
+
+                # 去除空白字符, 兼容用户在表头中插入空格或换行.
+                normalized_text = cell_value.replace(" ", "").replace("\n", "").replace("\r", "").replace("\t", "").strip()
+                if header_keyword in normalized_text:
+                    return row_index, col_index
+
+        return None, None
+
+    def _select_task_template_sheet(
+        self,
+        workbook: Workbook,
+        header_keyword: str = "实验编号",
+    ) -> Tuple[Optional[Any], Optional[int], Optional[int]]:
+        """
+        功能:
+            从任务模板工作簿中选择包含目标表头的工作表.
+            选择顺序为: "实验方案设定" -> 当前激活工作表 -> 其余工作表.
+        参数:
+            workbook: openpyxl Workbook 对象.
+            header_keyword: 需要匹配的表头关键词.
+        返回:
+            Tuple[Optional[Any], Optional[int], Optional[int]], 命中时返回(工作表, 行号, 列号), 未命中返回(None, None, None).
+        """
+        candidate_sheet_names: List[str] = []
+        preferred_sheet_name = "实验方案设定"
+        if preferred_sheet_name in workbook.sheetnames:
+            candidate_sheet_names.append(preferred_sheet_name)
+
+        active_sheet_name = workbook.active.title
+        if active_sheet_name not in candidate_sheet_names:
+            candidate_sheet_names.append(active_sheet_name)
+
+        for sheet_name in workbook.sheetnames:
+            if sheet_name not in candidate_sheet_names:
+                candidate_sheet_names.append(sheet_name)
+
+        for sheet_name in candidate_sheet_names:
+            worksheet = workbook[sheet_name]
+            header_row, exp_no_col = self._find_header_in_sheet(worksheet, header_keyword)
+            if header_row is not None and exp_no_col is not None:
+                if sheet_name != active_sheet_name:
+                    logger.info(
+                        "模板解析使用工作表: %s, 当前激活工作表: %s",
+                        sheet_name,
+                        active_sheet_name,
+                    )
+                return worksheet, header_row, exp_no_col
+
+        return None, None, None
+
     # ---------- 3. 任务生成文件处理 ----------
     def create_task_by_file(self, template_path: str, chemical_db_path: str) -> JsonDict:
         """
@@ -537,21 +605,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         # 3. 读取任务模板 -> params(Dict), headers(List), data_rows(List[List])
         wb = load_workbook(t_path, data_only=True)
-        ws = wb.active
-
-        # 3.1 找到表头行/实验编号列（模板里一般是：row=1, col=3）
-        header_row = None
-        exp_no_col = None
-        for r in range(1, min(ws.max_row, 50) + 1):
-            for c in range(1, min(ws.max_column, 50) + 1):
-                v = ws.cell(r, c).value
-                if isinstance(v, str) and "实验编号" in v:
-                    header_row, exp_no_col = r, c
-                    break
-            if header_row is not None:
-                break
-        if header_row is None or exp_no_col is None:
-            raise ValueError("模板中未找到'实验编号'表头")
+        ws, header_row, exp_no_col = self._select_task_template_sheet(wb, header_keyword="实验编号")
+        if ws is None or header_row is None or exp_no_col is None:
+            raise ValueError(f"模板中未找到'实验编号'表头, 可用工作表: {wb.sheetnames}")
 
         # 3.2 提取全局参数（左侧 A/B）
         # - 实验名称：A1是标签，用户通常填在 B1
@@ -730,7 +786,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             ("反应设定", ""),
             ("反应规模(mmol)", "0.2"),
             ("反应器类型", "heat"),
-            ("反应时间(h)", 8),
+            ("反应时间(min/h)", "8h"),
             ("反应温度(°C)", 40),
             ("转速(rpm)", 500),
             ("搅拌后⽬标温度(°C)", 30),
@@ -904,20 +960,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             }
 
         wb = load_workbook(t_path, data_only=True)
-        ws = wb.active
-
-        header_row = None
-        exp_no_col = None
-        for r in range(1, min(ws.max_row, 50) + 1):
-            for c in range(1, min(ws.max_column, 50) + 1):
-                v = ws.cell(r, c).value
-                if isinstance(v, str) and "实验编号" in v:
-                    header_row, exp_no_col = r, c
-                    break
-            if header_row is not None:
-                break
-        if header_row is None or exp_no_col is None:
-            raise ValidationError("模板中未找到'实验编号'表头")
+        ws, header_row, exp_no_col = self._select_task_template_sheet(wb, header_keyword="实验编号")
+        if ws is None or header_row is None or exp_no_col is None:
+            raise ValidationError(f"模板中未找到'实验编号'表头, 可用工作表: {wb.sheetnames}")
 
         params: Dict[str, Any] = {}
         exp_name = ws.cell(1, 2).value
@@ -1565,7 +1610,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             chemical_db_path: str, 化学品库文件路径.
             task_name: str, 任务名称.
             reaction_type: str, 反应类型.
-            duration: str, 反应时间(h).
+            duration: str, 反应时间, 必须带单位, 如 "8h" 或 "30min".
             temperature: str, 反应温度(°C).
             stir_speed: str, 搅拌速度(rpm).
             target_temp: str, 搅拌后目标温度(°C).
@@ -1619,7 +1664,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         params = {
             "实验名称": task_name,
             "反应器类型": reaction_type,
-            "反应时间(h)": duration,
+            "反应时间(min/h)": duration,
             "反应温度(°C)": temperature,
             "转速(rpm)": stir_speed,
             "搅拌后目标温度(°C)": target_temp,

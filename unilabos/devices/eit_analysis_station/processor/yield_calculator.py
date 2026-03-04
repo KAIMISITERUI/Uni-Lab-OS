@@ -26,6 +26,7 @@ from pysmiles.read_smiles import read_smiles
 from .ecn import smiles2carbontypes, ecn_dct, class_dct
 
 logger = logging.getLogger(__name__)
+YIELD_CONFIG_SHEET_NAME = "GC产率计算"
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ class YieldCalcConfig:
         存储产率计算的完整配置, 从实验方案和 chemical_list 共同构建.
     参数:
         is_name: 内标名称 (从原参数 Sheet 的 "内标种类" 读取).
-        is_smiles: 内标 SMILES (从 "产率计算" Sheet 读取).
+        is_smiles: 内标 SMILES (从 "GC产率计算" Sheet 读取).
         is_formula: 内标分子式 (自动推导).
         is_ecn: 内标 ECN (自动计算).
         is_expected_rt: 内标预期保留时间(min), 可选.
@@ -438,7 +439,7 @@ class YieldCalculator:
         功能:
             从实验方案 xlsx 解析产率计算配置:
             1. 读原参数 Sheet: 反应规模(mmol), 内标种类, 内标用量(μL/mg).
-            2. 读 "产率计算" Sheet: 内标SMILES, 目标产物列表, 计算方法.
+            2. 读 "GC产率计算" Sheet: 内标SMILES, 目标产物列表, 计算方法.
             3. 查 chemical_list.xlsx, 推算内标摩尔量.
             4. 自动计算各化合物的分子式和 ECN.
         参数:
@@ -462,10 +463,10 @@ class YieldCalculator:
             if is_amount == 0:
                 is_amount = self._parse_float(params.get("内标用量", 0))
 
-        # ---------- 2. 读 "产率计算" Sheet ----------
-        if "产率计算" not in wb.sheetnames:
-            raise ValueError("实验方案中未找到 '产率计算' Sheet")
-        ws_yield = wb["产率计算"]
+        # ---------- 2. 读 "GC产率计算" Sheet ----------
+        if YIELD_CONFIG_SHEET_NAME not in wb.sheetnames:
+            raise ValueError(f"实验方案中未找到 '{YIELD_CONFIG_SHEET_NAME}' Sheet")
+        ws_yield = wb[YIELD_CONFIG_SHEET_NAME]
 
         yield_params = self._read_kv_params(ws_yield)
 
@@ -477,13 +478,13 @@ class YieldCalculator:
         response_factor = self._parse_opt_float(yield_params.get("响应因子"))
 
         if not is_smiles:
-            raise ValueError("产率计算 Sheet 中未填写 '内标SMILES'")
+            raise ValueError(f"{YIELD_CONFIG_SHEET_NAME} Sheet 中未填写 '内标SMILES'")
 
         # ---------- 3. 读目标产物列表 ----------
         products = self._read_product_table(ws_yield)
 
         if len(products) == 0:
-            raise ValueError("产率计算 Sheet 中未找到目标产物列表")
+            raise ValueError(f"{YIELD_CONFIG_SHEET_NAME} Sheet 中未找到目标产物列表")
 
         # ---------- 4. 计算分子式和 ECN ----------
         is_formula = self.smiles_to_formula(is_smiles)
@@ -543,10 +544,10 @@ class YieldCalculator:
     def _read_product_table(self, ws) -> List[TargetProduct]:
         """
         功能:
-            从 "产率计算" Sheet 中读取目标产物列表.
+            从 "GC产率计算" Sheet 中读取目标产物列表.
             查找表头行 (含 "适用实验" / "目标产物名称"), 然后逐行读取数据.
         参数:
-            ws: openpyxl Worksheet ("产率计算" Sheet).
+            ws: openpyxl Worksheet ("GC产率计算" Sheet).
         返回:
             List[TargetProduct]: 目标产物列表.
         """

@@ -4078,6 +4078,28 @@ class SynthesisStationController:
         })
         layout_list.append(unit_dict)
 
+    @staticmethod
+    def _parse_reaction_time_secs(text: str) -> int:
+        """
+        功能:
+            将带单位的反应时间字符串解析为秒数, 支持 h/min 及大小写、空格变体.
+        参数:
+            text: str, 如 "10h", "10 H", "30min", "30 MIN".
+        返回:
+            int, 对应的秒数.
+        异常:
+            ValueError: 无法识别单位或格式非法时抛出.
+        """
+        m = re.match(r'^\s*([\d.]+)\s*(h|min)\s*$', str(text).strip(), re.IGNORECASE)
+        if m is None:
+            raise ValueError(f"无法识别反应时间格式: '{text}', 请使用带单位的格式, 如 '10h' 或 '30min'.")
+        value = float(m.group(1))
+        unit = m.group(2).lower()
+        if unit == "h":
+            return int(value * 3600)
+        else:  # min
+            return int(value * 60)
+
     def _add_reaction_unit(self, layout_list: List[JsonDict], common_fields: JsonDict, col: int, row: int, params: JsonDict) -> None:
         """
         功能:
@@ -4092,7 +4114,7 @@ class SynthesisStationController:
             无.
         """
         rxn_temp_raw = params.get("反应温度(°C)")
-        
+
         # Determine target temperature from params
         tgt_temp_raw = None
         for key in params.keys():
@@ -4100,13 +4122,14 @@ class SynthesisStationController:
                 tgt_temp_raw = params[key]
                 break
 
-        rxn_time_h = float(params.get("反应时间(h)", 0))
+        rxn_time_raw = str(params.get("反应时间(min/h)", "0h")).strip()  # 读取带单位的反应时间字段
+        rxn_time_secs = self._parse_reaction_time_secs(rxn_time_raw)
         rxn_rpm = int(params.get("转速(rpm)", 0))
         is_wait = str(params.get("等待目标温度", "否")) == "是"
 
         process_data = {
             "rotation_speed": rxn_rpm,
-            "reaction_duration": int(rxn_time_h * 3600),
+            "reaction_duration": rxn_time_secs,
             "is_wait": is_wait,
             "custom": {"unit": ""}
         }

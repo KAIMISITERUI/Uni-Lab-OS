@@ -480,7 +480,7 @@ class ReactionTemplateWriter:
             self._set_param(ws, param_row_map, "实验ID", plan.experiment_id)
             self._set_param(ws, param_row_map, "反应规模(mmol)", plan.scale_mmol)
             self._set_param(ws, param_row_map, "反应器类型", plan.reactor_type)
-            self._set_param(ws, param_row_map, "反应时间(h)", plan.time_h)
+            self._set_param(ws, param_row_map, "反应时间(min/h)", f"{plan.time_h}h")
             self._set_param(ws, param_row_map, "反应温度(°C)", plan.temperature_c)
             self._set_param(ws, param_row_map, "转速(rpm)", plan.rpm)
             self._set_param(ws, param_row_map, "搅拌后⽬标温度(°C)", plan.open_lid_target_temp_c)

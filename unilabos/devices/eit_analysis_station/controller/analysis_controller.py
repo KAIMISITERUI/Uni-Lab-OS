@@ -37,7 +37,7 @@ from ..processor.report_generator import (
     ReportGenerator, SampleResult,
 )
 from ..processor.structure_fetcher import NistLocalStructureFetcher
-from ..processor.yield_calculator import YieldCalculator
+from ..processor.yield_calculator import YieldCalculator, YIELD_CONFIG_SHEET_NAME
 
 
 def _natural_sort_key(path: Path) -> list:
@@ -1430,7 +1430,7 @@ class AnalysisStationController:
         """
         功能:
             产率计算入口, 定位实验方案/积分报告/化学品清单后调用 YieldCalculator.
-            实验方案中需包含 "产率计算" Sheet, 否则跳过.
+            实验方案中需包含 "GC产率计算" Sheet, 否则跳过.
         参数:
             task_id: 任务 ID 字符串, None 表示自动选取最新任务.
         返回:
@@ -1461,12 +1461,15 @@ class AnalysisStationController:
             if not chemical_list_path.exists():
                 return {"success": False, "return_info": f"未找到化学品清单: {chemical_list_path}"}
 
-            # 检查实验方案是否包含 "产率计算" Sheet
+            # 检查实验方案是否包含 "GC产率计算" Sheet
             wb_check = openpyxl.load_workbook(str(plan_path), data_only=True)
-            has_yield_sheet = "产率计算" in wb_check.sheetnames
+            has_yield_sheet = YIELD_CONFIG_SHEET_NAME in wb_check.sheetnames
             wb_check.close()
             if not has_yield_sheet:
-                return {"success": False, "return_info": "实验方案中未包含 '产率计算' Sheet, 跳过产率计算"}
+                return {
+                    "success": False,
+                    "return_info": f"实验方案中未包含 '{YIELD_CONFIG_SHEET_NAME}' Sheet, 跳过产率计算",
+                }
 
             # 执行产率计算
             calc = YieldCalculator(rt_tolerance=self._settings.yield_rt_tolerance)
@@ -1506,7 +1509,7 @@ class AnalysisStationController:
         """
         功能:
             在积分报告生成后尝试自动触发产率计算.
-            仅当实验方案包含 "产率计算" Sheet 时执行, 失败不影响积分报告.
+            仅当实验方案包含 "GC产率计算" Sheet 时执行, 失败不影响积分报告.
         参数:
             resolved_id: 任务 ID 字符串.
         返回:
