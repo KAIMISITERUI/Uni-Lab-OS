@@ -1643,6 +1643,17 @@ class AnalysisStationController:
             # 生成 Excel 报告
             generator = ReportGenerator()
 
+            # 确定各预测方法是否启用, 控制报告中对应列的显示
+            pim_enabled = self._settings.pim_enable
+            sshm_enabled = (
+                self._settings.mspepsearch_enable is True
+                and self._settings.process_gc_ms_enable_sshm_search is True
+            )
+            ihshm_enabled = (
+                self._settings.mspepsearch_enable is True
+                and self._settings.process_gc_ms_enable_ihshm_search is True
+            )
+
             # 保存到本地数据目录
             report_path = generator.generate_task_report(
                 resolved_id, sample_results, local_report_dir,
@@ -1650,6 +1661,9 @@ class AnalysisStationController:
                 alignment_tolerance=self._settings.alignment_tolerance,
                 include_tic_only=self._settings.alignment_include_tic_only,
                 include_fid_only=self._settings.alignment_include_fid_only,
+                pim_enabled=pim_enabled,
+                sshm_enabled=sshm_enabled,
+                ihshm_enabled=ihshm_enabled,
             )
 
             # 同步到合成任务目录
@@ -1661,6 +1675,9 @@ class AnalysisStationController:
                     alignment_tolerance=self._settings.alignment_tolerance,
                     include_tic_only=self._settings.alignment_include_tic_only,
                     include_fid_only=self._settings.alignment_include_fid_only,
+                    pim_enabled=pim_enabled,
+                    sshm_enabled=sshm_enabled,
+                    ihshm_enabled=ihshm_enabled,
                 )
                 self._logger.info("报告已同步至合成任务目录: %s", syn_report)
 

@@ -14,6 +14,7 @@
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -137,18 +138,6 @@ class ReportGenerator:
     _HEADER_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
     _HEADER_ALIGN = Alignment(horizontal="center", vertical="center")
 
-    # TIC 峰表列定义
-    _TIC_HEADERS = [
-        "样品名", "峰号", "保留时间(min)", "峰高", "峰面积",
-        "面积%", "峰起始(min)", "峰结束(min)", "峰宽(min)",
-        "化合物1(名称)", "化合物1(匹配度)", "化合物1(分子式)", "化合物1(分子量)",
-        "化合物2(名称)", "化合物2(匹配度)", "化合物2(分子式)", "化合物2(分子量)",
-        "质谱图",
-        "PIM预测分子量(Da)", "PIM置信指数",
-        "SS-HM预测分子量(Da)", "SS-HM置信度",
-        "iHS-HM预测分子量(Da)", "iHS-HM置信度",
-    ]
-
     # FID 峰表列定义
     _FID_HEADERS = [
         "样品名", "峰号", "保留时间(min)", "峰高", "峰面积",
@@ -161,18 +150,6 @@ class ReportGenerator:
         "TIC色谱图", "FID色谱图",
     ]
 
-    # TIC-FID 对照表列定义
-    _ALIGNMENT_HEADERS = [
-        "样品名", "FID峰号", "FID保留时间(min)",
-        "TIC峰号", "TIC保留时间(min)", "FID峰面积",
-        "化合物1(名称)", "化合物1(匹配度)", "化合物1(分子式)", "化合物1(分子量)",
-        "化合物2(名称)", "化合物2(匹配度)", "化合物2(分子式)", "化合物2(分子量)",
-        "PIM预测分子量(Da)", "PIM置信指数",
-        "SS-HM预测分子量(Da)", "SS-HM置信度",
-        "iHS-HM预测分子量(Da)", "iHS-HM置信度",
-        "质谱图",
-    ]
-
     def generate_task_report(
         self,
         task_id: str,
@@ -182,6 +159,9 @@ class ReportGenerator:
         alignment_tolerance: float = 0.05,
         include_tic_only: bool = True,
         include_fid_only: bool = True,
+        pim_enabled: bool = True,
+        sshm_enabled: bool = True,
+        ihshm_enabled: bool = True,
     ) -> Path:
         """
         功能:
@@ -194,6 +174,9 @@ class ReportGenerator:
             alignment_tolerance: FID 与 TIC 峰保留时间对齐容差(min).
             include_tic_only: 对照表是否输出 TIC 有峰但 FID 无峰的行.
             include_fid_only: 对照表是否输出 FID 有峰但 TIC 无峰的行.
+            pim_enabled: 是否在报告中包含 PIM 预测列.
+            sshm_enabled: 是否在报告中包含 SS-HM 预测列.
+            ihshm_enabled: 是否在报告中包含 iHS-HM 预测列.
         返回:
             Path: 生成的 xlsx 文件路径.
         """
@@ -205,7 +188,12 @@ class ReportGenerator:
         # Sheet 1: TIC 峰表
         ws_tic = wb.active
         ws_tic.title = "TIC峰表"
-        self._write_tic_sheet(ws_tic, sample_results, structure_images)
+        self._write_tic_sheet(
+            ws_tic, sample_results, structure_images,
+            pim_enabled=pim_enabled,
+            sshm_enabled=sshm_enabled,
+            ihshm_enabled=ihshm_enabled,
+        )
 
         # Sheet 2: FID 峰表
         ws_fid = wb.create_sheet("FID峰表")
@@ -220,6 +208,9 @@ class ReportGenerator:
             tolerance=alignment_tolerance,
             include_tic_only=include_tic_only,
             include_fid_only=include_fid_only,
+            pim_enabled=pim_enabled,
+            sshm_enabled=sshm_enabled,
+            ihshm_enabled=ihshm_enabled,
         )
 
         # Sheet 4: 样品汇总
@@ -251,24 +242,130 @@ class ReportGenerator:
                     max_length = max(max_length, char_len)
             ws.column_dimensions[col_letter].width = min(max_length + 3, 30)
 
+    @staticmethod
+    def _build_tic_headers(
+        pim_enabled: bool, sshm_enabled: bool, ihshm_enabled: bool,
+    ) -> List[str]:
+        """
+        功能:
+            根据启用的预测方法动态构建 TIC 峰表表头列表.
+        参数:
+            pim_enabled: 是否启用 PIM 预测方法.
+            sshm_enabled: 是否启用 SS-HM 预测方法.
+            ihshm_enabled: 是否启用 iHS-HM 预测方法.
+        返回:
+            List[str], TIC 峰表表头列表.
+        """
+        headers = [
+            "样品名", "峰号", "保留时间(min)", "峰高", "峰面积",
+            "面积%", "峰起始(min)", "峰结束(min)", "峰宽(min)",
+            "化合物1(名称)", "化合物1(匹配度)", "化合物1(分子式)", "化合物1(分子量)",
+            "化合物2(名称)", "化合物2(匹配度)", "化合物2(分子式)", "化合物2(分子量)",
+            "质谱图",
+        ]
+        if pim_enabled is True:
+            headers.extend(["PIM预测分子量(Da)", "PIM置信指数"])
+        if sshm_enabled is True:
+            headers.extend(["SS-HM预测分子量(Da)", "SS-HM置信度"])
+        if ihshm_enabled is True:
+            headers.extend(["iHS-HM预测分子量(Da)", "iHS-HM置信度"])
+        return headers
+
+    @staticmethod
+    def _build_alignment_headers(
+        pim_enabled: bool, sshm_enabled: bool, ihshm_enabled: bool,
+    ) -> List[str]:
+        """
+        功能:
+            根据启用的预测方法动态构建 TIC-FID 对照表表头列表.
+        参数:
+            pim_enabled: 是否启用 PIM 预测方法.
+            sshm_enabled: 是否启用 SS-HM 预测方法.
+            ihshm_enabled: 是否启用 iHS-HM 预测方法.
+        返回:
+            List[str], TIC-FID 对照表表头列表.
+        """
+        headers = [
+            "样品名", "FID峰号", "FID保留时间(min)",
+            "TIC峰号", "TIC保留时间(min)", "FID峰面积",
+            "化合物1(名称)", "化合物1(匹配度)", "化合物1(分子式)", "化合物1(分子量)",
+            "化合物2(名称)", "化合物2(匹配度)", "化合物2(分子式)", "化合物2(分子量)",
+        ]
+        if pim_enabled is True:
+            headers.extend(["PIM预测分子量(Da)", "PIM置信指数"])
+        if sshm_enabled is True:
+            headers.extend(["SS-HM预测分子量(Da)", "SS-HM置信度"])
+        if ihshm_enabled is True:
+            headers.extend(["iHS-HM预测分子量(Da)", "iHS-HM置信度"])
+        headers.append("质谱图")
+        return headers
+
+    @staticmethod
+    def _build_col_map(headers: List[str]) -> Dict[str, int]:
+        """
+        功能:
+            将表头列表转换为列名 -> 1-based 列号的映射字典.
+        参数:
+            headers: 表头名称列表.
+        返回:
+            Dict[str, int], 列名到列号的映射.
+        """
+        return {name: idx for idx, name in enumerate(headers, start=1)}
+
+    @staticmethod
+    def _format_acq_time(raw_time: str) -> str:
+        """
+        功能:
+            将 ISO 8601 采集时间字符串格式化为 YYYY-MM-DD HH:MM:SS.
+            解析失败时原样返回, 空字符串直接返回.
+        参数:
+            raw_time: 原始时间字符串, 如 "2026-02-26T22:34:30.9070148+08:00".
+        返回:
+            str, 格式化后的时间字符串, 如 "2026-02-26 22:34:30".
+        """
+        if not raw_time:
+            return raw_time
+        try:
+            # 截断子秒到6位, 确保 fromisoformat 兼容 Python < 3.11
+            truncated = re.sub(r"(\.\d{1,6})\d*", r"\1", raw_time)
+            dt = datetime.fromisoformat(truncated)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return raw_time
+
     def _write_tic_sheet(
         self,
         ws,
         sample_results: List[SampleResult],
         structure_images: Optional[Dict[str, Optional[Path]]] = None,
+        pim_enabled: bool = True,
+        sshm_enabled: bool = True,
+        ihshm_enabled: bool = True,
     ) -> None:
         """
         功能:
             写入 TIC 峰表 Sheet, 包含所有样品的 TIC 峰检测积分结果,
             Top2 化合物匹配结果, 并在化合物名称列写入结构图超链接.
+            根据启用的预测方法动态构建表头, 未启用的方法不出现对应列.
         参数:
             ws: openpyxl Worksheet.
             sample_results: 各样品积分结果列表.
             structure_images: 结构键 -> 结构图 PNG 路径, None 表示无结构图.
+            pim_enabled: 是否启用 PIM 预测方法.
+            sshm_enabled: 是否启用 SS-HM 预测方法.
+            ihshm_enabled: 是否启用 iHS-HM 预测方法.
         返回:
             无.
         """
-        self._write_header(ws, self._TIC_HEADERS)
+        headers = self._build_tic_headers(pim_enabled, sshm_enabled, ihshm_enabled)
+        col = self._build_col_map(headers)
+        self._write_header(ws, headers)
+
+        # 化合物列组: (名称列, 匹配度列, 分子式列, 分子量列)
+        compound_cols = [
+            (col["化合物1(名称)"], col["化合物1(匹配度)"], col["化合物1(分子式)"], col["化合物1(分子量)"]),
+            (col["化合物2(名称)"], col["化合物2(匹配度)"], col["化合物2(分子式)"], col["化合物2(分子量)"]),
+        ]
 
         row = 2
         for sr in sample_results:
@@ -278,75 +375,74 @@ class ReportGenerator:
                     peak.retention_time, sr.compound_matches
                 )
 
-                ws.cell(row=row, column=1, value=sr.sample_name)
-                ws.cell(row=row, column=2, value=peak_num)
-                ws.cell(row=row, column=3, value=round(peak.retention_time, 3))
-                ws.cell(row=row, column=4, value=round(peak.height, 0))
-                ws.cell(row=row, column=5, value=round(peak.area, 2))
-                ws.cell(row=row, column=6, value=round(peak.area_percent, 2))
-                ws.cell(row=row, column=7, value=round(peak.start_time, 3))
-                ws.cell(row=row, column=8, value=round(peak.end_time, 3))
-                ws.cell(row=row, column=9, value=round(peak.width, 3))
+                ws.cell(row=row, column=col["样品名"], value=sr.sample_name)
+                ws.cell(row=row, column=col["峰号"], value=peak_num)
+                ws.cell(row=row, column=col["保留时间(min)"], value=round(peak.retention_time, 3))
+                ws.cell(row=row, column=col["峰高"], value=round(peak.height, 0))
+                ws.cell(row=row, column=col["峰面积"], value=round(peak.area, 2))
+                ws.cell(row=row, column=col["面积%"], value=round(peak.area_percent, 2))
+                ws.cell(row=row, column=col["峰起始(min)"], value=round(peak.start_time, 3))
+                ws.cell(row=row, column=col["峰结束(min)"], value=round(peak.end_time, 3))
+                ws.cell(row=row, column=col["峰宽(min)"], value=round(peak.width, 3))
 
                 # 填充 Top 2 化合物 (每个化合物占4列: 名称, 匹配度, 分子式, 分子量)
-                for i in range(2):
-                    col_name = 10 + i * 4       # 列 10, 14
-                    col_score = 11 + i * 4      # 列 11, 15
-                    col_formula = 12 + i * 4    # 列 12, 16
-                    col_mw = 13 + i * 4         # 列 13, 17
+                for i, (c_name, c_score, c_formula, c_mw) in enumerate(compound_cols):
                     if match_list is not None and i < len(match_list):
                         m = match_list[i]
-                        name_cell = ws.cell(row=row, column=col_name, value=m.compound_name)
-                        ws.cell(row=row, column=col_score, value=round(m.match_score, 1))
+                        name_cell = ws.cell(row=row, column=c_name, value=m.compound_name)
+                        ws.cell(row=row, column=c_score, value=round(m.match_score, 1))
                         # 名称单元格挂结构图链接, 保持表头简洁.
                         self._link_compound_name_cell(name_cell, m, structure_images)
 
                         # 分子式和分子量
-                        ws.cell(row=row, column=col_formula, value=m.formula)
-                        ws.cell(row=row, column=col_mw, value=round(m.mw, 2) if m.mw else "")
+                        ws.cell(row=row, column=c_formula, value=m.formula)
+                        ws.cell(row=row, column=c_mw, value=round(m.mw, 2) if m.mw else "")
                     else:
-                        ws.cell(row=row, column=col_name, value="")
-                        ws.cell(row=row, column=col_score, value="")
-                        ws.cell(row=row, column=col_formula, value="")
-                        ws.cell(row=row, column=col_mw, value="")
+                        ws.cell(row=row, column=c_name, value="")
+                        ws.cell(row=row, column=c_score, value="")
+                        ws.cell(row=row, column=c_formula, value="")
+                        ws.cell(row=row, column=c_mw, value="")
 
-                # 质谱图超链接 (列 18)
+                # 质谱图超链接
                 if peak_num in sr.ms_plot_paths:
                     ms_path = sr.ms_plot_paths[peak_num]
                     if ms_path.exists():
-                        cell = ws.cell(row=row, column=18, value="查看质谱")
+                        cell = ws.cell(row=row, column=col["质谱图"], value="查看质谱")
                         cell.hyperlink = str(ms_path)
                         cell.font = Font(color="0563C1", underline="single")
 
-                # PIM 预测结果 (列 19-20: 预测分子量, 置信指数)
-                pim_prediction = self._find_pim_prediction(
-                    peak.retention_time, sr.pim_predictions
-                )
-                if pim_prediction is not None:
-                    if pim_prediction.predicted_mw is not None:
-                        ws.cell(row=row, column=19, value=pim_prediction.predicted_mw)
-                    if pim_prediction.confidence_index is not None:
-                        ws.cell(row=row, column=20, value=round(pim_prediction.confidence_index, 4))
+                # PIM 预测结果
+                if pim_enabled is True:
+                    pim_prediction = self._find_pim_prediction(
+                        peak.retention_time, sr.pim_predictions
+                    )
+                    if pim_prediction is not None:
+                        if pim_prediction.predicted_mw is not None:
+                            ws.cell(row=row, column=col["PIM预测分子量(Da)"], value=pim_prediction.predicted_mw)
+                        if pim_prediction.confidence_index is not None:
+                            ws.cell(row=row, column=col["PIM置信指数"], value=round(pim_prediction.confidence_index, 4))
 
-                # SS-HM 预测结果 (列 21-22: 预测分子量, 置信度)
-                sshm_prediction = self._find_prediction_by_rt(
-                    peak.retention_time, sr.sshm_predictions
-                )
-                if sshm_prediction is not None:
-                    if sshm_prediction.predicted_mw is not None:
-                        ws.cell(row=row, column=21, value=sshm_prediction.predicted_mw)
-                    if sshm_prediction.confidence is not None:
-                        ws.cell(row=row, column=22, value=round(sshm_prediction.confidence, 4))
+                # SS-HM 预测结果
+                if sshm_enabled is True:
+                    sshm_prediction = self._find_prediction_by_rt(
+                        peak.retention_time, sr.sshm_predictions
+                    )
+                    if sshm_prediction is not None:
+                        if sshm_prediction.predicted_mw is not None:
+                            ws.cell(row=row, column=col["SS-HM预测分子量(Da)"], value=sshm_prediction.predicted_mw)
+                        if sshm_prediction.confidence is not None:
+                            ws.cell(row=row, column=col["SS-HM置信度"], value=round(sshm_prediction.confidence, 4))
 
-                # iHS-HM 预测结果 (列 23-24: 预测分子量, 置信度)
-                ihshm_prediction = self._find_prediction_by_rt(
-                    peak.retention_time, sr.ihshm_predictions
-                )
-                if ihshm_prediction is not None:
-                    if ihshm_prediction.predicted_mw is not None:
-                        ws.cell(row=row, column=23, value=ihshm_prediction.predicted_mw)
-                    if ihshm_prediction.confidence is not None:
-                        ws.cell(row=row, column=24, value=round(ihshm_prediction.confidence, 6))
+                # iHS-HM 预测结果
+                if ihshm_enabled is True:
+                    ihshm_prediction = self._find_prediction_by_rt(
+                        peak.retention_time, sr.ihshm_predictions
+                    )
+                    if ihshm_prediction is not None:
+                        if ihshm_prediction.predicted_mw is not None:
+                            ws.cell(row=row, column=col["iHS-HM预测分子量(Da)"], value=ihshm_prediction.predicted_mw)
+                        if ihshm_prediction.confidence is not None:
+                            ws.cell(row=row, column=col["iHS-HM置信度"], value=round(ihshm_prediction.confidence, 6))
 
                 row += 1
 
@@ -391,7 +487,7 @@ class ReportGenerator:
             ws.cell(row=row_idx, column=3, value=len(sr.fid_peaks))
             ws.cell(row=row_idx, column=4, value=round(tic_total_area, 2))
             ws.cell(row=row_idx, column=5, value=round(fid_total_area, 6))
-            ws.cell(row=row_idx, column=6, value=sr.acq_time)
+            ws.cell(row=row_idx, column=6, value=self._format_acq_time(sr.acq_time))
 
             # TIC 色谱图超链接
             if sr.tic_plot_path is not None and sr.tic_plot_path.exists():
@@ -467,11 +563,15 @@ class ReportGenerator:
         tolerance: float = 0.05,
         include_tic_only: bool = True,
         include_fid_only: bool = True,
+        pim_enabled: bool = True,
+        sshm_enabled: bool = True,
+        ihshm_enabled: bool = True,
     ) -> None:
         """
         功能:
             写入 TIC-FID 对照表 Sheet, 按保留时间对齐 FID 和 TIC 峰,
             并展示 TIC 峰对应的 Top2 化合物预测结果.
+            根据启用的预测方法动态构建表头, 未启用的方法不出现对应列.
         参数:
             ws: openpyxl Worksheet.
             sample_results: 各样品积分结果列表.
@@ -479,10 +579,21 @@ class ReportGenerator:
             tolerance: FID-TIC 峰保留时间对齐容差(min).
             include_tic_only: 是否输出 TIC 有峰但 FID 无峰的行.
             include_fid_only: 是否输出 FID 有峰但 TIC 无峰的行.
+            pim_enabled: 是否启用 PIM 预测方法.
+            sshm_enabled: 是否启用 SS-HM 预测方法.
+            ihshm_enabled: 是否启用 iHS-HM 预测方法.
         返回:
             无.
         """
-        self._write_header(ws, self._ALIGNMENT_HEADERS)
+        headers = self._build_alignment_headers(pim_enabled, sshm_enabled, ihshm_enabled)
+        col = self._build_col_map(headers)
+        self._write_header(ws, headers)
+
+        # 化合物列组: (名称列, 匹配度列, 分子式列, 分子量列)
+        compound_cols = [
+            (col["化合物1(名称)"], col["化合物1(匹配度)"], col["化合物1(分子式)"], col["化合物1(分子量)"]),
+            (col["化合物2(名称)"], col["化合物2(匹配度)"], col["化合物2(分子式)"], col["化合物2(分子量)"]),
+        ]
 
         row = 2
         for sr in sample_results:
@@ -496,20 +607,20 @@ class ReportGenerator:
                 if tic_peak is None and not include_fid_only:
                     continue
 
-                ws.cell(row=row, column=1, value=sr.sample_name)
+                ws.cell(row=row, column=col["样品名"], value=sr.sample_name)
 
                 # FID 峰信息
                 if fid_peak is not None:
-                    ws.cell(row=row, column=2, value=fid_num)
-                    ws.cell(row=row, column=3,
+                    ws.cell(row=row, column=col["FID峰号"], value=fid_num)
+                    ws.cell(row=row, column=col["FID保留时间(min)"],
                             value=round(fid_peak.retention_time, 3))
-                    ws.cell(row=row, column=6,
+                    ws.cell(row=row, column=col["FID峰面积"],
                             value=round(fid_peak.area, 6))
 
                 # TIC 峰信息
                 if tic_peak is not None:
-                    ws.cell(row=row, column=4, value=tic_num)
-                    ws.cell(row=row, column=5,
+                    ws.cell(row=row, column=col["TIC峰号"], value=tic_num)
+                    ws.cell(row=row, column=col["TIC保留时间(min)"],
                             value=round(tic_peak.retention_time, 3))
 
                     # 查找化合物匹配结果
@@ -517,62 +628,63 @@ class ReportGenerator:
                         tic_peak.retention_time, sr.compound_matches
                     )
                     # 填充 Top2 化合物 (每个化合物占4列: 名称/匹配度/分子式/分子量)
-                    for i in range(2):
-                        col_name = 7 + i * 4      # 列 7, 11
-                        col_score = 8 + i * 4     # 列 8, 12
-                        col_formula = 9 + i * 4   # 列 9, 13
-                        col_mw = 10 + i * 4       # 列 10, 14
+                    for i, (c_name, c_score, c_formula, c_mw) in enumerate(compound_cols):
                         if match_list is not None and i < len(match_list):
                             m = match_list[i]
-                            name_cell = ws.cell(row=row, column=col_name, value=m.compound_name)
+                            name_cell = ws.cell(row=row, column=c_name, value=m.compound_name)
                             # 对照表同样在名称列挂结构图链接.
                             self._link_compound_name_cell(name_cell, m, structure_images)
-                            ws.cell(row=row, column=col_score,
+                            ws.cell(row=row, column=c_score,
                                     value=round(m.match_score, 1))
-                            ws.cell(row=row, column=col_formula,
+                            ws.cell(row=row, column=c_formula,
                                     value=m.formula)
-                            ws.cell(row=row, column=col_mw,
+                            ws.cell(row=row, column=c_mw,
                                     value=round(m.mw, 2) if m.mw else "")
                         else:
-                            ws.cell(row=row, column=col_name, value="")
-                            ws.cell(row=row, column=col_score, value="")
-                            ws.cell(row=row, column=col_formula, value="")
-                            ws.cell(row=row, column=col_mw, value="")
+                            ws.cell(row=row, column=c_name, value="")
+                            ws.cell(row=row, column=c_score, value="")
+                            ws.cell(row=row, column=c_formula, value="")
+                            ws.cell(row=row, column=c_mw, value="")
 
-                    # 预测结果 (列 15-20: PIM, SS-HM, iHS-HM)
-                    pim_prediction = self._find_pim_prediction(
-                        tic_peak.retention_time, sr.pim_predictions
-                    )
-                    if pim_prediction is not None:
-                        if pim_prediction.predicted_mw is not None:
-                            ws.cell(row=row, column=15, value=pim_prediction.predicted_mw)
-                        if pim_prediction.confidence_index is not None:
-                            ws.cell(row=row, column=16, value=round(pim_prediction.confidence_index, 4))
+                    # PIM 预测结果
+                    if pim_enabled is True:
+                        pim_prediction = self._find_pim_prediction(
+                            tic_peak.retention_time, sr.pim_predictions
+                        )
+                        if pim_prediction is not None:
+                            if pim_prediction.predicted_mw is not None:
+                                ws.cell(row=row, column=col["PIM预测分子量(Da)"], value=pim_prediction.predicted_mw)
+                            if pim_prediction.confidence_index is not None:
+                                ws.cell(row=row, column=col["PIM置信指数"], value=round(pim_prediction.confidence_index, 4))
 
-                    sshm_prediction = self._find_prediction_by_rt(
-                        tic_peak.retention_time, sr.sshm_predictions
-                    )
-                    if sshm_prediction is not None:
-                        if sshm_prediction.predicted_mw is not None:
-                            ws.cell(row=row, column=17, value=sshm_prediction.predicted_mw)
-                        if sshm_prediction.confidence is not None:
-                            ws.cell(row=row, column=18, value=round(sshm_prediction.confidence, 4))
+                    # SS-HM 预测结果
+                    if sshm_enabled is True:
+                        sshm_prediction = self._find_prediction_by_rt(
+                            tic_peak.retention_time, sr.sshm_predictions
+                        )
+                        if sshm_prediction is not None:
+                            if sshm_prediction.predicted_mw is not None:
+                                ws.cell(row=row, column=col["SS-HM预测分子量(Da)"], value=sshm_prediction.predicted_mw)
+                            if sshm_prediction.confidence is not None:
+                                ws.cell(row=row, column=col["SS-HM置信度"], value=round(sshm_prediction.confidence, 4))
 
-                    ihshm_prediction = self._find_prediction_by_rt(
-                        tic_peak.retention_time, sr.ihshm_predictions
-                    )
-                    if ihshm_prediction is not None:
-                        if ihshm_prediction.predicted_mw is not None:
-                            ws.cell(row=row, column=19, value=ihshm_prediction.predicted_mw)
-                        if ihshm_prediction.confidence is not None:
-                            ws.cell(row=row, column=20, value=round(ihshm_prediction.confidence, 6))
+                    # iHS-HM 预测结果
+                    if ihshm_enabled is True:
+                        ihshm_prediction = self._find_prediction_by_rt(
+                            tic_peak.retention_time, sr.ihshm_predictions
+                        )
+                        if ihshm_prediction is not None:
+                            if ihshm_prediction.predicted_mw is not None:
+                                ws.cell(row=row, column=col["iHS-HM预测分子量(Da)"], value=ihshm_prediction.predicted_mw)
+                            if ihshm_prediction.confidence is not None:
+                                ws.cell(row=row, column=col["iHS-HM置信度"], value=round(ihshm_prediction.confidence, 6))
 
-                    # 质谱图超链接 (列 21: 表尾追加)
+                    # 质谱图超链接
                     if tic_num is not None:
                         if tic_num in sr.ms_plot_paths:
                             ms_plot_path = sr.ms_plot_paths[tic_num]
                             if ms_plot_path.exists() is True:
-                                ms_cell = ws.cell(row=row, column=21, value="查看质谱图")
+                                ms_cell = ws.cell(row=row, column=col["质谱图"], value="查看质谱图")
                                 ms_cell.hyperlink = str(ms_plot_path)
                                 ms_cell.font = Font(color="0563C1", underline="single")
 
