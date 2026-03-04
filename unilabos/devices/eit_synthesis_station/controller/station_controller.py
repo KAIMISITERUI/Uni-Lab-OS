@@ -3362,6 +3362,90 @@ class SynthesisStationController:
             time.sleep(poll_interval_s)
 
     # ---------- 任务json生成  ----------
+    def _calc_liquid_vol_ml(
+        self,
+        amt_val: float,
+        amt_unit: str,
+        chem_info: dict,
+        reaction_scale_mmol: float,
+    ) -> float:
+        """
+        功能:
+            将液体的用量换算为 mL 体积.
+            换算规则与最终加料生成阶段完全一致, 同时用于排序阶段的 max_vol 计算.
+            支持单位: mL, μL, eq, mmol, mg, g.
+            换算失败或参数缺失时返回 0.0, 不影响实际计量.
+
+        参数:
+            amt_val              用量数值
+            amt_unit             用量单位字符串
+            chem_info            化学品信息字典(含 molecular_weight, density (g/mL),
+                                 physical_form, active_content, physical_state)
+            reaction_scale_mmol  反应规模(mmol), 用于 eq 换算
+
+        返回:
+            float, 体积(mL), 无法换算时返回 0.0
+        """
+        unit = str(amt_unit).strip().lower()
+
+        # 体积单位直接换算
+        if unit == "ml":
+            return amt_val
+        if unit in ("ul", "μl", "µl"):
+            return amt_val / 1000.0
+
+        # 读取化学品物性
+        mw = float(chem_info.get("molecular_weight", 0) or 0)
+        density = float(chem_info.get("density (g/mL)", 0) or 0)
+        physical_form = str(chem_info.get("physical_form", "") or "").lower()
+        active_content = chem_info.get("active_content")
+        state = str(chem_info.get("physical_state", "")).lower()
+
+        # 换算为 mmol
+        target_mmol = None
+        if unit == "eq":
+            if reaction_scale_mmol <= 0:
+                return 0.0
+            target_mmol = amt_val * reaction_scale_mmol
+        elif unit == "mmol":
+            target_mmol = amt_val
+        elif unit == "g":
+            if mw <= 0:
+                return 0.0
+            target_mmol = (amt_val * 1000.0) / mw
+        elif unit == "mg":
+            if mw <= 0:
+                return 0.0
+            target_mmol = amt_val / mw
+        else:
+            return 0.0
+
+        if target_mmol is None:
+            return 0.0
+
+        # mmol → mL, 与 _add_reagent_unit 换算逻辑一致
+        try:
+            if physical_form == "solution":
+                # 复用已有方法(支持 mmol/mL 和 wt% 两种 active_content 格式)
+                return self._convert_active_content_to_volume(
+                    target_mmol=target_mmol,
+                    active_content=active_content,
+                    molecular_weight=mw,
+                    density=density,
+                    physical_form=physical_form,
+                    substance=str(chem_info.get("substance_chinese_name", "")),
+                )
+            elif "liquid" in state:
+                # neat 液体: volume = mmol × MW / (1000 × density)
+                if mw <= 0 or density <= 0:
+                    return 0.0
+                mass_mg = target_mmol * mw
+                return (mass_mg / 1000.0) / density
+            else:
+                return 0.0
+        except Exception:
+            return 0.0
+
     def build_task_payload(
         self,
         params: Dict[str, Any],
@@ -3397,15 +3481,6 @@ class SynthesisStationController:
             if "solid" in state_text:
                 return "solid"
             return "other"
-
-        def _to_ml(amount_val: float, amount_unit: str) -> float:
-            # 仅在单位是体积时换算为 mL, 用于液体列按最大体积排序.
-            unit_text = str(amount_unit).strip().lower()
-            if unit_text == "ml":
-                return amount_val
-            if unit_text in ["ul", "µl"]:
-                return amount_val / 1000.0
-            return 0.0
 
         weighing_error_pct = _safe_float(params.get("称量误差(%)", 1), 1.0)
         max_error_mg = _safe_float(params.get("最大称量误差(mg)", 1), 1.0)
@@ -3468,7 +3543,9 @@ class SynthesisStationController:
                             amt_text = str(row_vals[amt_col_idx])
 
                         amt_val, amt_unit = self._split_amount_unit(amt_text)
-                        vol_ml = _to_ml(amt_val, amt_unit)
+                        vol_ml = self._calc_liquid_vol_ml(
+                            amt_val, amt_unit, chem_info, reaction_scale_mmol
+                        )  # 非体积单位同样换算为 mL, 与最终加料逻辑一致
                         if vol_ml > max_liquid_vol_ml:
                             max_liquid_vol_ml = vol_ml
 
