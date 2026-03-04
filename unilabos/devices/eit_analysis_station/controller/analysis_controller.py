@@ -1350,8 +1350,9 @@ class AnalysisStationController:
                 try:
                     fetcher = NistLocalStructureFetcher(
                         task_cache_dir=local_report_dir / "structures",
-                        index_dir=self._settings.nist_structure_index_dir,
+                        seed_msp_path=self._settings.nist_structure_seed_msp,
                         seed_mol_dir=self._settings.nist_structure_seed_mol_dir,
+                        runtime_cache_path=self._settings.nist_structure_runtime_cache_path,
                         offline_only=self._settings.structure_offline_only,
                         global_cache_dir=self._settings.structure_cache_dir,
                     )

@@ -84,7 +84,7 @@ class TestAnalysisControllerSshmSwitch(unittest.TestCase):
             process_gc_ms_enable_ihshm_search=False,
             report_dir=tmp_path / "report",
             synthesis_tasks_dir=tmp_path / "tasks",
-            nist_structure_index_dir=tmp_path / "index",
+            nist_structure_runtime_cache_path=tmp_path / "runtime_map.pkl",
             structure_offline_only=True,
         )
         controller = AnalysisStationController(settings=settings)
@@ -126,7 +126,7 @@ class TestAnalysisControllerSshmSwitch(unittest.TestCase):
             process_gc_ms_enable_ihshm_search=True,
             report_dir=tmp_path / "report",
             synthesis_tasks_dir=tmp_path / "tasks",
-            nist_structure_index_dir=tmp_path / "index",
+            nist_structure_runtime_cache_path=tmp_path / "runtime_map.pkl",
             structure_offline_only=True,
         )
         controller = AnalysisStationController(settings=settings)

@@ -95,10 +95,10 @@ class Settings:
     nist_structure_seed_mol_dir: Path = field(
         default_factory=lambda: Path(r"D:\NIST23\MSSEARCH\mainlib_export.MOL")
     )
-    nist_structure_index_dir: Path = field(
-        default_factory=lambda: Path(__file__).parent.parent / "data" / "nist_structure_index"
+    nist_structure_runtime_cache_path: Path = field(
+        default_factory=lambda: Path(__file__).parent.parent / "data" / "nist_runtime_map.pkl"
     )
-    structure_offline_only: bool = True
+    structure_offline_only: bool = False
     sshm_hits: int = 25        # SS-HM 搜索返回命中数
     sshm_b_ss: int = 75        # SS-HM 概率加权参数 B_SS
     ihshm_hits: int = 25       # iHS-HM 搜索返回命中数
@@ -210,7 +210,7 @@ class Settings:
             ANALYSIS_SSHM_B_SS, ANALYSIS_IHSHM_HITS,
             ANALYSIS_IHSHM_MEMF, ANALYSIS_MSPEPSEARCH_TIMEOUT,
             ANALYSIS_NIST_STRUCTURE_SEED_MSP, ANALYSIS_NIST_STRUCTURE_SEED_MOL_DIR,
-            ANALYSIS_NIST_STRUCTURE_INDEX_DIR, ANALYSIS_STRUCTURE_OFFLINE_ONLY.
+            ANALYSIS_NIST_STRUCTURE_RUNTIME_CACHE_PATH, ANALYSIS_STRUCTURE_OFFLINE_ONLY.
         """
         defaults = Settings()
 
@@ -318,8 +318,9 @@ class Settings:
             nist_structure_seed_mol_dir=_path(
                 "ANALYSIS_NIST_STRUCTURE_SEED_MOL_DIR", defaults.nist_structure_seed_mol_dir
             ),
-            nist_structure_index_dir=_path(
-                "ANALYSIS_NIST_STRUCTURE_INDEX_DIR", defaults.nist_structure_index_dir
+            nist_structure_runtime_cache_path=_path(
+                "ANALYSIS_NIST_STRUCTURE_RUNTIME_CACHE_PATH",
+                defaults.nist_structure_runtime_cache_path,
             ),
             structure_offline_only=_bool(
                 "ANALYSIS_STRUCTURE_OFFLINE_ONLY", defaults.structure_offline_only

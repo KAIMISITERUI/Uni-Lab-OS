@@ -3,7 +3,7 @@
 """
 功能:
     提供化合物结构图获取能力.
-    1. NistLocalStructureFetcher: 基于 NIST 本地索引的离线结构获取, 优先按 NIST Id 查找.
+    1. NistLocalStructureFetcher: 运行时解析 NIST MSP 构建本地映射, 优先离线生成结构图.
     2. StructureFetcher: 历史 CAS -> PubChem 结构下载链路, 仅作为回滚兜底保留.
 参数:
     无.
@@ -11,13 +11,13 @@
     无.
 """
 
-import json
 import logging
+import pickle
 import re
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 from .nist_matcher import CompoundMatch
 
@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # 无效 CAS 号模式, 跳过查询.
 _INVALID_CAS_PATTERNS = {"", "0", "0-00-0", "---", "N/A", "n/a"}
+_MSP_SEQ_REGEX = re.compile(r"NIST\s+MS#\s*(\d+).*?Seq#\s*([MR])\s*(\d+)", re.IGNORECASE)
+_RUNTIME_CACHE_VERSION = 2
 
 
 def _normalize_cas_digits(cas_number: str) -> str:
@@ -60,7 +62,7 @@ def build_structure_key(nist_id: Optional[int], cas_number: str) -> Optional[str
         return f"NIST:{nist_id}"
 
     cas_digits = _normalize_cas_digits(cas_number)
-    if cas_digits:
+    if cas_digits != "":
         return f"CAS:{cas_digits}"
 
     return None
@@ -69,15 +71,16 @@ def build_structure_key(nist_id: Optional[int], cas_number: str) -> Optional[str
 class NistLocalStructureFetcher:
     """
     功能:
-        从本地结构索引加载 NIST 结构图并返回任务可用路径.
-        索引文件约定:
-        1. index_dir/index.json.
-        2. 支持 by_nist_id 和 by_cas_digits 两类映射.
-        3. 映射值可为绝对路径或相对 index_dir 的路径.
+        运行时解析 NIST 导出的 MSP 与 MOL 目录, 并按命中结果获取结构图.
+        优先级:
+        1. 任务缓存目录中已存在结构图.
+        2. 运行时映射命中后按需渲染 S<cas_digits>.MOL.
+        3. 非严格离线时回退 PubChem.
     参数:
         task_cache_dir: 任务级结构图缓存目录.
-        index_dir: 结构索引目录, 内含 index.json.
+        seed_msp_path: NIST 导出的 MSP 文件路径, 用于运行时构建映射.
         seed_mol_dir: NIST 导出的 MOL 目录, 用于按需渲染结构图.
+        runtime_cache_path: 运行时映射缓存文件路径.
         offline_only: 是否严格离线, True 时禁止回退 PubChem.
         global_cache_dir: 历史链路全局缓存目录, 仅 offline_only=False 时用于回退.
         image_size: 回退 PubChem 下载尺寸.
@@ -87,37 +90,33 @@ class NistLocalStructureFetcher:
         无.
     """
 
-    _INDEX_FILE_NAME = "index.json"
-
     def __init__(
         self,
         task_cache_dir: Path,
-        index_dir: Path,
+        seed_msp_path: Optional[Path] = None,
         seed_mol_dir: Optional[Path] = None,
-        offline_only: bool = True,
+        runtime_cache_path: Optional[Path] = None,
+        offline_only: bool = False,
         global_cache_dir: Optional[Path] = None,
         image_size: int = 200,
         timeout: float = 10.0,
         request_interval: float = 0.2,
     ) -> None:
         self._task_cache_dir = Path(task_cache_dir)
-        self._index_dir = Path(index_dir)
-        self._index_path = self._index_dir / self._INDEX_FILE_NAME
+        self._seed_msp_path = Path(seed_msp_path) if seed_msp_path is not None else None
         self._seed_mol_dir = Path(seed_mol_dir) if seed_mol_dir is not None else None
+        self._runtime_cache_path = (
+            Path(runtime_cache_path) if runtime_cache_path is not None else None
+        )
         self._offline_only = offline_only
         self._image_size = image_size
 
         self._task_cache_dir.mkdir(parents=True, exist_ok=True)
 
-        self._by_nist_id: Dict[str, Path] = {}
-        self._by_cas_digits: Dict[str, Path] = {}
-        self._load_index()
-
-        if self._seed_mol_dir is not None:
-            if self._seed_mol_dir.is_dir() is True:
-                logger.info("已启用按需结构图渲染, MOL 目录: %s", self._seed_mol_dir)
-            else:
-                logger.warning("MOL 目录不存在, 按需结构图渲染不可用: %s", self._seed_mol_dir)
+        self._by_nist_ms: Dict[str, str] = {}
+        self._by_seq_mainlib: Dict[str, str] = {}
+        self._by_seq_replib: Dict[str, str] = {}
+        self._load_runtime_mapping()
 
         self._fallback_fetcher: Optional[StructureFetcher] = None
         if self._offline_only is False:
@@ -136,7 +135,7 @@ class NistLocalStructureFetcher:
         """
         功能:
             批量按命中结果获取结构图.
-            优先按 NIST:<id> 查找, 失败时按 CAS:<digits> 回退.
+            优先使用本地缓存和本地 MOL, 失败后回退 PubChem.
         参数:
             matches: 化合物命中列表.
         返回:
@@ -158,9 +157,9 @@ class NistLocalStructureFetcher:
             if key in results:
                 continue
 
-            local_path = self._find_local_path_for_match(match)
-            if local_path is not None:
-                results[key] = local_path
+            cached_path = self._get_task_cache_path(key)
+            if cached_path is not None:
+                results[key] = cached_path
                 continue
 
             on_demand_path = self._render_from_seed_mol(match, key)
@@ -169,102 +168,308 @@ class NistLocalStructureFetcher:
                 continue
 
             logger.warning(
-                "结构未索引, key=%s, 化合物=%s, CAS=%s, NIST#=%s",
+                "结构未命中本地映射, key=%s, 化合物=%s, CAS=%s, NIST#=%s, Lib=%s",
                 key,
                 match.compound_name or "(未知)",
                 match.cas_number or "(空)",
                 match.nist_id,
+                match.library or "(空)",
             )
 
             fallback_path = self._fetch_with_legacy_fallback(match)
             results[key] = fallback_path
 
         success_count = sum(1 for path in results.values() if path is not None)
-        logger.info("本地结构图匹配完成: %d/%d 成功", success_count, len(results))
+        logger.info("结构图匹配完成: %d/%d 成功", success_count, len(results))
         return results
 
-    def _load_index(self) -> None:
+    def _get_task_cache_path(self, structure_key: str) -> Optional[Path]:
         """
         功能:
-            读取 index.json 并加载 NIST 与 CAS 双索引.
+            返回任务缓存中已存在的结构图路径.
+        参数:
+            structure_key: 结构键.
+        返回:
+            Optional[Path], 命中时返回路径.
+        """
+        target_path = self._task_cache_dir / f"{structure_key.replace(':', '_')}.png"
+        if target_path.exists() is True:
+            return target_path
+        return None
+
+    def _load_runtime_mapping(self) -> None:
+        """
+        功能:
+            加载运行时结构映射.
+            优先尝试缓存, 缓存无效时重新解析 MSP.
         参数:
             无.
         返回:
             无.
         """
-        if self._index_path.exists() is False:
-            logger.info("本地结构索引不存在, 将在命中时按需渲染: %s", self._index_path)
+        if self._seed_mol_dir is not None:
+            if self._seed_mol_dir.is_dir() is True:
+                logger.info("已启用按需结构图渲染, MOL 目录: %s", self._seed_mol_dir)
+            else:
+                logger.warning("MOL 目录不存在, 按需结构图渲染不可用: %s", self._seed_mol_dir)
+
+        if self._seed_msp_path is None:
+            logger.info("未配置 seed MSP, 将仅依赖命中 CAS 与 PubChem 回退.")
+            return
+
+        if self._seed_msp_path.exists() is False:
+            logger.warning("seed MSP 不存在, 运行时映射不可用: %s", self._seed_msp_path)
+            return
+
+        if self._seed_mol_dir is None:
+            logger.info("未配置 seed MOL 目录, 运行时映射将仅用于 PubChem 回退 CAS.")
+        elif self._seed_mol_dir.is_dir() is False:
+            logger.warning("seed MOL 目录不存在, 运行时映射将仅用于 PubChem 回退 CAS: %s", self._seed_mol_dir)
+
+        if self._runtime_cache_path is not None:
+            if self._try_load_runtime_cache() is True:
+                return
+
+        by_nist_ms, by_seq_mainlib, by_seq_replib = self._build_runtime_mapping_from_seed()
+        self._by_nist_ms = by_nist_ms
+        self._by_seq_mainlib = by_seq_mainlib
+        self._by_seq_replib = by_seq_replib
+
+        if self._runtime_cache_path is not None:
+            self._save_runtime_cache()
+
+        logger.info(
+            "运行时结构映射构建完成: NIST键=%d, mainlib序号键=%d, replib序号键=%d",
+            len(self._by_nist_ms),
+            len(self._by_seq_mainlib),
+            len(self._by_seq_replib),
+        )
+
+    def _build_runtime_mapping_from_seed(self) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+        """
+        功能:
+            从 seed MSP 与 seed MOL 构建运行时映射.
+        参数:
+            无.
+        返回:
+            Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+                by_nist_ms, by_seq_mainlib, by_seq_replib.
+        """
+        by_nist_ms: Dict[str, str] = {}
+        by_seq_mainlib: Dict[str, str] = {}
+        by_seq_replib: Dict[str, str] = {}
+
+        if self._seed_msp_path is None:
+            return by_nist_ms, by_seq_mainlib, by_seq_replib
+        if self._seed_msp_path.exists() is False:
+            return by_nist_ms, by_seq_mainlib, by_seq_replib
+
+        available_cas_digits = self._scan_seed_mol_cas_digits()
+
+        current_cas_digits = ""
+        with self._seed_msp_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if line == "":
+                    current_cas_digits = ""
+                    continue
+
+                if line.startswith("CASNO:"):
+                    cas_raw = line.split(":", 1)[1]
+                    current_cas_digits = _normalize_cas_digits(cas_raw)
+                    continue
+
+                if line.startswith("Comment:") is False:
+                    continue
+                if current_cas_digits == "":
+                    continue
+                match = _MSP_SEQ_REGEX.search(line)
+                if match is None:
+                    continue
+
+                nist_ms = str(int(match.group(1)))
+                seq_prefix = match.group(2).upper()
+                seq_id = str(int(match.group(3)))
+
+                if nist_ms not in by_nist_ms:
+                    by_nist_ms[nist_ms] = current_cas_digits
+
+                if seq_prefix == "M":
+                    if seq_id not in by_seq_mainlib:
+                        by_seq_mainlib[seq_id] = current_cas_digits
+                elif seq_prefix == "R":
+                    if seq_id not in by_seq_replib:
+                        by_seq_replib[seq_id] = current_cas_digits
+
+        if len(available_cas_digits) > 0:
+            logger.info(
+                "运行时映射包含未落地 MOL 的 CAS, 后续将按需回退: 映射CAS=%d, 可渲染CAS=%d",
+                len(set(by_nist_ms.values()) | set(by_seq_mainlib.values()) | set(by_seq_replib.values())),
+                len(available_cas_digits),
+            )
+
+        return by_nist_ms, by_seq_mainlib, by_seq_replib
+
+    def _scan_seed_mol_cas_digits(self) -> Set[str]:
+        """
+        功能:
+            扫描 seed MOL 目录中的 S<cas_digits>.MOL 文件.
+        参数:
+            无.
+        返回:
+            Set[str], 可用于渲染的 CAS 数字集合.
+        """
+        if self._seed_mol_dir is None:
+            return set()
+        if self._seed_mol_dir.is_dir() is False:
+            return set()
+
+        cas_digits_set: Set[str] = set()
+        for mol_path in self._seed_mol_dir.iterdir():
+            if mol_path.is_file() is False:
+                continue
+            if mol_path.suffix.lower() != ".mol":
+                continue
+
+            filename = mol_path.name
+            upper_name = filename.upper()
+            if upper_name.startswith("S") is False:
+                continue
+            if upper_name.endswith(".MOL") is False:
+                continue
+
+            cas_digits = filename[1:-4]
+            if cas_digits.isdigit() is False:
+                continue
+            cas_digits_set.add(cas_digits)
+
+        logger.info("seed MOL 扫描完成: S键=%d, 目录=%s", len(cas_digits_set), self._seed_mol_dir)
+        return cas_digits_set
+
+    def _try_load_runtime_cache(self) -> bool:
+        """
+        功能:
+            尝试从运行时缓存文件加载映射.
+        参数:
+            无.
+        返回:
+            bool, 缓存加载是否成功.
+        """
+        if self._runtime_cache_path is None:
+            return False
+        if self._runtime_cache_path.exists() is False:
+            return False
+
+        try:
+            with self._runtime_cache_path.open("rb") as handle:
+                payload = pickle.load(handle)
+        except Exception as exc:
+            logger.warning("读取运行时映射缓存失败: %s, 错误=%s", self._runtime_cache_path, exc)
+            return False
+
+        if self._is_runtime_cache_valid(payload) is False:
+            logger.info("运行时映射缓存已失效, 将重新构建: %s", self._runtime_cache_path)
+            return False
+
+        self._by_nist_ms = self._sanitize_mapping_dict(payload.get("by_nist_ms"))
+        self._by_seq_mainlib = self._sanitize_mapping_dict(payload.get("by_seq_mainlib"))
+        self._by_seq_replib = self._sanitize_mapping_dict(payload.get("by_seq_replib"))
+
+        logger.info(
+            "已加载运行时结构映射缓存: NIST键=%d, mainlib序号键=%d, replib序号键=%d, 缓存=%s",
+            len(self._by_nist_ms),
+            len(self._by_seq_mainlib),
+            len(self._by_seq_replib),
+            self._runtime_cache_path,
+        )
+        return True
+
+    def _is_runtime_cache_valid(self, payload: object) -> bool:
+        """
+        功能:
+            校验运行时缓存是否与当前 seed 文件一致.
+        参数:
+            payload: 缓存反序列化对象.
+        返回:
+            bool, 缓存是否可用.
+        """
+        if isinstance(payload, dict) is False:
+            return False
+        if payload.get("version") != _RUNTIME_CACHE_VERSION:
+            return False
+        if self._seed_msp_path is None:
+            return False
+
+        seed_msp = payload.get("seed_msp_path")
+        seed_mol_dir = payload.get("seed_mol_dir")
+        if seed_msp != str(self._seed_msp_path):
+            return False
+        if seed_mol_dir != str(self._seed_mol_dir):
+            return False
+
+        msp_stat = self._seed_msp_path.stat()
+        if payload.get("seed_msp_size") != msp_stat.st_size:
+            return False
+        if payload.get("seed_msp_mtime") != msp_stat.st_mtime:
+            return False
+        return True
+
+    @staticmethod
+    def _sanitize_mapping_dict(raw_mapping: object) -> Dict[str, str]:
+        """
+        功能:
+            将缓存中的映射对象标准化为字符串字典.
+        参数:
+            raw_mapping: 原始映射对象.
+        返回:
+            Dict[str, str], 过滤后的映射.
+        """
+        if isinstance(raw_mapping, dict) is False:
+            return {}
+
+        normalized: Dict[str, str] = {}
+        for key, value in raw_mapping.items():
+            normalized_key = str(key).strip()
+            normalized_value = str(value).strip()
+            if normalized_key == "":
+                continue
+            if normalized_value == "":
+                continue
+            normalized[normalized_key] = normalized_value
+        return normalized
+
+    def _save_runtime_cache(self) -> None:
+        """
+        功能:
+            将当前运行时映射写入缓存文件.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        if self._runtime_cache_path is None:
+            return
+        if self._seed_msp_path is None:
             return
 
         try:
-            payload = json.loads(self._index_path.read_text(encoding="utf-8"))
+            self._runtime_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            msp_stat = self._seed_msp_path.stat()
+            payload = {
+                "version": _RUNTIME_CACHE_VERSION,
+                "seed_msp_path": str(self._seed_msp_path),
+                "seed_mol_dir": str(self._seed_mol_dir),
+                "seed_msp_size": msp_stat.st_size,
+                "seed_msp_mtime": msp_stat.st_mtime,
+                "by_nist_ms": self._by_nist_ms,
+                "by_seq_mainlib": self._by_seq_mainlib,
+                "by_seq_replib": self._by_seq_replib,
+            }
+            with self._runtime_cache_path.open("wb") as handle:
+                pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            logger.info("运行时结构映射缓存已写入: %s", self._runtime_cache_path)
         except Exception as exc:
-            logger.warning("读取本地结构索引失败: %s, 错误: %s", self._index_path, exc)
-            return
-
-        by_nist_id = payload.get("by_nist_id", {})
-        by_cas_digits = payload.get("by_cas_digits", {})
-
-        if isinstance(by_nist_id, dict):
-            for key, value in by_nist_id.items():
-                self._by_nist_id[str(key)] = self._resolve_index_png_path(value)
-
-        if isinstance(by_cas_digits, dict):
-            for key, value in by_cas_digits.items():
-                self._by_cas_digits[str(key)] = self._resolve_index_png_path(value)
-
-        logger.info(
-            "已加载本地结构索引: NIST键=%d, CAS键=%d, 索引=%s",
-            len(self._by_nist_id),
-            len(self._by_cas_digits),
-            self._index_path,
-        )
-
-    def _resolve_index_png_path(self, raw_path: str) -> Path:
-        """
-        功能:
-            将索引中的路径值转换为绝对路径.
-        参数:
-            raw_path: index.json 中记录的路径.
-        返回:
-            Path, 解析后的路径对象.
-        """
-        path = Path(str(raw_path))
-        if path.is_absolute():
-            return path
-        return self._index_dir / path
-
-    def _find_local_path_for_match(self, match: CompoundMatch) -> Optional[Path]:
-        """
-        功能:
-            在本地索引中按命中结果查找结构图并复制到任务缓存.
-        参数:
-            match: 单个化合物命中.
-        返回:
-            Optional[Path], 任务缓存中的结构图路径.
-        """
-        candidates: List[tuple[str, Path]] = []
-
-        if match.nist_id is not None and match.nist_id > 0:
-            nist_key = str(match.nist_id)
-            if nist_key in self._by_nist_id:
-                candidates.append((f"NIST:{match.nist_id}", self._by_nist_id[nist_key]))
-
-        cas_digits = _normalize_cas_digits(match.cas_number)
-        if cas_digits and cas_digits in self._by_cas_digits:
-            candidates.append((f"CAS:{cas_digits}", self._by_cas_digits[cas_digits]))
-
-        for structure_key, index_png_path in candidates:
-            if index_png_path.exists() is False:
-                logger.warning(
-                    "结构索引命中但文件不存在, key=%s, 路径=%s",
-                    structure_key,
-                    index_png_path,
-                )
-                continue
-            return self._copy_to_task_cache(index_png_path, structure_key)
-
-        return None
+            logger.warning("写入运行时结构映射缓存失败: %s, 错误=%s", self._runtime_cache_path, exc)
 
     def _render_from_seed_mol(
         self,
@@ -286,7 +491,11 @@ class NistLocalStructureFetcher:
         if self._seed_mol_dir.is_dir() is False:
             return None
 
-        mol_path = self._find_seed_mol_path(match)
+        cas_digits = self._resolve_seed_cas_digits(match)
+        if cas_digits == "":
+            return None
+
+        mol_path = self._find_seed_mol_path_by_cas(cas_digits)
         if mol_path is None:
             return None
 
@@ -296,39 +505,98 @@ class NistLocalStructureFetcher:
 
         return self._render_mol_to_png(mol_path, target_path, structure_key)
 
-    def _find_seed_mol_path(self, match: CompoundMatch) -> Optional[Path]:
+    def _resolve_seed_cas_digits(self, match: CompoundMatch) -> str:
         """
         功能:
-            在种子 MOL 目录中按命中信息定位结构文件.
-            规则:
-            1. N<nist_id>.MOL.
-            2. S<cas_digits>.MOL.
+            根据命中结果推导用于本地渲染的 CAS 数字键.
+            优先级:
+            1. library + Id(Seq#) 映射.
+            2. 当库类型未知时, 按 NIST MS# 映射.
+            3. 命中项自带 CAS.
         参数:
             match: 单个化合物命中.
         返回:
-            Optional[Path], 命中的 MOL 路径.
+            str, CAS 数字键. 空字符串表示不可定位.
+        """
+        if match.nist_id is not None and match.nist_id > 0:
+            seq_cas_digits = self._resolve_cas_by_seq(match.library, match.nist_id)
+            if seq_cas_digits != "":
+                return seq_cas_digits
+
+            normalized_library = self._normalize_library_name(match.library)
+            if normalized_library == "":
+                # 库未知时, 允许把 Id 视为 NIST MS# 进行兜底映射.
+                nist_ms_key = str(match.nist_id)
+                if nist_ms_key in self._by_nist_ms:
+                    return self._by_nist_ms[nist_ms_key]
+            else:
+                logger.debug(
+                    "库序号映射缺失, 跳过 NIST MS# 兜底避免错配: 化合物=%s, Lib=%s, Id=%s",
+                    match.compound_name or "(未知)",
+                    match.library or "(空)",
+                    match.nist_id,
+                )
+
+        return _normalize_cas_digits(match.cas_number)
+
+    def _resolve_cas_by_seq(self, library_name: str, sequence_id: int) -> str:
+        """
+        功能:
+            按库类型与序号查找 CAS 数字键.
+        参数:
+            library_name: 命中来源库名称.
+            sequence_id: 命中 Id(Seq#).
+        返回:
+            str, CAS 数字键. 未命中返回空字符串.
+        """
+        normalized_library = self._normalize_library_name(library_name)
+        sequence_key = str(sequence_id)
+
+        if normalized_library == "mainlib":
+            return self._by_seq_mainlib.get(sequence_key, "")
+        if normalized_library == "replib":
+            return self._by_seq_replib.get(sequence_key, "")
+        return ""
+
+    @staticmethod
+    def _normalize_library_name(library_name: str) -> str:
+        """
+        功能:
+            归一化库名称, 用于匹配 mainlib/replib.
+        参数:
+            library_name: 原始库名称.
+        返回:
+            str, 归一化后库标识.
+        """
+        normalized = str(library_name).strip().lower()
+        if "mainlib" in normalized:
+            return "mainlib"
+        if "replib" in normalized:
+            return "replib"
+        return ""
+
+    def _find_seed_mol_path_by_cas(self, cas_digits: str) -> Optional[Path]:
+        """
+        功能:
+            按 CAS 数字键定位 seed MOL 文件路径.
+        参数:
+            cas_digits: CAS 纯数字键.
+        返回:
+            Optional[Path], 命中则返回路径.
         """
         if self._seed_mol_dir is None:
             return None
+        if cas_digits == "":
+            return None
 
-        candidates: List[str] = []
+        filename = f"S{cas_digits}.MOL"
+        direct_path = self._seed_mol_dir / filename
+        if direct_path.exists() is True:
+            return direct_path
 
-        if match.nist_id is not None and match.nist_id > 0:
-            candidates.append(f"N{match.nist_id}.MOL")
-
-        cas_digits = _normalize_cas_digits(match.cas_number)
-        if cas_digits:
-            candidates.append(f"S{cas_digits}.MOL")
-
-        for filename in candidates:
-            direct_path = self._seed_mol_dir / filename
-            if direct_path.exists() is True:
-                return direct_path
-
-            lower_path = self._seed_mol_dir / filename.lower()
-            if lower_path.exists() is True:
-                return lower_path
-
+        lower_path = self._seed_mol_dir / filename.lower()
+        if lower_path.exists() is True:
+            return lower_path
         return None
 
     def _render_mol_to_png(
@@ -371,34 +639,52 @@ class NistLocalStructureFetcher:
             logger.warning("按需渲染结构图异常, key=%s, MOL=%s, 错误=%s", structure_key, mol_path, exc)
             return None
 
-    def _copy_to_task_cache(self, source_path: Path, structure_key: str) -> Path:
+    @staticmethod
+    def _format_cas_digits(cas_digits: str) -> str:
         """
         功能:
-            将索引中的图片复制到任务缓存目录并返回任务路径.
+            将纯数字 CAS 转换为带连字符格式.
         参数:
-            source_path: 索引图片源路径.
-            structure_key: 结构键, 用于生成缓存文件名.
+            cas_digits: CAS 纯数字字符串.
         返回:
-            Path, 任务缓存路径.
+            str, 规范化 CAS 字符串. 不可格式化时返回空字符串.
         """
-        safe_name = structure_key.replace(":", "_")
-        suffix = source_path.suffix if source_path.suffix else ".png"
-        target_path = self._task_cache_dir / f"{safe_name}{suffix}"
+        if cas_digits.isdigit() is False:
+            return ""
+        if len(cas_digits) < 3:
+            return ""
 
-        if target_path.exists() is True:
-            return target_path
+        left_part = cas_digits[:-3]
+        middle_part = cas_digits[-3:-1]
+        right_part = cas_digits[-1]
+        if left_part == "":
+            return ""
+        return f"{left_part}-{middle_part}-{right_part}"
 
-        try:
-            shutil.copy2(str(source_path), str(target_path))
-            return target_path
-        except Exception as exc:
-            logger.warning(
-                "复制结构图到任务缓存失败, 将回退使用索引路径: %s -> %s, 错误: %s",
-                source_path,
-                target_path,
-                exc,
-            )
-            return source_path
+    def _resolve_fallback_cas_candidates(self, match: CompoundMatch) -> List[str]:
+        """
+        功能:
+            组装 PubChem 回退时的 CAS 候选列表.
+        参数:
+            match: 单个化合物命中.
+        返回:
+            List[str], 候选 CAS 列表.
+        """
+        candidates: List[str] = []
+
+        original_cas = match.cas_number.strip()
+        if original_cas not in _INVALID_CAS_PATTERNS and original_cas != "":
+            candidates.append(original_cas)
+
+        mapped_cas_digits = self._resolve_seed_cas_digits(match)
+        if mapped_cas_digits != "":
+            mapped_cas = self._format_cas_digits(mapped_cas_digits)
+            if mapped_cas and mapped_cas not in candidates:
+                candidates.append(mapped_cas)
+            if mapped_cas_digits not in candidates:
+                candidates.append(mapped_cas_digits)
+
+        return candidates
 
     def _fetch_with_legacy_fallback(self, match: CompoundMatch) -> Optional[Path]:
         """
@@ -415,15 +701,28 @@ class NistLocalStructureFetcher:
         if self._fallback_fetcher is None:
             return None
 
-        if match.cas_number.strip() in _INVALID_CAS_PATTERNS:
+        cas_candidates = self._resolve_fallback_cas_candidates(match)
+        if len(cas_candidates) == 0:
+            logger.info(
+                "本地结构未命中且无可用 CAS, 跳过 PubChem 回退: 化合物=%s, NIST#=%s, Lib=%s",
+                match.compound_name or "(未知)",
+                match.nist_id,
+                match.library or "(空)",
+            )
             return None
 
-        logger.info(
-            "本地索引未命中, 回退历史结构链路: 化合物=%s, CAS=%s",
-            match.compound_name or "(未知)",
-            match.cas_number,
-        )
-        return self._fallback_fetcher.fetch_structure(match.cas_number)
+        for cas_number in cas_candidates:
+            logger.info(
+                "本地结构未命中, 回退 PubChem: 化合物=%s, CAS=%s, NIST#=%s, Lib=%s",
+                match.compound_name or "(未知)",
+                cas_number,
+                match.nist_id,
+                match.library or "(空)",
+            )
+            fetched_path = self._fallback_fetcher.fetch_structure(cas_number)
+            if fetched_path is not None:
+                return fetched_path
+        return None
 
 
 class StructureFetcher:
