@@ -120,7 +120,7 @@ class Settings:
     use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
     # ---------- robust_v2 参数 ----------
-    integration_mode: str = "robust_v2"  # 积分模式, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "gcpy"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     baseline_method: str = "rolling_quantile"  # robust_v2 基线方法, 修改后改变背景估计方式.
     baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
     baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.
@@ -129,6 +129,9 @@ class Settings:
     boundary_expand_factor: float = 6.0  # 边界扩展系数, 调大可覆盖更多拖尾区域.
     boundary_min_span_min: float = 0.08  # 峰最小宽度(min), 调大可过滤过窄噪声峰.
     boundary_max_span_min: float = 1.00  # 峰最大宽度(min), 调小可抑制异常宽峰.
+
+    # ---------- gcpy 参数 ----------
+    gcpy_whittaker_lmbd: float = 10.0  # gcpy 模式 Whittaker 平滑参数, 调大可使信号更平滑.
 
     # ---------- 峰过滤参数 ----------
     peak_rt_min: Optional[float] = 4.0  # 峰保留时间下限(min), 调大可忽略前段溶剂峰.

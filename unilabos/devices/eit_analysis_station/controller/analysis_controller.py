@@ -1041,6 +1041,7 @@ class AnalysisStationController:
                 boundary_expand_factor=self._settings.boundary_expand_factor,
                 boundary_min_span_min=self._settings.boundary_min_span_min,
                 boundary_max_span_min=self._settings.boundary_max_span_min,
+                gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
             tic_baseline = tic_integrator.last_baseline
@@ -1074,6 +1075,7 @@ class AnalysisStationController:
                 boundary_expand_factor=self._settings.boundary_expand_factor,
                 boundary_min_span_min=self._settings.boundary_min_span_min,
                 boundary_max_span_min=self._settings.boundary_max_span_min,
+                gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
             fid_baseline = fid_integrator.last_baseline
@@ -1183,6 +1185,16 @@ class AnalysisStationController:
             )
             plot_dir = report_dir / "plots"
 
+            # 根据积分模式决定填充基线方式, 使绘图区域与实际积分一致
+            mode = self._settings.integration_mode.strip().lower()
+            if mode == "gcpy":
+                fill_mode = "global"
+            elif mode == "legacy" and self._settings.use_als_baseline is True:
+                fill_mode = "global"
+            else:
+                # robust_v2 或 legacy 无 ALS, 积分使用局部端点连线
+                fill_mode = "local"
+
             # TIC 色谱图
             if tic_times is not None and result.tic_peaks:
                 try:
@@ -1196,7 +1208,7 @@ class AnalysisStationController:
                         rt_min=self._settings.peak_rt_min,
                         rt_max=self._settings.peak_rt_max,
                         baseline=tic_baseline,
-                        fill_baseline_mode="local",
+                        fill_baseline_mode=fill_mode,
                     )
                 except Exception as e:
                     self._logger.error("样品 %s TIC 色谱图生成失败: %s", sample_name, e)
@@ -1215,7 +1227,7 @@ class AnalysisStationController:
                         rt_max=self._settings.peak_rt_max,
                         y_range_min=100,  # FID 信号较小, 确保 Y 轴最小范围
                         baseline=fid_baseline,
-                        fill_baseline_mode="local",
+                        fill_baseline_mode=fill_mode,
                     )
                 except Exception as e:
                     self._logger.error("样品 %s FID 色谱图生成失败: %s", sample_name, e)

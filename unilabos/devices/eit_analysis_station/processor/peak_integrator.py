@@ -99,6 +99,7 @@ class PeakIntegrator:
         boundary_expand_factor: float = 6.0,
         boundary_min_span_min: float = 0.08,
         boundary_max_span_min: float = 0.80,
+        gcpy_whittaker_lmbd: float = 10.0,
     ):
         self._smoothing_window = self._ensure_odd(max(3, int(smoothing_window)))
         self._prominence = float(prominence)
@@ -121,6 +122,9 @@ class PeakIntegrator:
         self._boundary_expand_factor = float(boundary_expand_factor)
         self._boundary_min_span_min = float(boundary_min_span_min)
         self._boundary_max_span_min = float(boundary_max_span_min)
+
+        # gcpy 参数
+        self._gcpy_whittaker_lmbd = float(gcpy_whittaker_lmbd)
 
         # integrate() 完成后可读取最后一次使用的基线.
         self.last_baseline: Optional[np.ndarray] = None
@@ -798,6 +802,96 @@ class PeakIntegrator:
         logger.info("robust_v2 模式积分完成, 峰数量: %d", len(results))
         return results
 
+    def _integrate_gcpy(
+        self, times: np.ndarray, intensities: np.ndarray
+    ) -> List[PeakResult]:
+        """
+        功能:
+            使用 gcpy 方法执行峰检测与积分:
+            1. Whittaker 平滑(gcpy.smooth)用于峰检测与边界定位.
+            2. scipy.signal.find_peaks 检测峰位置.
+            3. gcpy.bls.lininterp_baseline_subtract 在原始信号上全局扣除基线:
+               屏蔽峰区域后对剩余点做样条插值并扣除.
+            4. np.trapz 逐峰梯形积分.
+        参数:
+            times: 时间数组(min).
+            intensities: 原始强度数组.
+        返回:
+            List[PeakResult], 峰积分结果列表.
+        """
+        from .gcpy.smooth import whittaker_smooth
+        from .gcpy.bls import lininterp_baseline_subtract
+
+        signal = intensities.astype(float)
+
+        # Whittaker 平滑, 仅用于峰检测与边界定位, 不改变积分信号
+        smoothed = whittaker_smooth(signal, self._gcpy_whittaker_lmbd)
+
+        # 峰检测
+        peak_indices, _ = find_peaks(
+            smoothed,
+            prominence=self._prominence,
+            distance=self._min_distance,
+        )
+        if len(peak_indices) == 0:
+            logger.info("gcpy 模式未检测到峰.")
+            self.last_baseline = np.zeros_like(signal)
+            return []
+
+        # 在平滑信号上获取峰边界
+        _, _, left_ips, right_ips = peak_widths(
+            smoothed, peak_indices, rel_height=self._width_rel_height
+        )
+
+        # 在原始信号上做 lininterp 基线扣除, 保持与绘图坐标一致
+        x_indices = np.arange(len(signal), dtype=float)
+        try:
+            baseline_sub = lininterp_baseline_subtract(signal, x_indices, left_ips, right_ips)
+            baseline_array = signal - baseline_sub  # 纯基线数组, 供绘图备用
+        except Exception as e:
+            logger.warning("gcpy lininterp 基线扣除失败, 回退到不扣除基线: %s", e)
+            baseline_sub = signal.copy()
+            baseline_array = np.zeros_like(signal)
+
+        self.last_baseline = baseline_array
+
+        # 逐峰梯形积分
+        raw_areas: List[float] = []
+        for center, left, right in zip(peak_indices, left_ips, right_ips):
+            lb = max(0, int(left))
+            rb = min(len(times) - 1, int(right) + 1)
+            seg_times = times[lb:rb]
+            seg_signal = np.maximum(baseline_sub[lb:rb], 0.0)
+            # 时间轴转换为秒后积分
+            area = float(np.trapz(seg_signal, seg_times * 60.0))
+            raw_areas.append(area)
+
+        total_area = sum(raw_areas)
+
+        results: List[PeakResult] = []
+        for center, left, right, area in zip(peak_indices, left_ips, right_ips, raw_areas):
+            lb = max(0, int(left))
+            rb = min(len(times) - 1, int(right))
+            rt = float(times[center])
+            height = float(signal[center])
+            area_pct = (area / total_area * 100.0) if total_area > 0 else 0.0
+            start_t = float(times[lb])
+            end_t = float(times[rb])
+            width = end_t - start_t
+            results.append(PeakResult(
+                peak_index=int(center),
+                retention_time=rt,
+                height=height,
+                area=area,
+                area_percent=area_pct,
+                start_time=start_t,
+                end_time=end_t,
+                width=width,
+            ))
+
+        logger.info("gcpy 模式积分完成, 峰数量: %d", len(results))
+        return results
+
     def integrate(self, times: np.ndarray, intensities: np.ndarray) -> List[PeakResult]:
         """
         功能:
@@ -823,6 +917,9 @@ class PeakIntegrator:
         mode = self._integration_mode
         if mode == "legacy":
             return self._integrate_legacy(times, intensities)
+
+        if mode == "gcpy":
+            return self._integrate_gcpy(times, intensities)
 
         if mode != "robust_v2":
             logger.warning("未知 integration_mode=%s, 自动使用 robust_v2.", mode)
