@@ -128,7 +128,7 @@ class NistLocalStructureFetcher:
         runtime_cache_path: 运行时映射缓存文件路径.
         offline_only: 是否严格离线, True 时禁止回退 PubChem.
         global_cache_dir: 历史链路全局缓存目录, 仅 offline_only=False 时用于回退.
-        image_size: 回退 PubChem SDF 渲染尺寸.
+        image_size: 结构图渲染像素边长, 本地 MOL 与 PubChem SDF 渲染链路均生效.
         image_ppi: 结构图写盘分辨率, 本地 MOL 与 PubChem SDF 渲染链路均生效.
         timeout: 回退 PubChem 超时.
         request_interval: 回退 PubChem 请求间隔.
@@ -671,9 +671,9 @@ class NistLocalStructureFetcher:
         chem_module, draw_module = rdkit_modules
 
         try:
-            mol = chem_module.MolFromMolFile(str(mol_path), sanitize=True, removeHs=False)
+            mol = chem_module.MolFromMolFile(str(mol_path), sanitize=True, removeHs=True)
             if mol is None:
-                mol = chem_module.MolFromMolFile(str(mol_path), sanitize=False, removeHs=False)
+                mol = chem_module.MolFromMolFile(str(mol_path), sanitize=False, removeHs=True)
             if mol is None:
                 logger.warning("按需渲染失败, MOL 解析失败: %s", mol_path)
                 return None
@@ -1034,9 +1034,9 @@ class StructureFetcher:
             return None
 
         try:
-            mol = chem_module.MolFromMolBlock(mol_block, sanitize=True, removeHs=False)
+            mol = chem_module.MolFromMolBlock(mol_block, sanitize=True, removeHs=True)
             if mol is None:
-                mol = chem_module.MolFromMolBlock(mol_block, sanitize=False, removeHs=False)
+                mol = chem_module.MolFromMolBlock(mol_block, sanitize=False, removeHs=True)
             if mol is None:
                 logger.warning("PubChem SDF 解析失败, 无法渲染结构图.")
                 return None

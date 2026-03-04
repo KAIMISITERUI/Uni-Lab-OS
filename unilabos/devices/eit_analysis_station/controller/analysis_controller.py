@@ -1634,6 +1634,7 @@ class AnalysisStationController:
                         offline_only=self._settings.structure_offline_only,
                         global_cache_dir=self._settings.structure_cache_dir,
                         image_ppi=self._settings.structure_image_ppi,
+                        image_size=self._settings.structure_image_size,
                     )
                     structure_images = fetcher.fetch_batch_from_matches(all_matches)
                 except Exception as e:

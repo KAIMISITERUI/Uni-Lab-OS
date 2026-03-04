@@ -75,7 +75,7 @@ class Settings:
     # ---------- MSPepSearch 预测配置 ----------
     mspepsearch_enable: bool = True  # 是否启用 MSPepSearch 预测链路, 关闭后不执行 SS-HM/iHS-HM.
     process_gc_ms_enable_sshm_search: bool = True  # 是否启用 SS-HM 预测, 关闭后报告不写 SS-HM 结果.
-    process_gc_ms_enable_ihshm_search: bool =  True # 是否启用 iHS-HM 预测, 打开后增加 iHS-HM 计算耗时.
+    process_gc_ms_enable_ihshm_search: bool =  False # 是否启用 iHS-HM 预测, 打开后增加 iHS-HM 计算耗时.
     mspepsearch_exe: Path = field(  # MSPepSearch 可执行文件路径, 修改后切换调用程序.
         default_factory=lambda: Path(
             r"D:\EIMS-mass-predictions\R_ShinyApplication\shiny\wrk"
@@ -120,12 +120,12 @@ class Settings:
     use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
     # ---------- robust_v2 参数 ----------
-    integration_mode: str = "gcpy"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "robust_v2"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     baseline_method: str = "rolling_quantile"  # robust_v2 基线方法, 修改后改变背景估计方式.
     baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
     baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.
     boundary_sigma_factor: float = 3.0  # 边界 sigma 系数, 调大通常会扩展积分边界.
-    boundary_edge_ratio: float = 0.01  # 边缘阈值比例, 调整后影响峰起止截断位置.
+    boundary_edge_ratio: float = 0.005  # 边缘阈值比例, 调整后影响峰起止截断位置.
     boundary_expand_factor: float = 6.0  # 边界扩展系数, 调大可覆盖更多拖尾区域.
     boundary_min_span_min: float = 0.08  # 峰最小宽度(min), 调大可过滤过窄噪声峰.
     boundary_max_span_min: float = 1.00  # 峰最大宽度(min), 调小可抑制异常宽峰.
@@ -156,6 +156,7 @@ class Settings:
     chromatogram_plot_ppi: int = 300  # 色谱图导出 PPI, 调高可提升 TIC/FID 图清晰度并增大文件体积.
     ms_spectrum_plot_ppi: int = 300  # 质谱图导出 PPI, 调高可提升棒图与标签清晰度并增大文件体积.
     structure_image_ppi: int = 300  # 结构图导出 PPI, 调高可提升本地 MOL 与 PubChem SDF 渲染结构图清晰度并增大文件体积.
+    structure_image_size: int = 500  # 结构图渲染像素边长, 调大可提升清晰度并增大文件体积.
 
     # ---------- 报告目录 ----------
     report_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")  # 报告输出根目录, 修改后改变报告与图像落盘位置.
@@ -353,6 +354,7 @@ class Settings:
             chromatogram_plot_ppi=_int("ANALYSIS_CHROMATOGRAM_PLOT_PPI", defaults.chromatogram_plot_ppi),
             ms_spectrum_plot_ppi=_int("ANALYSIS_MS_SPECTRUM_PLOT_PPI", defaults.ms_spectrum_plot_ppi),
             structure_image_ppi=_int("ANALYSIS_STRUCTURE_IMAGE_PPI", defaults.structure_image_ppi),
+            structure_image_size=_int("ANALYSIS_STRUCTURE_IMAGE_SIZE", defaults.structure_image_size),
             yield_rt_tolerance=_float("ANALYSIS_YIELD_RT_TOLERANCE", defaults.yield_rt_tolerance),
         )
 
