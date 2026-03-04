@@ -7,6 +7,7 @@
 
 import logging
 import time
+import threading
 from ..driver.arm_driver import ArmDriver
 from ..driver.agv_driver import AGVDriver, AGVDriverConfig
 from ..utils.position_manager import PositionManager
@@ -1925,14 +1926,20 @@ class AGVController:
         logger.info(f"物料转移完成: {source_tray} -> {target_tray}")
         return True
 
-    def batch_transfer_materials(self, transfer_tasks, block=True):
+    def batch_transfer_materials(self, transfer_tasks, block=True, on_station_delivered=None):
         """
         功能:
-            批量物料转运, AGV自动移动到各站点并进行点位校准, 支持一次转运最多4个物料
+            批量物料转运, AGV自动移动到各站点并进行点位校准, 支持一次转运最多4个物料.
+            Phase 2 中每完成一个目标站点的全部放料后, 若提供了 on_station_delivered 回调,
+            则在新线程中异步调用该回调, 不阻塞后续站点的转运.
         参数:
             transfer_tasks: 转运任务列表, 每个任务为字典{"source_tray": str, "target_tray": str, "material_type": str}
                           例如: [{"source_tray": "shelf_tray_1", "target_tray": "agv_tray_1", "material_type": "vial_10ml"}]
             block: 是否阻塞执行
+            on_station_delivered: 可选回调函数, 签名为
+                                  callback(station_id: str, delivered_task_indices: list[int]) -> None.
+                                  Phase 2 每个目标站点全部放料完成后在新 daemon 线程中异步调用.
+                                  回调异常不影响转运流程. 默认为 None.
         返回:
             bool, True表示全部转运成功
         """
@@ -2077,6 +2084,25 @@ class AGVController:
                         return False
 
                     logger.info(f"任务{task_idx+1}: 成功放置到目标位置")
+
+                # 该站点全部放料完成, 异步触发回调(不阻塞后续站点转运)
+                if on_station_delivered is not None:
+                    _sid = station_id
+                    _indices = list(task_indices)
+
+                    def _fire_callback(sid=_sid, indices=_indices):
+                        try:
+                            on_station_delivered(sid, indices)
+                        except Exception as cb_exc:
+                            logger.error(
+                                f"on_station_delivered 回调执行异常 (station={sid}): {cb_exc}"
+                            )
+
+                    t = threading.Thread(
+                        target=_fire_callback, daemon=True, name=f"agv_cb_{_sid}"
+                    )
+                    t.start()
+                    logger.info(f"站点 {station_id} 卸货完成, 已异步触发回调")
 
             logger.info(f"批量物料转运完成, 共完成{len(transfer_tasks)}个任务")
             return True

@@ -2509,7 +2509,88 @@ class SynthesisStationController:
             self._logger.info(f"开始执行第 {batch_num} 批转运, 共 {len(batch_tasks)} 个托盘")
 
             try:
-                result = agv_controller.batch_transfer_materials(batch_tasks, block=block)
+                # 计算本批次中属于分析工站任务的局部索引
+                batch_end = min(batch_index + batch_size, len(transfer_tasks_all))
+                batch_analysis_local_indices = set(
+                    i - batch_index for i in range(batch_index, batch_end)
+                    if i < len(analysis_tasks)
+                )
+
+                # 确定分析工站 station_id(从分析站托盘名反推)
+                analysis_station_id = None
+                if batch_analysis_local_indices:
+                    sample_tray = batch_tasks[min(batch_analysis_local_indices)]["target_tray"]
+                    analysis_station_id = agv_controller._get_station_from_tray(sample_tray)
+
+                def _on_station_delivered(station_id, task_indices):
+                    """
+                    功能:
+                        batch_transfer_materials Phase 2 某站点卸货完成后的异步回调.
+                        仅当卸货站点为分析工站且分析尚未提交时, 立即提交分析任务,
+                        无需等待后续货架转运完成.
+                    参数:
+                        station_id: 刚完成卸货的站点 ID (str)
+                        task_indices: 该站点对应的批次内任务局部索引列表 (list[int])
+                    返回:
+                        None
+                    """
+                    nonlocal analysis_submitted
+
+                    # 只关心分析工站的回调
+                    if station_id != analysis_station_id:
+                        return
+
+                    # 防止重复提交
+                    if analysis_submitted:
+                        return
+
+                    analysis_submitted = True
+                    self._logger.info(
+                        "分析站卸货完成 (回调触发), 立即提交分析任务: %s",
+                        analysis_task_ids
+                    )
+
+                    from eit_analysis_station.controller.analysis_controller import (
+                        AnalysisStationController,
+                    )
+                    analysis_ctrl = AnalysisStationController()
+
+                    for tid in sorted(analysis_task_ids):
+                        task_id_str = str(tid)
+                        self._logger.info("正在提交分析任务, task_id=%s", task_id_str)
+                        try:
+                            ar = analysis_ctrl.run_analysis(task_id=task_id_str)
+                            analysis_results[task_id_str] = ar
+                            self._logger.info(
+                                "分析任务提交完成, task_id=%s, 结果: %s",
+                                task_id_str, ar
+                            )
+                        except Exception as e:
+                            error_msg = (
+                                f"分析任务提交失败, task_id={task_id_str}: {str(e)}"
+                            )
+                            self._logger.error(error_msg)
+                            analysis_results[task_id_str] = {
+                                "success": False,
+                                "error": error_msg,
+                            }
+
+                # 仅当本批次含分析工站任务且尚未提交时才挂载回调
+                should_attach_callback = (
+                    auto_run_analysis
+                    and len(analysis_task_ids) > 0
+                    and not analysis_submitted
+                    and len(batch_analysis_local_indices) > 0
+                    and analysis_station_id is not None
+                )
+
+                result = agv_controller.batch_transfer_materials(
+                    batch_tasks,
+                    block=block,
+                    on_station_delivered=(
+                        _on_station_delivered if should_attach_callback else None
+                    ),
+                )
 
                 batch_result = {
                     "batch_num": batch_num,
@@ -2522,14 +2603,15 @@ class SynthesisStationController:
                     transferred_count += len(batch_tasks)
                     self._logger.info(f"第 {batch_num} 批转运成功")
 
-                    # 分析物料已全部转运完成, 立即提交分析任务
+                    # 兜底: 正常情况下 analysis_submitted 已由 on_station_delivered 回调置 True.
+                    #   若回调未执行(极端异常), 此处作为最后保障.
                     if (auto_run_analysis
                             and len(analysis_task_ids) > 0
                             and not analysis_submitted
                             and transferred_count >= len(analysis_tasks)):
                         analysis_submitted = True
-                        self._logger.info(
-                            "分析物料已全部到达分析工站, 开始自动提交分析任务: %s",
+                        self._logger.warning(
+                            "兜底路径触发分析提交 (回调未正常执行), task_ids=%s",
                             analysis_task_ids
                         )
                         from eit_analysis_station.controller.analysis_controller import (
@@ -2539,17 +2621,17 @@ class SynthesisStationController:
 
                         for tid in sorted(analysis_task_ids):
                             task_id_str = str(tid)
-                            self._logger.info("正在提交分析任务, task_id=%s", task_id_str)
+                            self._logger.info("正在提交分析任务 (兜底), task_id=%s", task_id_str)
                             try:
                                 ar = analysis_ctrl.run_analysis(task_id=task_id_str)
                                 analysis_results[task_id_str] = ar
                                 self._logger.info(
-                                    "分析任务提交完成, task_id=%s, 结果: %s",
+                                    "分析任务提交完成 (兜底), task_id=%s, 结果: %s",
                                     task_id_str, ar
                                 )
                             except Exception as e:
                                 error_msg = (
-                                    f"分析任务提交失败, task_id={task_id_str}: {str(e)}"
+                                    f"分析任务提交失败 (兜底), task_id={task_id_str}: {str(e)}"
                                 )
                                 self._logger.error(error_msg)
                                 analysis_results[task_id_str] = {
