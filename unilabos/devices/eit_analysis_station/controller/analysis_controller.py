@@ -1753,7 +1753,21 @@ class AnalysisStationController:
                 }
 
             # 执行产率计算
-            calc = YieldCalculator(rt_tolerance=self._settings.yield_rt_tolerance)
+            sshm_enabled = (
+                self._settings.mspepsearch_enable is True
+                and self._settings.process_gc_ms_enable_sshm_search is True
+            )
+            ihshm_enabled = (
+                self._settings.mspepsearch_enable is True
+                and self._settings.process_gc_ms_enable_ihshm_search is True
+            )
+            calc = YieldCalculator(
+                rt_tolerance=self._settings.yield_rt_tolerance,
+                nist_mainlib_msp_path=self._settings.nist_mainlib_msp,
+                pim_enabled=self._settings.pim_enable,
+                sshm_enabled=sshm_enabled,
+                ihshm_enabled=ihshm_enabled,
+            )
             config, results = calc.process_task(plan_path, report_path, chemical_list_path)
 
             # 按自然顺序排序 (729-1, 729-2, ..., 729-10 而非字典序 729-1, 729-10, 729-2)

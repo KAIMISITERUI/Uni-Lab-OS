@@ -120,7 +120,7 @@ class Settings:
     use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
     # ---------- robust_v2 参数 ----------
-    integration_mode: str = "robust_v2"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "gcpy"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     baseline_method: str = "rolling_quantile"  # robust_v2 基线方法, 修改后改变背景估计方式.
     baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
     baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.

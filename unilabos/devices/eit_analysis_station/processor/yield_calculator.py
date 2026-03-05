@@ -15,15 +15,23 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import openpyxl
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from pysmiles import PTE
 from pysmiles.read_smiles import read_smiles
 
 from .ecn import smiles2carbontypes, ecn_dct, class_dct
+
+try:
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors
+except Exception:
+    Chem = None
+    Descriptors = None
 
 logger = logging.getLogger(__name__)
 YIELD_CONFIG_SHEET_NAME = "GC产率计算"
@@ -52,10 +60,14 @@ class TargetProduct:
     name: str = ""
     smiles: str = ""
     formula: str = ""
+    molecular_weight: Optional[float] = None
     ecn: float = 0.0
     expected_rt: Optional[float] = None
     applicable_experiments: List[int] = field(default_factory=list)
     equivalent: float = 1.0
+    nist_has_record: bool = False
+    nist_query_mode: str = ""
+    nist_reference_names: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -84,10 +96,14 @@ class YieldCalcConfig:
     is_name: str = ""
     is_smiles: str = ""
     is_formula: str = ""
+    is_molecular_weight: Optional[float] = None
     is_ecn: float = 0.0
     is_expected_rt: Optional[float] = None
     is_amount: float = 0.0
     is_moles: float = 0.0
+    is_nist_has_record: bool = False
+    is_nist_query_mode: str = ""
+    is_nist_reference_names: List[str] = field(default_factory=list)
     # 反应信息
     reaction_scale_mmol: float = 0.0
     # 计算方法
@@ -119,7 +135,15 @@ class SampleYieldResult:
         molar_ratio: 摩尔比 (产物/内标).
         n_product_mol: 产物物质的量(mol).
         yield_percent: 产率(%).
-        match_method: 峰匹配方式, "rt" 或 "formula".
+        match_method: 峰匹配方式, 可选 rt/nist_mass/mass.
+        confidence_level: 峰判定置信度分数, 0-100.
+        confidence_score: 峰判定置信度分数值, 0-100.
+        confidence_reason: 置信度说明.
+        hit_summary: 命中详情摘要.
+        nist_matched_mw: NIST 命中化合物分子量(Da).
+        pim_predicted_mw: PIM 预测分子量(Da).
+        sshm_predicted_mw: SS-HM 预测分子量(Da).
+        ihshm_predicted_mw: iHS-HM 预测分子量(Da).
         warnings: 警告信息列表.
     返回:
         SampleYieldResult.
@@ -142,7 +166,100 @@ class SampleYieldResult:
     n_product_mol: Optional[float] = None
     yield_percent: Optional[float] = None
     match_method: str = ""
+    confidence_level: str = ""
+    confidence_score: Optional[float] = None
+    confidence_reason: str = ""
+    hit_summary: str = ""
+    remark: str = ""
+    nist_matched_mw: Optional[float] = None
+    pim_predicted_mw: Optional[float] = None
+    sshm_predicted_mw: Optional[float] = None
+    ihshm_predicted_mw: Optional[float] = None
     warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class NISTLibraryQueryResult:
+    """
+    功能:
+        存储基于 SMILES 的 NIST 库收录查询结果.
+    参数:
+        has_record: 是否检索到对应记录.
+        query_mode: 命中模式, 可选 smiles_exact/formula_mw_fallback/not_found.
+        reference_names: 命中记录中的化合物名称集合.
+        reference_formulas: 命中记录中的分子式集合.
+        reference_mw: 命中记录中的分子量集合.
+    返回:
+        NISTLibraryQueryResult.
+    """
+    has_record: bool = False
+    query_mode: str = "not_found"
+    reference_names: List[str] = field(default_factory=list)
+    reference_formulas: List[str] = field(default_factory=list)
+    reference_mw: List[float] = field(default_factory=list)
+
+
+@dataclass
+class NISTHitInfo:
+    """
+    功能:
+        存储单条峰行内的 NIST 命中信息.
+    参数:
+        rank: 命中序号, 1 表示化合物1, 2 表示化合物2.
+        compound_name: 命中名称.
+        formula: 命中分子式.
+        molecular_weight: 命中分子量.
+    返回:
+        NISTHitInfo.
+    """
+    rank: int = 0
+    compound_name: str = ""
+    formula: str = ""
+    molecular_weight: Optional[float] = None
+
+
+@dataclass
+class PeakDecision:
+    """
+    功能:
+        存储单个候选峰的判定结果.
+    参数:
+        row: 原始对照表行数据.
+        match_method: 峰匹配路径标记.
+        fid_rt: FID 保留时间(min).
+        fid_area: FID 峰面积.
+        nist_hit: 选中的 NIST 命中信息.
+        nist_target_matched: NIST 命中是否为目标化合物.
+        nist_mw_matched: NIST 命中分子量是否与目标分子量匹配.
+        nist_formula_matched: NIST 命中分子式是否与目标分子式匹配.
+        pim_mw: PIM 预测分子量.
+        sshm_mw: SS-HM 预测分子量.
+        ihshm_mw: iHS-HM 预测分子量.
+        mass_match_methods: 分子量命中的预测方法列表.
+        confidence_level: 置信度分数文本, 0-100.
+        confidence_score: 置信度分数值, 0-100.
+        confidence_reason: 置信度说明.
+        hit_summary: 命中详情摘要.
+    返回:
+        PeakDecision.
+    """
+    row: Dict[str, Any] = field(default_factory=dict)
+    match_method: str = ""
+    fid_rt: Optional[float] = None
+    fid_area: Optional[float] = None
+    nist_hit: Optional[NISTHitInfo] = None
+    nist_target_matched: bool = False
+    nist_mw_matched: bool = False
+    nist_formula_matched: bool = False
+    pim_mw: Optional[float] = None
+    sshm_mw: Optional[float] = None
+    ihshm_mw: Optional[float] = None
+    mass_match_methods: List[str] = field(default_factory=list)
+    confidence_level: str = ""
+    confidence_score: float = 0.0
+    confidence_reason: str = ""
+    hit_summary: str = ""
+    remark: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +273,11 @@ class YieldCalculator:
         支持 ECN 法, 标准曲线法和响应因子法.
     参数:
         rt_tolerance: 保留时间匹配容差(min), 默认 0.1.
+        nist_mainlib_msp_path: NIST 主库导出的 MSP 文件路径, 用于查询化合物是否收录.
+        mw_tolerance_da: 分子量匹配容差(Da), 用于 NIST/预测分子量一致性判断.
+        pim_enabled: 是否启用 PIM 预测列读取.
+        sshm_enabled: 是否启用 SS-HM 预测列读取.
+        ihshm_enabled: 是否启用 iHS-HM 预测列读取.
     返回:
         无.
     """
@@ -165,16 +287,99 @@ class YieldCalculator:
     _HEADER_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
     _HEADER_ALIGN = Alignment(horizontal="center", vertical="center")
 
-    # 产率结果表头
-    _YIELD_HEADERS = [
-        "样品名", "目标产物", "产物保留时间(min)", "产物FID面积",
-        "产物匹配化合物", "内标保留时间(min)", "内标FID面积",
-        "内标匹配化合物", "Ratio", "产物ECN", "内标ECN",
-        "产率(%)", "匹配方式", "备注",
-    ]
+    _PREDICTION_WEIGHTS: Dict[str, float] = {
+        "PIM": 20.0,
+        "SS-HM": 15.0,
+        "iHS-HM": 15.0,
+    }
 
-    def __init__(self, rt_tolerance: float = 0.1) -> None:
+    _PREDICTION_MW_COLUMNS: Dict[str, str] = {
+        "PIM": "PIM预测分子量(Da)",
+        "SS-HM": "SS-HM预测分子量(Da)",
+        "iHS-HM": "iHS-HM预测分子量(Da)",
+    }
+
+    _PREDICTION_CONF_COLUMNS: Dict[str, str] = {
+        "PIM": "PIM置信指数",
+        "SS-HM": "SS-HM置信度",
+        "iHS-HM": "iHS-HM置信度",
+    }
+
+    def __init__(
+        self,
+        rt_tolerance: float = 0.1,
+        nist_mainlib_msp_path: Optional[Path] = None,
+        mw_tolerance_da: float = 1.0,
+        pim_enabled: bool = True,
+        sshm_enabled: bool = True,
+        ihshm_enabled: bool = True,
+    ) -> None:
+        """
+        功能:
+            初始化产率计算器并加载峰判定策略相关配置.
+        参数:
+            rt_tolerance: 保留时间匹配容差(min).
+            nist_mainlib_msp_path: NIST 主库 MSP 路径.
+            mw_tolerance_da: 分子量匹配容差(Da).
+            pim_enabled: 是否启用 PIM 分子量读取.
+            sshm_enabled: 是否启用 SS-HM 分子量读取.
+            ihshm_enabled: 是否启用 iHS-HM 分子量读取.
+        返回:
+            无.
+        """
         self._rt_tolerance = rt_tolerance
+        self._nist_mainlib_msp_path = nist_mainlib_msp_path
+        self._mw_tolerance_da = mw_tolerance_da
+        self._pim_enabled = pim_enabled
+        self._sshm_enabled = sshm_enabled
+        self._ihshm_enabled = ihshm_enabled
+
+        self._nist_index_loaded = False
+        self._nist_smiles_field_detected = False
+        self._nist_index_by_smiles: Dict[str, List[Dict[str, Any]]] = {}
+        self._nist_index_by_formula: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _get_enabled_prediction_methods(self) -> List[str]:
+        """
+        功能:
+            返回当前启用的分子量预测方法列表.
+        参数:
+            无.
+        返回:
+            List[str]: 启用方法名列表, 顺序固定为 PIM, SS-HM, iHS-HM.
+        """
+        methods: List[str] = []
+        if self._pim_enabled is True:
+            methods.append("PIM")
+        if self._sshm_enabled is True:
+            methods.append("SS-HM")
+        if self._ihshm_enabled is True:
+            methods.append("iHS-HM")
+        return methods
+
+    def _build_yield_headers(self) -> List[str]:
+        """
+        功能:
+            根据启用的预测方法动态构建产率结果表头.
+        参数:
+            无.
+        返回:
+            List[str]: 动态表头列表.
+        """
+        headers = [
+            "样品名", "目标产物", "产物保留时间(min)", "产物FID面积",
+            "产物匹配化合物", "内标保留时间(min)", "内标FID面积",
+            "内标匹配化合物", "Ratio", "产物ECN", "内标ECN",
+            "产率(%)", "匹配方式", "置信度",
+            "NIST匹配分子量(Da)",
+        ]
+
+        enabled_methods = self._get_enabled_prediction_methods()
+        for method_name in enabled_methods:
+            headers.append(self._PREDICTION_MW_COLUMNS[method_name])
+
+        headers.append("备注")
+        return headers
 
     # ------------------------------------------------------------------
     # 静态/辅助方法
@@ -227,6 +432,64 @@ class YieldCalculator:
             count = atom_counts[elem]
             parts.append(elem + (str(count) if count > 1 else ""))
         return "".join(parts)
+
+    @staticmethod
+    def smiles_to_molecular_weight(smiles: str) -> Optional[float]:
+        """
+        功能:
+            从 SMILES 计算分子量.
+            计算顺序:
+            1. 优先使用 RDKit 的 MolWt, 覆盖元素更完整.
+            2. RDKit 不可用或解析失败时, 回退到 pysmiles + PTE 原子量累加.
+        参数:
+            smiles: 化合物 SMILES 字符串.
+        返回:
+            Optional[float]: 分子量(Da), 失败时返回 None.
+        """
+        smiles_text = str(smiles).strip()
+        if smiles_text == "":
+            return None
+
+        if Chem is not None and Descriptors is not None:
+            try:
+                mol = Chem.MolFromSmiles(smiles_text)
+                if mol is not None:
+                    return float(Descriptors.MolWt(mol))
+                logger.warning("RDKit 无法解析 SMILES, 将回退 PTE 计算: %s", smiles_text)
+            except Exception as exc:
+                logger.warning("RDKit 计算分子量失败, 将回退 PTE 计算: %s, 错误=%s", smiles_text, exc)
+
+        try:
+            graph = read_smiles(smiles_text, explicit_hydrogen=True)
+        except Exception as exc:
+            logger.warning("SMILES 解析失败, 无法计算分子量: %s, 错误=%s", smiles_text, exc)
+            return None
+
+        total_weight = 0.0
+        missing_elements: Set[str] = set()
+        for node in graph.nodes:
+            element_symbol = str(graph.nodes[node].get("element", "")).strip()
+            if element_symbol == "":
+                continue
+            pte_entry = PTE.get(element_symbol)
+            if pte_entry is None:
+                missing_elements.add(element_symbol)
+                continue
+            atomic_mass = pte_entry.get("AtomicMass")
+            if atomic_mass is None or atomic_mass == "":
+                missing_elements.add(element_symbol)
+                continue
+            total_weight += float(atomic_mass)
+
+        if len(missing_elements) > 0:
+            logger.warning(
+                "分子量计算失败, 缺少元素原子量: SMILES=%s, 元素=%s",
+                smiles_text,
+                sorted(missing_elements),
+            )
+            return None
+
+        return total_weight
 
     @staticmethod
     def parse_experiment_range(range_str: str) -> List[int]:
@@ -505,13 +768,27 @@ class YieldCalculator:
 
         # ---------- 4. 计算分子式和 ECN ----------
         is_formula = self.smiles_to_formula(is_smiles)
+        is_molecular_weight = self.smiles_to_molecular_weight(is_smiles)
         is_ecn = self.calculate_ecn(is_smiles)
-        logger.info("内标 '%s': 分子式=%s, ECN=%.2f", is_name, is_formula, is_ecn)
+        logger.info(
+            "内标 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
+            is_name,
+            is_formula,
+            round(is_molecular_weight, 4) if is_molecular_weight is not None else "未知",
+            is_ecn,
+        )
 
         for p in products:
             p.formula = self.smiles_to_formula(p.smiles)
+            p.molecular_weight = self.smiles_to_molecular_weight(p.smiles)
             p.ecn = self.calculate_ecn(p.smiles)
-            logger.info("产物 '%s': 分子式=%s, ECN=%.2f", p.name, p.formula, p.ecn)
+            logger.info(
+                "产物 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
+                p.name,
+                p.formula,
+                round(p.molecular_weight, 4) if p.molecular_weight is not None else "未知",
+                p.ecn,
+            )
 
         # ---------- 5. 推算内标摩尔量 ----------
         is_moles = self._calculate_is_moles(is_name, is_amount, chemical_list_path)
@@ -522,6 +799,7 @@ class YieldCalculator:
             is_name=is_name,
             is_smiles=is_smiles,
             is_formula=is_formula,
+            is_molecular_weight=is_molecular_weight,
             is_ecn=is_ecn,
             is_expected_rt=is_expected_rt,
             is_amount=is_amount,
@@ -701,13 +979,27 @@ class YieldCalculator:
 
             # ---------- 4. 计算分子式和 ECN ----------
             is_formula = self.smiles_to_formula(is_smiles)
+            is_molecular_weight = self.smiles_to_molecular_weight(is_smiles)
             is_ecn = self.calculate_ecn(is_smiles)
-            logger.info("内标 '%s': 分子式=%s, ECN=%.2f", is_name, is_formula, is_ecn)
+            logger.info(
+                "内标 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
+                is_name,
+                is_formula,
+                round(is_molecular_weight, 4) if is_molecular_weight is not None else "未知",
+                is_ecn,
+            )
 
             for product in products:
                 product.formula = self.smiles_to_formula(product.smiles)
+                product.molecular_weight = self.smiles_to_molecular_weight(product.smiles)
                 product.ecn = self.calculate_ecn(product.smiles)
-                logger.info("产物 '%s': 分子式=%s, ECN=%.2f", product.name, product.formula, product.ecn)
+                logger.info(
+                    "产物 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
+                    product.name,
+                    product.formula,
+                    round(product.molecular_weight, 4) if product.molecular_weight is not None else "未知",
+                    product.ecn,
+                )
 
             # ---------- 5. 推算内标摩尔量 ----------
             is_moles = self._calculate_is_moles(is_name, is_amount, chemical_list_path)
@@ -716,6 +1008,7 @@ class YieldCalculator:
                 is_name=is_name,
                 is_smiles=is_smiles,
                 is_formula=is_formula,
+                is_molecular_weight=is_molecular_weight,
                 is_ecn=is_ecn,
                 is_expected_rt=is_expected_rt,
                 is_amount=is_amount,
@@ -868,89 +1161,869 @@ class YieldCalculator:
     # 峰匹配
     # ------------------------------------------------------------------
 
-    def identify_peak(
+    @staticmethod
+    def _normalize_smiles(smiles: str) -> str:
+        """
+        功能:
+            规范化 SMILES 字符串, 仅做空白清理用于库查询键.
+        参数:
+            smiles: 原始 SMILES 字符串.
+        返回:
+            str: 规范化后的 SMILES.
+        """
+        return re.sub(r"\s+", "", str(smiles).strip())
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """
+        功能:
+            规范化化合物名称, 用于松弛匹配.
+        参数:
+            name: 原始名称.
+        返回:
+            str: 去符号后的低噪声名称键.
+        """
+        return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(name).strip().lower())
+
+    def _add_nist_entry_to_index(self, entry: Dict[str, Any]) -> None:
+        """
+        功能:
+            将单条 NIST MSP 记录写入运行时索引.
+        参数:
+            entry: 单条 MSP 记录字典.
+        返回:
+            无.
+        """
+        name_text = str(entry.get("name", "")).strip()
+        if name_text == "":
+            return
+
+        smiles_text = self._normalize_smiles(str(entry.get("smiles", "")))
+        formula_text = str(entry.get("formula", "")).strip()
+
+        if smiles_text != "":
+            if smiles_text not in self._nist_index_by_smiles:
+                self._nist_index_by_smiles[smiles_text] = []
+            self._nist_index_by_smiles[smiles_text].append(entry.copy())
+            self._nist_smiles_field_detected = True
+
+        if formula_text != "":
+            if formula_text not in self._nist_index_by_formula:
+                self._nist_index_by_formula[formula_text] = []
+            self._nist_index_by_formula[formula_text].append(entry.copy())
+
+    def _ensure_nist_library_index(self) -> None:
+        """
+        功能:
+            懒加载 NIST MSP 索引, 支持按 SMILES 查询是否收录.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        if self._nist_index_loaded is True:
+            return
+
+        self._nist_index_loaded = True
+        self._nist_index_by_smiles.clear()
+        self._nist_index_by_formula.clear()
+        self._nist_smiles_field_detected = False
+
+        if self._nist_mainlib_msp_path is None:
+            logger.warning("未配置 NIST MSP 路径, 跳过 NIST 收录查询")
+            return
+
+        if self._nist_mainlib_msp_path.exists() is not True:
+            logger.warning("NIST MSP 文件不存在: %s", self._nist_mainlib_msp_path)
+            return
+
+        logger.info("开始加载 NIST MSP 索引: %s", self._nist_mainlib_msp_path)
+        current_entry: Dict[str, Any] = {}
+        record_count = 0
+        try:
+            with self._nist_mainlib_msp_path.open("r", encoding="utf-8", errors="replace") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if line == "":
+                        if len(current_entry) > 0:
+                            self._add_nist_entry_to_index(current_entry)
+                            record_count += 1
+                            current_entry = {}
+                        continue
+
+                    if ":" not in line:
+                        continue
+
+                    key_text, value_text = line.split(":", 1)
+                    key_name = key_text.strip().upper()
+                    value = value_text.strip()
+
+                    if key_name == "NAME":
+                        current_entry["name"] = value
+                        continue
+                    if key_name == "SMILES":
+                        current_entry["smiles"] = value
+                        continue
+                    if key_name == "FORMULA":
+                        current_entry["formula"] = value
+                        continue
+                    if key_name == "MW":
+                        current_entry["mw"] = self._parse_opt_float(value)
+                        continue
+                    if key_name == "EXACTMASS":
+                        if current_entry.get("mw") is None:
+                            current_entry["mw"] = self._parse_opt_float(value)
+                        continue
+
+            if len(current_entry) > 0:
+                self._add_nist_entry_to_index(current_entry)
+                record_count += 1
+
+            logger.info(
+                "NIST MSP 索引加载完成: 记录=%d, SMILES键=%d, FORMULA键=%d, 含SMILES字段=%s",
+                record_count,
+                len(self._nist_index_by_smiles),
+                len(self._nist_index_by_formula),
+                self._nist_smiles_field_detected,
+            )
+        except Exception as exc:
+            logger.error("加载 NIST MSP 索引失败: %s", exc)
+            self._nist_index_by_smiles.clear()
+            self._nist_index_by_formula.clear()
+            self._nist_smiles_field_detected = False
+
+    def _query_nist_library_by_smiles(
+        self,
+        smiles: str,
+        formula: str,
+        target_mw: Optional[float],
+    ) -> NISTLibraryQueryResult:
+        """
+        功能:
+            根据目标 SMILES 查询 NIST 库是否存在对应记录.
+            当 MSP 无 SMILES 字段时, 使用分子式+分子量作为兜底判断.
+        参数:
+            smiles: 目标 SMILES.
+            formula: 目标分子式.
+            target_mw: 目标分子量.
+        返回:
+            NISTLibraryQueryResult: 查询结果对象.
+        """
+        self._ensure_nist_library_index()
+        normalized_smiles = self._normalize_smiles(smiles)
+        if normalized_smiles == "":
+            return NISTLibraryQueryResult(has_record=False, query_mode="not_found")
+
+        hit_entries = self._nist_index_by_smiles.get(normalized_smiles, [])
+        if len(hit_entries) > 0:
+            names = sorted({str(item.get("name", "")).strip() for item in hit_entries if str(item.get("name", "")).strip() != ""})
+            formulas = sorted({str(item.get("formula", "")).strip() for item in hit_entries if str(item.get("formula", "")).strip() != ""})
+            mw_values = sorted({float(item.get("mw")) for item in hit_entries if item.get("mw") is not None})
+            return NISTLibraryQueryResult(
+                has_record=True,
+                query_mode="smiles_exact",
+                reference_names=names,
+                reference_formulas=formulas,
+                reference_mw=mw_values,
+            )
+
+        formula_text = str(formula).strip()
+        if self._nist_smiles_field_detected is False and formula_text != "":
+            fallback_entries = self._nist_index_by_formula.get(formula_text, [])
+            matched_entries: List[Dict[str, Any]] = []
+            for item in fallback_entries:
+                item_mw = item.get("mw")
+                if item_mw is None:
+                    continue
+                if self._is_mass_match(float(item_mw), target_mw) is True:
+                    matched_entries.append(item)
+
+            if len(matched_entries) > 0:
+                names = sorted({str(item.get("name", "")).strip() for item in matched_entries if str(item.get("name", "")).strip() != ""})
+                formulas = sorted({str(item.get("formula", "")).strip() for item in matched_entries if str(item.get("formula", "")).strip() != ""})
+                mw_values = sorted({float(item.get("mw")) for item in matched_entries if item.get("mw") is not None})
+                return NISTLibraryQueryResult(
+                    has_record=True,
+                    query_mode="formula_mw_fallback",
+                    reference_names=names,
+                    reference_formulas=formulas,
+                    reference_mw=mw_values,
+                )
+
+        return NISTLibraryQueryResult(has_record=False, query_mode="not_found")
+
+    def _extract_rt_for_row(self, row: Dict[str, Any]) -> Optional[float]:
+        """
+        功能:
+            从对照表行中提取用于匹配的保留时间.
+            优先 FID 保留时间, 缺失时回退 TIC 保留时间.
+        参数:
+            row: 对照表行字典.
+        返回:
+            Optional[float]: 保留时间(min).
+        """
+        fid_rt = self._parse_opt_float(row.get("FID保留时间(min)"))
+        if fid_rt is not None:
+            return fid_rt
+        tic_rt = self._parse_opt_float(row.get("TIC保留时间(min)"))
+        return tic_rt
+
+    def _extract_nist_hits(self, row: Dict[str, Any]) -> List[NISTHitInfo]:
+        """
+        功能:
+            从对照表行提取 NIST Top2 命中信息.
+        参数:
+            row: 对照表行字典.
+        返回:
+            List[NISTHitInfo]: 命中信息列表.
+        """
+        hits: List[NISTHitInfo] = []
+        for rank in [1, 2]:
+            name_text = str(row.get(f"化合物{rank}(名称)", "")).strip()
+            formula_text = str(row.get(f"化合物{rank}(分子式)", "")).strip()
+            mw_value = self._parse_opt_float(row.get(f"化合物{rank}(分子量)"))
+            if name_text != "" or formula_text != "" or mw_value is not None:
+                hits.append(
+                    NISTHitInfo(
+                        rank=rank,
+                        compound_name=name_text,
+                        formula=formula_text,
+                        molecular_weight=mw_value,
+                    )
+                )
+        return hits
+
+    def _extract_mass_predictions(
+        self, row: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Optional[float]]]:
+        """
+        功能:
+            从对照表行中提取已启用算法的分子量预测值与置信度.
+        参数:
+            row: 对照表行字典.
+        返回:
+            Dict[str, Dict[str, Optional[float]]]:
+                方法名 -> {"mw": 分子量, "confidence": 置信度}.
+        """
+        predictions: Dict[str, Dict[str, Optional[float]]] = {}
+        enabled_methods = self._get_enabled_prediction_methods()
+        for method_name in enabled_methods:
+            mw_column = self._PREDICTION_MW_COLUMNS[method_name]
+            conf_column = self._PREDICTION_CONF_COLUMNS[method_name]
+            mw_value = self._parse_opt_float(row.get(mw_column))
+            conf_value = self._parse_opt_float(row.get(conf_column))
+            predictions[method_name] = {
+                "mw": mw_value,
+                "confidence": conf_value,
+            }
+        return predictions
+
+    @staticmethod
+    def _clip_zero_to_one(value: float) -> float:
+        """
+        功能:
+            将数值截断到 [0, 1] 区间.
+        参数:
+            value: 输入数值.
+        返回:
+            float: 截断后的数值.
+        """
+        if value < 0.0:
+            return 0.0
+        if value > 1.0:
+            return 1.0
+        return value
+
+    def _normalize_prediction_confidence(
+        self,
+        method_name: str,
+        raw_confidence: Optional[float],
+        mass_matched: bool,
+    ) -> float:
+        """
+        功能:
+            归一化不同预测方法的置信度到 [0, 1] 区间.
+        参数:
+            method_name: 方法名, PIM/SS-HM/iHS-HM.
+            raw_confidence: 原始置信度.
+            mass_matched: 分子量是否命中.
+        返回:
+            float: 归一化置信度.
+        """
+        if mass_matched is False:
+            return 0.0
+        if raw_confidence is None:
+            return 0.5
+        if method_name == "PIM":
+            return self._clip_zero_to_one(raw_confidence / 2.0)
+        return self._clip_zero_to_one(raw_confidence)
+
+    def _is_mass_match(self, observed_mw: Optional[float], target_mw: Optional[float]) -> bool:
+        """
+        功能:
+            判断观测分子量与目标分子量是否命中.
+            命中规则:
+            1. 两者都存在时, 分别四舍五入为整数.
+            2. 仅当整数完全相等时判定命中.
+        参数:
+            observed_mw: 观测分子量.
+            target_mw: 目标分子量.
+        返回:
+            bool: 命中返回 True.
+        """
+        if observed_mw is None:
+            return False
+        if target_mw is None:
+            return False
+        observed_int = int(round(observed_mw))
+        target_int = int(round(target_mw))
+        return observed_int == target_int
+
+    def _is_name_matched(
+        self,
+        hit_name: str,
+        target_name: str,
+        reference_names: List[str],
+    ) -> bool:
+        """
+        功能:
+            判断 NIST 命中名称是否与目标化合物一致.
+        参数:
+            hit_name: NIST 命中名称.
+            target_name: 目标化合物名称.
+            reference_names: 由 NIST 收录查询得到的参考名称集合.
+        返回:
+            bool: 名称一致返回 True.
+        """
+        normalized_hit = self._normalize_name(hit_name)
+        if normalized_hit == "":
+            return False
+
+        candidates: Set[str] = set()
+        normalized_target = self._normalize_name(target_name)
+        if normalized_target != "":
+            candidates.add(normalized_target)
+        for item in reference_names:
+            normalized_item = self._normalize_name(item)
+            if normalized_item != "":
+                candidates.add(normalized_item)
+
+        if len(candidates) == 0:
+            return False
+        return normalized_hit in candidates
+
+    def _build_confidence(
+        self,
+        nist_query: NISTLibraryQueryResult,
+        nist_target_matched: bool,
+        nist_mw_matched: bool,
+        nist_formula_matched: bool,
+        mass_match_methods: List[str],
+        prediction_details: Dict[str, Dict[str, Optional[float]]],
+    ) -> Tuple[float, str, Dict[str, Any]]:
+        """
+        功能:
+            根据 NIST 与分子量预测证据输出 0-100 置信度分数与说明.
+            分数使用“按启用方法归一化”, 未启用方法不计入满分.
+        参数:
+            nist_query: NIST 收录查询结果.
+            nist_target_matched: NIST 命中是否为目标化合物.
+            nist_mw_matched: NIST 命中分子量是否匹配目标.
+            nist_formula_matched: NIST 命中分子式是否匹配目标.
+            mass_match_methods: 分子量预测命中的方法列表.
+            prediction_details: 分子量预测值与置信度明细.
+        返回:
+            Tuple[float, str, Dict[str, Any]]:
+                (置信度分数, 置信说明, 评分明细字典).
+        """
+        nist_score = 0.0
+        nist_max_score = 90.0 if nist_query.has_record is True else 35.0
+        reason_parts: List[str] = []
+
+        if nist_query.has_record is True:
+            if nist_target_matched is True:
+                nist_score = 90.0
+                reason_parts.append("NIST命中目标化合物")
+            elif nist_mw_matched is True:
+                nist_score = 15.0
+                reason_parts.append("NIST命中分子量与目标一致")
+            else:
+                reason_parts.append("NIST未命中目标化合物")
+        else:
+            if nist_mw_matched is True and nist_formula_matched is True:
+                nist_score = 35.0
+                reason_parts.append("NIST未收录, 分子量与分子式命中")
+            elif nist_mw_matched is True:
+                nist_score = 15.0
+                reason_parts.append("NIST未收录, 仅分子量命中")
+            else:
+                reason_parts.append("NIST库未收录目标化合物")
+
+        enabled_methods = self._get_enabled_prediction_methods()
+        prediction_score = 0.0
+        enabled_prediction_max = 0.0
+        prediction_scores: Dict[str, Dict[str, Any]] = {}
+        for method_name in enabled_methods:
+            method_weight = self._PREDICTION_WEIGHTS[method_name]
+            enabled_prediction_max += method_weight
+            method_data = prediction_details.get(method_name, {})
+            method_mw = method_data.get("mw")
+            method_confidence = method_data.get("confidence")
+            method_matched = method_name in mass_match_methods
+            method_conf_norm = self._normalize_prediction_confidence(
+                method_name=method_name,
+                raw_confidence=method_confidence,
+                mass_matched=method_matched,
+            )
+            method_score = method_weight * method_conf_norm
+            prediction_score += method_score
+            prediction_scores[method_name] = {
+                "weight": method_weight,
+                "mw": method_mw,
+                "confidence_raw": method_confidence,
+                "matched": method_matched,
+                "confidence_norm": method_conf_norm,
+                "score": method_score,
+            }
+
+        if len(enabled_methods) == 0:
+            reason_parts.append("无启用分子量预测方法")
+        elif len(mass_match_methods) > 0:
+            reason_parts.append(f"分子量预测命中({','.join(mass_match_methods)})")
+        else:
+            reason_parts.append("分子量预测均未命中")
+
+        total_score = nist_score + prediction_score
+        total_max_score = nist_max_score + enabled_prediction_max
+        if total_max_score > 0:
+            confidence_score = round(total_score * 100.0 / total_max_score, 2)
+            confidence_score = max(0.0, min(100.0, confidence_score))
+        else:
+            confidence_score = 0.0
+
+        reason_parts.append(
+            f"综合得分={int(round(confidence_score))}(原始{total_score:.2f}/{total_max_score:.2f})"
+        )
+        detail = {
+            "nist_score": nist_score,
+            "nist_max": nist_max_score,
+            "prediction_score": prediction_score,
+            "prediction_max": enabled_prediction_max,
+            "raw_score": total_score,
+            "max_score": total_max_score,
+            "prediction_scores": prediction_scores,
+        }
+        return confidence_score, "；".join(reason_parts), detail
+
+    def _build_hit_summary(
+        self,
+        row: Dict[str, Any],
+        expected_rt: Optional[float],
+        nist_query: NISTLibraryQueryResult,
+        nist_target_matched: bool,
+        nist_mw_matched: bool,
+        nist_formula_matched: bool,
+        confidence_score: float,
+        confidence_detail: Dict[str, Any],
+    ) -> str:
+        """
+        功能:
+            生成单峰命中详情文本, 便于审计所有证据来源.
+        参数:
+            row: 峰行数据.
+            expected_rt: 目标预期 RT.
+            nist_query: NIST 收录查询结果.
+            nist_target_matched: NIST 名称/分子式命中目标.
+            nist_mw_matched: NIST 分子量命中目标.
+            nist_formula_matched: NIST 分子式命中目标.
+            confidence_score: 综合分数.
+            confidence_detail: 评分明细.
+        返回:
+            str: 命中详情摘要.
+        """
+        summary_parts: List[str] = []
+        row_rt = self._extract_rt_for_row(row)
+        if expected_rt is not None and row_rt is not None:
+            rt_diff = abs(row_rt - expected_rt)
+            summary_parts.append(
+                f"RT={row_rt:.3f}, 预期={expected_rt:.3f}, 偏差={rt_diff:.3f}, 容差内={'是' if rt_diff <= self._rt_tolerance else '否'}"
+            )
+        elif row_rt is not None:
+            summary_parts.append(f"RT={row_rt:.3f}, 无预期RT")
+        else:
+            summary_parts.append("RT缺失")
+
+        summary_parts.append(
+            "NIST收录="
+            + ("是" if nist_query.has_record is True else "否")
+            + f", 查询模式={nist_query.query_mode}, 名称/目标命中={'是' if nist_target_matched is True else '否'}"
+            + f", 分子式命中={'是' if nist_formula_matched is True else '否'}"
+            + f", 分子量命中={'是' if nist_mw_matched is True else '否'}"
+        )
+
+        prediction_scores = confidence_detail.get("prediction_scores", {})
+        enabled_methods = self._get_enabled_prediction_methods()
+        for method_name in enabled_methods:
+            method_data = prediction_scores.get(method_name, {})
+            method_mw = method_data.get("mw")
+            method_conf_raw = method_data.get("confidence_raw")
+            method_matched = method_data.get("matched")
+            method_score = method_data.get("score")
+            if method_mw is None:
+                mw_text = "无"
+            else:
+                mw_text = f"{float(method_mw):.4f}"
+            if method_conf_raw is None:
+                conf_text = "无"
+            else:
+                conf_text = f"{float(method_conf_raw):.4f}"
+            if method_score is None:
+                score_text = "0.00"
+            else:
+                score_text = f"{float(method_score):.2f}"
+            summary_parts.append(
+                f"{method_name}(MW={mw_text}, 置信度={conf_text}, 命中={'是' if method_matched is True else '否'}, 加分={score_text})"
+            )
+
+        raw_score = float(confidence_detail.get("raw_score", 0.0))
+        max_score = float(confidence_detail.get("max_score", 0.0))
+        summary_parts.append(
+            f"raw/max={raw_score:.2f}/{max_score:.2f}, score={int(round(confidence_score))}"
+        )
+        return "；".join(summary_parts)
+
+    def _build_remark(
+        self,
+        nist_query: NISTLibraryQueryResult,
+        nist_target_matched: bool,
+        nist_mw_matched: bool,
+        nist_formula_matched: bool,
+        prediction_details: Dict[str, Dict[str, Optional[float]]],
+    ) -> str:
+        """
+        功能:
+            生成精简的备注文本, 合并 NIST/命中/预测信息.
+        参数:
+            nist_query: NIST 收录查询结果.
+            nist_target_matched: NIST 命中是否为目标化合物.
+            nist_mw_matched: NIST 命中分子量是否匹配目标.
+            nist_formula_matched: NIST 命中分子式是否匹配目标.
+            prediction_details: 分子量预测值与置信度明细.
+        返回:
+            str: 备注文本.
+        """
+        parts: List[str] = []
+
+        # NIST 库收录情况
+        if nist_query.has_record is True:
+            parts.append("NIST: 有记录")
+        else:
+            parts.append("NIST: 无记录")
+
+        # 命中判定
+        if nist_target_matched is True and nist_mw_matched is True:
+            parts.append("全符合")
+        elif nist_formula_matched is True:
+            parts.append("分子式符合")
+        elif nist_mw_matched is True:
+            parts.append("分子量符合")
+        else:
+            parts.append("未命中")
+
+        # 各预测方法的分子量和置信度 (MW 保留整数)
+        enabled_methods = self._get_enabled_prediction_methods()
+        for method_name in enabled_methods:
+            method_data = prediction_details.get(method_name, {})
+            mw = method_data.get("mw")
+            conf = method_data.get("confidence")
+            mw_text = str(int(round(float(mw)))) if mw is not None else "无"
+            conf_text = f"{float(conf):.4f}" if conf is not None else "无"
+            parts.append(f"{method_name}: MW={mw_text}, 置信度={conf_text}")
+
+        return "; ".join(parts)
+
+    @staticmethod
+    def _confidence_rank(level: str) -> int:
+        """
+        功能:
+            将置信度文本映射为排序分值.
+            优先支持 0-100 分数字符串, 兼容旧的高/中/低文本.
+        参数:
+            level: 置信度文本.
+        返回:
+            int: 排序分值.
+        """
+        level_text = str(level).strip()
+        try:
+            numeric_score = float(level_text)
+            return int(round(numeric_score))
+        except ValueError:
+            pass
+
+        if level == "高":
+            return 3
+        if level == "中":
+            return 2
+        if level == "低":
+            return 1
+        return 0
+
+    def _build_peak_decision(
+        self,
+        row: Dict[str, Any],
+        match_method: str,
+        target_name: str,
+        target_formula: str,
+        target_mw: Optional[float],
+        nist_query: NISTLibraryQueryResult,
+        expected_rt: Optional[float] = None,
+    ) -> PeakDecision:
+        """
+        功能:
+            对单行峰数据生成结构化判定结果.
+        参数:
+            row: 对照表行.
+            match_method: 匹配路径标记.
+            target_name: 目标化合物名称.
+            target_formula: 目标分子式.
+            target_mw: 目标分子量.
+            nist_query: NIST 收录查询结果.
+        返回:
+            PeakDecision: 候选峰判定对象.
+        """
+        hits = self._extract_nist_hits(row)
+        predictions = self._extract_mass_predictions(row)
+        matched_methods: List[str] = []
+        for method_name, method_data in predictions.items():
+            method_mw = method_data.get("mw")
+            if self._is_mass_match(method_mw, target_mw) is True:
+                matched_methods.append(method_name)
+
+        best_hit: Optional[NISTHitInfo] = None
+        nist_target_matched = False
+        nist_mw_matched = False
+        nist_formula_matched = False
+        nist_reference_names = nist_query.reference_names
+        best_hit_priority = -1
+        best_hit_rank = 99
+
+        for hit in hits:
+            name_matched = self._is_name_matched(hit.compound_name, target_name, nist_reference_names)
+            formula_matched = False
+            if target_formula != "" and hit.formula != "":
+                formula_matched = (hit.formula == target_formula)
+            mw_matched = self._is_mass_match(hit.molecular_weight, target_mw)
+
+            if name_matched is True or formula_matched is True:
+                nist_target_matched = True
+            if formula_matched is True:
+                nist_formula_matched = True
+            if mw_matched is True:
+                nist_mw_matched = True
+
+            if name_matched is True or formula_matched is True:
+                current_priority = 4
+            elif mw_matched is True and formula_matched is True:
+                current_priority = 3
+            elif mw_matched is True:
+                current_priority = 2
+            else:
+                current_priority = 1
+
+            if current_priority > best_hit_priority:
+                best_hit_priority = current_priority
+                best_hit_rank = hit.rank
+                best_hit = hit
+            elif current_priority == best_hit_priority and hit.rank < best_hit_rank:
+                best_hit_rank = hit.rank
+                best_hit = hit
+
+        confidence_score, confidence_reason, confidence_detail = self._build_confidence(
+            nist_query=nist_query,
+            nist_target_matched=nist_target_matched,
+            nist_mw_matched=nist_mw_matched,
+            nist_formula_matched=nist_formula_matched,
+            mass_match_methods=matched_methods,
+            prediction_details=predictions,
+        )
+        hit_summary = self._build_hit_summary(
+            row=row,
+            expected_rt=expected_rt,
+            nist_query=nist_query,
+            nist_target_matched=nist_target_matched,
+            nist_mw_matched=nist_mw_matched,
+            nist_formula_matched=nist_formula_matched,
+            confidence_score=confidence_score,
+            confidence_detail=confidence_detail,
+        )
+        remark = self._build_remark(
+            nist_query=nist_query,
+            nist_target_matched=nist_target_matched,
+            nist_mw_matched=nist_mw_matched,
+            nist_formula_matched=nist_formula_matched,
+            prediction_details=predictions,
+        )
+
+        return PeakDecision(
+            row=row,
+            match_method=match_method,
+            fid_rt=self._parse_opt_float(row.get("FID保留时间(min)")),
+            fid_area=self._parse_opt_float(row.get("FID峰面积")),
+            nist_hit=best_hit,
+            nist_target_matched=nist_target_matched,
+            nist_mw_matched=nist_mw_matched,
+            nist_formula_matched=nist_formula_matched,
+            pim_mw=predictions.get("PIM", {}).get("mw"),
+            sshm_mw=predictions.get("SS-HM", {}).get("mw"),
+            ihshm_mw=predictions.get("iHS-HM", {}).get("mw"),
+            mass_match_methods=matched_methods,
+            confidence_level=str(int(round(confidence_score))),
+            confidence_score=confidence_score,
+            confidence_reason=confidence_reason,
+            hit_summary=hit_summary,
+            remark=remark,
+        )
+
+    def _sort_peak_decisions(
+        self,
+        decisions: List[PeakDecision],
+        expected_rt: Optional[float] = None,
+    ) -> List[PeakDecision]:
+        """
+        功能:
+            按综合分数、NIST命中、峰面积与 RT 偏差排序候选峰.
+        参数:
+            decisions: 候选峰列表.
+            expected_rt: 预期 RT, RT 模式下用于偏差排序.
+        返回:
+            List[PeakDecision]: 排序后的候选峰列表.
+        """
+        def _rt_bias(item: PeakDecision) -> float:
+            if expected_rt is None:
+                return 0.0
+            if item.fid_rt is None:
+                return float("-inf")
+            return -abs(item.fid_rt - expected_rt)
+
+        return sorted(
+            decisions,
+            key=lambda item: (
+                item.confidence_score,
+                1 if item.nist_target_matched is True else 0,
+                item.fid_area if item.fid_area is not None else -1.0,
+                _rt_bias(item),
+            ),
+            reverse=True,
+        )
+
+    def _match_rows_by_rt(
         self,
         sample_rows: List[Dict],
-        expected_rt: Optional[float],
-        formula: str,
-    ) -> Optional[Dict]:
+        expected_rt: float,
+    ) -> List[Dict[str, Any]]:
         """
         功能:
-            在单个样品的 TIC-FID 对照表行中查找目标峰.
-            有预期 RT 时优先按 RT 匹配, 否则按分子式匹配.
-        参数:
-            sample_rows: 该样品的对照表数据行列表.
-            expected_rt: 预期保留时间(min), None 表示用分子式匹配.
-            formula: 目标化合物分子式.
-        返回:
-            Optional[Dict]: 匹配的行字典, None 表示未找到.
-        """
-        # 优先: 保留时间匹配
-        if expected_rt is not None:
-            result = self._match_by_rt(sample_rows, expected_rt)
-            if result is not None:
-                return result
-
-        # 备选: 分子式匹配
-        if formula:
-            result = self._match_by_formula(sample_rows, formula)
-            if result is not None:
-                return result
-
-        return None
-
-    def _match_by_rt(
-        self, sample_rows: List[Dict], expected_rt: float
-    ) -> Optional[Dict]:
-        """
-        功能:
-            按保留时间匹配, 在容差范围内找最接近的 FID 峰.
+            按保留时间过滤, 返回 RT 容差范围内的全部峰行.
         参数:
             sample_rows: 对照表数据行列表.
             expected_rt: 预期保留时间(min).
         返回:
-            Optional[Dict]: 匹配的行, None 表示无匹配.
+            List[Dict[str, Any]]: 容差范围内候选峰行列表.
         """
-        best_row = None
-        best_diff = self._rt_tolerance + 1.0
-
+        matched_rows: List[Dict[str, Any]] = []
         for row in sample_rows:
-            # 优先用 FID 保留时间
-            fid_rt = self._parse_opt_float(row.get("FID保留时间(min)"))
-            if fid_rt is None:
-                # 退而用 TIC 保留时间
-                fid_rt = self._parse_opt_float(row.get("TIC保留时间(min)"))
-            if fid_rt is None:
+            row_rt = self._extract_rt_for_row(row)
+            if row_rt is None:
                 continue
+            diff = abs(row_rt - expected_rt)
+            if diff <= self._rt_tolerance:
+                matched_rows.append(row)
+        return matched_rows
 
-            diff = abs(fid_rt - expected_rt)
-            if diff <= self._rt_tolerance and diff < best_diff:
-                best_diff = diff
-                best_row = row
-
-        return best_row
-
-    def _match_by_formula(
-        self, sample_rows: List[Dict], formula: str
-    ) -> Optional[Dict]:
+    def identify_peaks(
+        self,
+        sample_rows: List[Dict],
+        expected_rt: Optional[float],
+        target_name: str,
+        target_formula: str,
+        target_mw: Optional[float],
+        nist_query: NISTLibraryQueryResult,
+        allow_multiple: bool = False,
+    ) -> List[PeakDecision]:
         """
         功能:
-            按分子式匹配, 在 NIST 化合物分子式列中做精确匹配.
-            检查化合物1和化合物2的分子式.
+            根据 RT/NIST/分子量预测综合规则识别目标峰.
+            规则:
+            1. 有 expected_rt 时, 以 RT 匹配为主并输出单峰.
+            2. 无 expected_rt 且 NIST 收录时, NIST 命中或分子量预测任一命中即保留.
+            3. 无 expected_rt 且 NIST 未收录时, 以分子量预测为主.
         参数:
-            sample_rows: 对照表数据行列表.
-            formula: 目标化合物分子式.
+            sample_rows: 样品对照表行列表.
+            expected_rt: 目标预期保留时间.
+            target_name: 目标化合物名称.
+            target_formula: 目标分子式.
+            target_mw: 目标分子量.
+            nist_query: NIST 收录查询结果.
+            allow_multiple: 是否允许返回多个候选峰.
         返回:
-            Optional[Dict]: 匹配的行, None 表示无匹配.
+            List[PeakDecision]: 候选峰判定列表.
         """
-        target = formula.strip()
+        decisions: List[PeakDecision] = []
+
+        if expected_rt is not None:
+            rt_rows = self._match_rows_by_rt(sample_rows, expected_rt)
+            if len(rt_rows) == 0:
+                return decisions
+            for row in rt_rows:
+                decision = self._build_peak_decision(
+                    row=row,
+                    match_method="rt",
+                    target_name=target_name,
+                    target_formula=target_formula,
+                    target_mw=target_mw,
+                    nist_query=nist_query,
+                    expected_rt=expected_rt,
+                )
+                decisions.append(decision)
+            decisions = self._sort_peak_decisions(decisions, expected_rt=expected_rt)
+            if allow_multiple is False and len(decisions) > 1:
+                return [decisions[0]]
+            return decisions
+
         for row in sample_rows:
-            # 检查化合物1和化合物2的分子式
-            for suffix in ["化合物1(分子式)", "化合物2(分子式)"]:
-                val = str(row.get(suffix, "")).strip()
-                if val and val == target:
-                    return row
-        return None
+            decision = self._build_peak_decision(
+                row=row,
+                match_method="mass",
+                target_name=target_name,
+                target_formula=target_formula,
+                target_mw=target_mw,
+                nist_query=nist_query,
+                expected_rt=None,
+            )
+
+            if nist_query.has_record is True:
+                has_nist_evidence = (
+                    decision.nist_target_matched is True
+                    or decision.nist_mw_matched is True
+                )
+            else:
+                has_nist_evidence = (
+                    decision.nist_mw_matched is True
+                    and decision.nist_formula_matched is True
+                )
+
+            has_mass_evidence = (len(decision.mass_match_methods) > 0)
+            if has_nist_evidence is False and has_mass_evidence is False:
+                continue
+
+            decision.match_method = "nist_mass" if has_nist_evidence is True else "mass"
+
+            decisions.append(decision)
+
+        decisions = self._sort_peak_decisions(decisions, expected_rt=None)
+        if allow_multiple is False and len(decisions) > 1:
+            return [decisions[0]]
+        return decisions
 
     # ------------------------------------------------------------------
     # 产率计算
@@ -1066,31 +2139,65 @@ class YieldCalculator:
         alignment_data = self.load_alignment_data(report_path)
         logger.info("加载了 %d 个样品的 TIC-FID 对照数据", len(alignment_data))
 
-        # 3. 逐样品计算
+        # 3. 预先查询 NIST 收录状态
+        is_nist_query = self._query_nist_library_by_smiles(
+            smiles=config.is_smiles,
+            formula=config.is_formula,
+            target_mw=config.is_molecular_weight,
+        )
+        config.is_nist_has_record = is_nist_query.has_record
+        config.is_nist_query_mode = is_nist_query.query_mode
+        config.is_nist_reference_names = is_nist_query.reference_names
+
+        product_nist_query_map: Dict[int, NISTLibraryQueryResult] = {}
+        for product in config.products:
+            product_nist_query = self._query_nist_library_by_smiles(
+                smiles=product.smiles,
+                formula=product.formula,
+                target_mw=product.molecular_weight,
+            )
+            product.nist_has_record = product_nist_query.has_record
+            product.nist_query_mode = product_nist_query.query_mode
+            product.nist_reference_names = product_nist_query.reference_names
+            product_nist_query_map[id(product)] = product_nist_query
+            logger.info(
+                "产物 '%s' NIST收录=%s, 查询模式=%s",
+                product.name,
+                "是" if product.nist_has_record is True else "否",
+                product.nist_query_mode,
+            )
+
+        # 4. 逐样品计算
         results: List[SampleYieldResult] = []
         for sample_name in sorted(alignment_data.keys()):
             sample_rows = alignment_data[sample_name]
             exp_num = self._extract_experiment_number(sample_name)
 
-            # 查找内标峰 (所有样品共用)
-            is_row = self.identify_peak(
-                sample_rows, config.is_expected_rt, config.is_formula
+            # 先识别内标峰, 内标始终只取最佳单峰.
+            is_decisions = self.identify_peaks(
+                sample_rows=sample_rows,
+                expected_rt=config.is_expected_rt,
+                target_name=config.is_name,
+                target_formula=config.is_formula,
+                target_mw=config.is_molecular_weight,
+                nist_query=is_nist_query,
+                allow_multiple=False,
             )
+            is_decision = is_decisions[0] if len(is_decisions) > 0 else None
 
-            is_fid_rt = None
-            is_fid_area = None
+            is_fid_rt: Optional[float] = None
+            is_fid_area: Optional[float] = None
             is_match_compound = ""
-            is_match_method = ""
+            if is_decision is not None:
+                is_fid_rt = is_decision.fid_rt
+                if is_fid_rt is None:
+                    is_fid_rt = self._extract_rt_for_row(is_decision.row)
+                is_fid_area = is_decision.fid_area
+                if is_decision.nist_hit is not None:
+                    is_match_compound = is_decision.nist_hit.compound_name
 
-            if is_row is not None:
-                is_fid_rt = self._parse_opt_float(is_row.get("FID保留时间(min)"))
-                is_fid_area = self._parse_opt_float(is_row.get("FID峰面积"))
-                is_match_compound = str(is_row.get("化合物1(名称)", "")).strip()
-                is_match_method = "rt" if config.is_expected_rt is not None else "formula"
-
-            # 筛选适用于该实验的目标产物
+            # 筛选适用于该实验的目标产物.
             for product in config.products:
-                # 适用实验为空 = 全部适用
                 if (
                     len(product.applicable_experiments) > 0
                     and exp_num is not None
@@ -1098,7 +2205,7 @@ class YieldCalculator:
                 ):
                     continue
 
-                result = SampleYieldResult(
+                base_result = SampleYieldResult(
                     sample_name=sample_name,
                     product_name=product.name,
                     is_fid_rt=is_fid_rt,
@@ -1108,58 +2215,87 @@ class YieldCalculator:
                     ecn_is=config.is_ecn,
                 )
 
-                # 内标未找到
-                if is_row is None:
-                    result.warnings.append("未检测到内标")
-                    results.append(result)
+                if is_decision is None:
+                    base_result.warnings.append("未检测到内标")
+                    results.append(base_result)
                     continue
 
                 if is_fid_area is None or is_fid_area <= 0:
-                    result.warnings.append("内标FID面积无效")
-                    results.append(result)
+                    base_result.warnings.append("内标FID面积无效")
+                    results.append(base_result)
                     continue
 
-                # 查找产物峰
-                prod_row = self.identify_peak(
-                    sample_rows, product.expected_rt, product.formula
+                product_nist_query = product_nist_query_map.get(
+                    id(product),
+                    NISTLibraryQueryResult(),
+                )
+                prod_decisions = self.identify_peaks(
+                    sample_rows=sample_rows,
+                    expected_rt=product.expected_rt,
+                    target_name=product.name,
+                    target_formula=product.formula,
+                    target_mw=product.molecular_weight,
+                    nist_query=product_nist_query,
+                    allow_multiple=True,
                 )
 
-                if prod_row is None:
-                    result.warnings.append("未检测到目标产物")
-                    results.append(result)
+                if len(prod_decisions) == 0:
+                    base_result.remark = "没有目标产物"
+                    if product.expected_rt is not None:
+                        base_result.warnings.append("未检测到目标产物(RT匹配失败)")
+                    elif product_nist_query.has_record is True:
+                        base_result.warnings.append("未检测到满足NIST或分子量条件的目标峰")
+                    else:
+                        base_result.warnings.append("未检测到分子量预测命中的目标峰")
+                    results.append(base_result)
                     continue
 
-                result.product_fid_rt = self._parse_opt_float(
-                    prod_row.get("FID保留时间(min)")
-                )
-                result.product_fid_area = self._parse_opt_float(
-                    prod_row.get("FID峰面积")
-                )
-                result.product_match_compound = str(
-                    prod_row.get("化合物1(名称)", "")
-                ).strip()
-                result.match_method = (
-                    "rt" if product.expected_rt is not None else "formula"
-                )
+                for prod_decision in prod_decisions:
+                    result = SampleYieldResult(
+                        sample_name=sample_name,
+                        product_name=product.name,
+                        is_fid_rt=is_fid_rt,
+                        is_fid_area=is_fid_area,
+                        is_match_compound=is_match_compound,
+                        ecn_product=product.ecn,
+                        ecn_is=config.is_ecn,
+                    )
 
-                if result.product_fid_area is None or result.product_fid_area <= 0:
-                    result.warnings.append("产物FID面积无效")
+                    result.product_fid_rt = prod_decision.fid_rt
+                    if result.product_fid_rt is None:
+                        result.product_fid_rt = self._extract_rt_for_row(prod_decision.row)
+                    result.product_fid_area = prod_decision.fid_area
+                    if prod_decision.nist_hit is not None:
+                        result.product_match_compound = prod_decision.nist_hit.compound_name
+                        result.nist_matched_mw = prod_decision.nist_hit.molecular_weight
+                    result.match_method = prod_decision.match_method
+                    result.confidence_level = prod_decision.confidence_level
+                    result.confidence_score = prod_decision.confidence_score
+                    result.confidence_reason = prod_decision.confidence_reason
+                    result.hit_summary = prod_decision.hit_summary
+                    result.remark = prod_decision.remark
+                    result.pim_predicted_mw = prod_decision.pim_mw
+                    result.sshm_predicted_mw = prod_decision.sshm_mw
+                    result.ihshm_predicted_mw = prod_decision.ihshm_mw
+
+                    if result.product_fid_area is None or result.product_fid_area <= 0:
+                        result.warnings.append("产物FID面积无效")
+                        results.append(result)
+                        continue
+
+                    ratio, molar_ratio, n_product, yield_pct = self._calculate_yield(
+                        result.product_fid_area,
+                        is_fid_area,
+                        product.ecn,
+                        config.is_ecn,
+                        config,
+                        product_equivalent=product.equivalent,
+                    )
+                    result.area_ratio = ratio
+                    result.molar_ratio = molar_ratio
+                    result.n_product_mol = n_product
+                    result.yield_percent = yield_pct
                     results.append(result)
-                    continue
-
-                # 计算产率
-                ratio, molar_ratio, n_product, yield_pct = self._calculate_yield(
-                    result.product_fid_area, is_fid_area,
-                    product.ecn, config.is_ecn, config,
-                    product_equivalent=product.equivalent,
-                )
-
-                result.area_ratio = ratio
-                result.molar_ratio = molar_ratio
-                result.n_product_mol = n_product
-                result.yield_percent = yield_pct
-
-                results.append(result)
 
         logger.info("产率计算完成, 共 %d 条结果", len(results))
         return config, results
@@ -1208,34 +2344,70 @@ class YieldCalculator:
         self, ws, results: List[SampleYieldResult]
     ) -> None:
         """写入产率计算结果 Sheet."""
-        self._write_header(ws, self._YIELD_HEADERS)
+        headers = self._build_yield_headers()
+        col_map = {name: idx for idx, name in enumerate(headers, start=1)}
+        self._write_header(ws, headers)
 
         for row_idx, r in enumerate(results, start=2):
-            ws.cell(row=row_idx, column=1, value=r.sample_name)
-            ws.cell(row=row_idx, column=2, value=r.product_name)
-            ws.cell(row=row_idx, column=3,
+            ws.cell(row=row_idx, column=col_map["样品名"], value=r.sample_name)
+            ws.cell(row=row_idx, column=col_map["目标产物"], value=r.product_name)
+            ws.cell(row=row_idx, column=col_map["产物保留时间(min)"],
                     value=round(r.product_fid_rt, 3) if r.product_fid_rt is not None else "")
-            ws.cell(row=row_idx, column=4,
+            ws.cell(row=row_idx, column=col_map["产物FID面积"],
                     value=round(r.product_fid_area, 6) if r.product_fid_area is not None else "")
-            ws.cell(row=row_idx, column=5, value=r.product_match_compound)
-            ws.cell(row=row_idx, column=6,
+            ws.cell(row=row_idx, column=col_map["产物匹配化合物"], value=r.product_match_compound)
+            ws.cell(row=row_idx, column=col_map["内标保留时间(min)"],
                     value=round(r.is_fid_rt, 3) if r.is_fid_rt is not None else "")
-            ws.cell(row=row_idx, column=7,
+            ws.cell(row=row_idx, column=col_map["内标FID面积"],
                     value=round(r.is_fid_area, 6) if r.is_fid_area is not None else "")
-            ws.cell(row=row_idx, column=8, value=r.is_match_compound)
-            ws.cell(row=row_idx, column=9,
+            ws.cell(row=row_idx, column=col_map["内标匹配化合物"], value=r.is_match_compound)
+            ws.cell(row=row_idx, column=col_map["Ratio"],
                     value=round(r.area_ratio, 4) if r.area_ratio is not None else "")
-            ws.cell(row=row_idx, column=10,
+            ws.cell(row=row_idx, column=col_map["产物ECN"],
                     value=round(r.ecn_product, 2) if r.ecn_product is not None else "")
-            ws.cell(row=row_idx, column=11,
+            ws.cell(row=row_idx, column=col_map["内标ECN"],
                     value=round(r.ecn_is, 2) if r.ecn_is is not None else "")
             if r.yield_percent is not None:
                 yield_display = "<1" if r.yield_percent < 1 else round(r.yield_percent)
             else:
                 yield_display = ""
-            ws.cell(row=row_idx, column=12, value=yield_display)
-            ws.cell(row=row_idx, column=13, value=r.match_method)
-            ws.cell(row=row_idx, column=14, value="; ".join(r.warnings) if r.warnings else "")
+            ws.cell(row=row_idx, column=col_map["产率(%)"], value=yield_display)
+            ws.cell(row=row_idx, column=col_map["匹配方式"], value=r.match_method)
+            ws.cell(row=row_idx, column=col_map["置信度"], value=r.confidence_level)
+            ws.cell(
+                row=row_idx,
+                column=col_map["NIST匹配分子量(Da)"],
+                value=round(r.nist_matched_mw, 4) if r.nist_matched_mw is not None else "",
+            )
+
+            if "PIM预测分子量(Da)" in col_map:
+                ws.cell(
+                    row=row_idx,
+                    column=col_map["PIM预测分子量(Da)"],
+                    value=round(r.pim_predicted_mw, 4) if r.pim_predicted_mw is not None else "",
+                )
+            if "SS-HM预测分子量(Da)" in col_map:
+                ws.cell(
+                    row=row_idx,
+                    column=col_map["SS-HM预测分子量(Da)"],
+                    value=round(r.sshm_predicted_mw, 4) if r.sshm_predicted_mw is not None else "",
+                )
+            if "iHS-HM预测分子量(Da)" in col_map:
+                ws.cell(
+                    row=row_idx,
+                    column=col_map["iHS-HM预测分子量(Da)"],
+                    value=round(r.ihshm_predicted_mw, 4) if r.ihshm_predicted_mw is not None else "",
+                )
+
+            # 组装最终备注: remark + 额外警告
+            remark_text = r.remark
+            if len(r.warnings) > 0:
+                extra = "; ".join(r.warnings)
+                if remark_text != "":
+                    remark_text = remark_text + "; " + extra
+                else:
+                    remark_text = extra
+            ws.cell(row=row_idx, column=col_map["备注"], value=remark_text)
 
         self._auto_column_width(ws)
 
@@ -1251,7 +2423,13 @@ class YieldCalculator:
             ("内标名称", config.is_name),
             ("内标SMILES", config.is_smiles),
             ("内标分子式", config.is_formula),
+            (
+                "内标分子量(Da)",
+                round(config.is_molecular_weight, 4) if config.is_molecular_weight is not None else "",
+            ),
             ("内标ECN", round(config.is_ecn, 4)),
+            ("内标NIST收录", "是" if config.is_nist_has_record is True else "否"),
+            ("内标NIST查询模式", config.is_nist_query_mode),
             ("内标用量(μL/mg)", config.is_amount),
             ("内标摩尔量(mmol)", round(config.is_moles * 1000, 6)),
             ("内标预期RT(min)", config.is_expected_rt if config.is_expected_rt is not None else ""),
@@ -1277,7 +2455,10 @@ class YieldCalculator:
             rows.append((f"产物{i} 名称", p.name))
             rows.append((f"产物{i} SMILES", p.smiles))
             rows.append((f"产物{i} 分子式", p.formula))
+            rows.append((f"产物{i} 分子量(Da)", round(p.molecular_weight, 4) if p.molecular_weight is not None else ""))
             rows.append((f"产物{i} ECN", round(p.ecn, 4)))
+            rows.append((f"产物{i} NIST收录", "是" if p.nist_has_record is True else "否"))
+            rows.append((f"产物{i} NIST查询模式", p.nist_query_mode))
             rows.append((f"产物{i} 预期RT(min)", p.expected_rt if p.expected_rt is not None else ""))
             rows.append((f"产物{i} 适用实验", exp_str))
             rows.append((f"产物{i} 当量(eq)", p.equivalent))
@@ -1307,16 +2488,25 @@ class YieldCalculator:
 
     @staticmethod
     def _auto_column_width(ws) -> None:
-        """根据内容自动调整列宽."""
+        """根据内容自动调整列宽, 所有单元格居中对齐, 备注列列宽加大."""
+        center_align = Alignment(horizontal="center", vertical="center")
         for col_cells in ws.columns:
             max_length = 0
             col_letter = get_column_letter(col_cells[0].column)
+            header_value = str(col_cells[0].value) if col_cells[0].value is not None else ""
             for cell in col_cells:
                 if cell.value is not None:
                     val_str = str(cell.value)
                     char_len = sum(2 if ord(c) > 127 else 1 for c in val_str)
                     max_length = max(max_length, char_len)
-            ws.column_dimensions[col_letter].width = min(max_length + 3, 30)
+                # 居中对齐 (表头行保留原样式, 数据行设置居中)
+                if cell.row > 1:
+                    cell.alignment = center_align
+            # 备注列使用更大的列宽上限, 确保容纳完整文本
+            if header_value == "备注":
+                ws.column_dimensions[col_letter].width = min(max_length + 3, 80)
+            else:
+                ws.column_dimensions[col_letter].width = min(max_length + 3, 30)
 
     @staticmethod
     def _parse_float(value: Any, default: float = 0.0) -> float:
