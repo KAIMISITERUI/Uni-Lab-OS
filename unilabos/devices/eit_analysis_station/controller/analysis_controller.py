@@ -1257,7 +1257,7 @@ class AnalysisStationController:
 
         # 读取样品元数据
         sample_info = reader.read_sample_info(d_dir)
-        sample_name = sample_info.get("sample_name", d_dir.stem)
+        sample_name = sample_info.get("sample_name") or d_dir.stem  # 空值回退到目录名
         acq_time = sample_info.get("acq_time", "")
 
         result = SampleResult(

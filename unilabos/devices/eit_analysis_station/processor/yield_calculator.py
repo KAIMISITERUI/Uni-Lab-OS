@@ -29,9 +29,11 @@ from .ecn import smiles2carbontypes, ecn_dct, class_dct
 try:
     from rdkit import Chem
     from rdkit.Chem import Descriptors
+    from rdkit.Chem import inchi as RDKitInchi
 except Exception:
     Chem = None
     Descriptors = None
+    RDKitInchi = None
 
 logger = logging.getLogger(__name__)
 YIELD_CONFIG_SHEET_NAME = "GC产率计算"
@@ -182,10 +184,10 @@ class SampleYieldResult:
 class NISTLibraryQueryResult:
     """
     功能:
-        存储基于 SMILES 的 NIST 库收录查询结果.
+        存储 NIST 库收录查询结果.
     参数:
         has_record: 是否检索到对应记录.
-        query_mode: 命中模式, 可选 smiles_exact/formula_mw_fallback/not_found.
+        query_mode: 命中模式, 可选 inchikey_exact/smiles_exact/formula_mw_fallback/not_found.
         reference_names: 命中记录中的化合物名称集合.
         reference_formulas: 命中记录中的分子式集合.
         reference_mw: 命中记录中的分子量集合.
@@ -336,6 +338,8 @@ class YieldCalculator:
 
         self._nist_index_loaded = False
         self._nist_smiles_field_detected = False
+        self._nist_inchikey_field_detected = False
+        self._nist_index_by_inchikey: Dict[str, List[Dict[str, Any]]] = {}
         self._nist_index_by_smiles: Dict[str, List[Dict[str, Any]]] = {}
         self._nist_index_by_formula: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -1169,9 +1173,53 @@ class YieldCalculator:
         参数:
             smiles: 原始 SMILES 字符串.
         返回:
-            str: 规范化后的 SMILES.
+            str, 规范化后的 SMILES.
         """
         return re.sub(r"\s+", "", str(smiles).strip())
+
+    @staticmethod
+    def _normalize_inchikey(inchikey: str) -> str:
+        """
+        功能:
+            规范化 InChIKey 字符串, 统一去空白并转为大写.
+        参数:
+            inchikey: 原始 InChIKey 字符串.
+        返回:
+            str, 规范化后的 InChIKey.
+        """
+        return re.sub(r"\s+", "", str(inchikey).strip()).upper()
+
+    def _smiles_to_inchikey(self, smiles: str) -> str:
+        """
+        功能:
+            根据 SMILES 生成 InChIKey, 失败时返回空字符串.
+        参数:
+            smiles: 目标 SMILES 字符串.
+        返回:
+            str, 生成成功时返回规范化 InChIKey, 失败返回空字符串.
+        """
+        smiles_text = self._normalize_smiles(smiles)
+        if smiles_text == "":
+            return ""
+
+        if Chem is None or RDKitInchi is None:
+            logger.warning("RDKit 不可用, 无法生成 InChIKey: %s", smiles_text)
+            return ""
+
+        try:
+            molecule = Chem.MolFromSmiles(smiles_text)
+            if molecule is None:
+                logger.warning("SMILES 解析失败, 无法生成 InChIKey: %s", smiles_text)
+                return ""
+            inchikey = RDKitInchi.MolToInchiKey(molecule)
+        except Exception as exc:
+            logger.warning("生成 InChIKey 失败: SMILES=%s, 错误=%s", smiles_text, exc)
+            return ""
+
+        normalized_inchikey = self._normalize_inchikey(inchikey)
+        if normalized_inchikey == "":
+            logger.warning("InChIKey 生成结果为空: %s", smiles_text)
+        return normalized_inchikey
 
     @staticmethod
     def _normalize_name(name: str) -> str:
@@ -1181,7 +1229,7 @@ class YieldCalculator:
         参数:
             name: 原始名称.
         返回:
-            str: 去符号后的低噪声名称键.
+            str, 去符号后的低噪声名称键.
         """
         return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(name).strip().lower())
 
@@ -1198,8 +1246,15 @@ class YieldCalculator:
         if name_text == "":
             return
 
+        inchikey_text = self._normalize_inchikey(str(entry.get("inchikey", "")))
         smiles_text = self._normalize_smiles(str(entry.get("smiles", "")))
         formula_text = str(entry.get("formula", "")).strip()
+
+        if inchikey_text != "":
+            if inchikey_text not in self._nist_index_by_inchikey:
+                self._nist_index_by_inchikey[inchikey_text] = []
+            self._nist_index_by_inchikey[inchikey_text].append(entry.copy())
+            self._nist_inchikey_field_detected = True
 
         if smiles_text != "":
             if smiles_text not in self._nist_index_by_smiles:
@@ -1215,7 +1270,7 @@ class YieldCalculator:
     def _ensure_nist_library_index(self) -> None:
         """
         功能:
-            懒加载 NIST MSP 索引, 支持按 SMILES 查询是否收录.
+            懒加载 NIST MSP 索引, 支持按 InChIKey/SMILES/Formula+MW 查询收录状态.
         参数:
             无.
         返回:
@@ -1225,8 +1280,10 @@ class YieldCalculator:
             return
 
         self._nist_index_loaded = True
+        self._nist_index_by_inchikey.clear()
         self._nist_index_by_smiles.clear()
         self._nist_index_by_formula.clear()
+        self._nist_inchikey_field_detected = False
         self._nist_smiles_field_detected = False
 
         if self._nist_mainlib_msp_path is None:
@@ -1261,6 +1318,9 @@ class YieldCalculator:
                     if key_name == "NAME":
                         current_entry["name"] = value
                         continue
+                    if key_name == "INCHIKEY":
+                        current_entry["inchikey"] = value
+                        continue
                     if key_name == "SMILES":
                         current_entry["smiles"] = value
                         continue
@@ -1280,16 +1340,20 @@ class YieldCalculator:
                 record_count += 1
 
             logger.info(
-                "NIST MSP 索引加载完成: 记录=%d, SMILES键=%d, FORMULA键=%d, 含SMILES字段=%s",
+                "NIST MSP 索引加载完成: 记录=%d, InChIKey键=%d, SMILES键=%d, FORMULA键=%d, 含InChIKey字段=%s, 含SMILES字段=%s",
                 record_count,
+                len(self._nist_index_by_inchikey),
                 len(self._nist_index_by_smiles),
                 len(self._nist_index_by_formula),
+                self._nist_inchikey_field_detected,
                 self._nist_smiles_field_detected,
             )
         except Exception as exc:
             logger.error("加载 NIST MSP 索引失败: %s", exc)
+            self._nist_index_by_inchikey.clear()
             self._nist_index_by_smiles.clear()
             self._nist_index_by_formula.clear()
+            self._nist_inchikey_field_detected = False
             self._nist_smiles_field_detected = False
 
     def _query_nist_library_by_smiles(
@@ -1300,35 +1364,49 @@ class YieldCalculator:
     ) -> NISTLibraryQueryResult:
         """
         功能:
-            根据目标 SMILES 查询 NIST 库是否存在对应记录.
-            当 MSP 无 SMILES 字段时, 使用分子式+分子量作为兜底判断.
+            查询目标化合物是否在 NIST 库中收录.
+            查询顺序: InChIKey 精确命中 -> SMILES 精确命中 -> Formula+MW 回退命中.
         参数:
             smiles: 目标 SMILES.
             formula: 目标分子式.
             target_mw: 目标分子量.
         返回:
-            NISTLibraryQueryResult: 查询结果对象.
+            NISTLibraryQueryResult, 查询结果对象.
         """
         self._ensure_nist_library_index()
         normalized_smiles = self._normalize_smiles(smiles)
-        if normalized_smiles == "":
-            return NISTLibraryQueryResult(has_record=False, query_mode="not_found")
+        target_inchikey = self._smiles_to_inchikey(normalized_smiles)
 
-        hit_entries = self._nist_index_by_smiles.get(normalized_smiles, [])
-        if len(hit_entries) > 0:
-            names = sorted({str(item.get("name", "")).strip() for item in hit_entries if str(item.get("name", "")).strip() != ""})
-            formulas = sorted({str(item.get("formula", "")).strip() for item in hit_entries if str(item.get("formula", "")).strip() != ""})
-            mw_values = sorted({float(item.get("mw")) for item in hit_entries if item.get("mw") is not None})
-            return NISTLibraryQueryResult(
-                has_record=True,
-                query_mode="smiles_exact",
-                reference_names=names,
-                reference_formulas=formulas,
-                reference_mw=mw_values,
-            )
+        if target_inchikey != "":
+            inchikey_entries = self._nist_index_by_inchikey.get(target_inchikey, [])
+            if len(inchikey_entries) > 0:
+                names = sorted({str(item.get("name", "")).strip() for item in inchikey_entries if str(item.get("name", "")).strip() != ""})
+                formulas = sorted({str(item.get("formula", "")).strip() for item in inchikey_entries if str(item.get("formula", "")).strip() != ""})
+                mw_values = sorted({float(item.get("mw")) for item in inchikey_entries if item.get("mw") is not None})
+                return NISTLibraryQueryResult(
+                    has_record=True,
+                    query_mode="inchikey_exact",
+                    reference_names=names,
+                    reference_formulas=formulas,
+                    reference_mw=mw_values,
+                )
+
+        if normalized_smiles != "":
+            hit_entries = self._nist_index_by_smiles.get(normalized_smiles, [])
+            if len(hit_entries) > 0:
+                names = sorted({str(item.get("name", "")).strip() for item in hit_entries if str(item.get("name", "")).strip() != ""})
+                formulas = sorted({str(item.get("formula", "")).strip() for item in hit_entries if str(item.get("formula", "")).strip() != ""})
+                mw_values = sorted({float(item.get("mw")) for item in hit_entries if item.get("mw") is not None})
+                return NISTLibraryQueryResult(
+                    has_record=True,
+                    query_mode="smiles_exact",
+                    reference_names=names,
+                    reference_formulas=formulas,
+                    reference_mw=mw_values,
+                )
 
         formula_text = str(formula).strip()
-        if self._nist_smiles_field_detected is False and formula_text != "":
+        if formula_text != "":
             fallback_entries = self._nist_index_by_formula.get(formula_text, [])
             matched_entries: List[Dict[str, Any]] = []
             for item in fallback_entries:
@@ -1714,9 +1792,15 @@ class YieldCalculator:
         """
         parts: List[str] = []
 
-        # NIST 库收录情况
+        # NIST 库收录情况, 附带命中方式
+        query_mode_labels = {
+            "inchikey_exact": "InChIKey匹配到记录",
+            "smiles_exact": "SMILES匹配到记录",
+            "formula_mw_fallback": "分子式+分子量匹配到记录",
+        }
         if nist_query.has_record is True:
-            parts.append("NIST: 有记录")
+            mode_label = query_mode_labels.get(nist_query.query_mode, "有记录")
+            parts.append(f"NIST: {mode_label}")
         else:
             parts.append("NIST: 无记录")
 
@@ -2504,7 +2588,7 @@ class YieldCalculator:
                     cell.alignment = center_align
             # 备注列使用更大的列宽上限, 确保容纳完整文本
             if header_value == "备注":
-                ws.column_dimensions[col_letter].width = min(max_length + 3, 80)
+                ws.column_dimensions[col_letter].width = min(max_length + 3, 100)
             else:
                 ws.column_dimensions[col_letter].width = min(max_length + 3, 30)
 

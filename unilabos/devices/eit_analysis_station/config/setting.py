@@ -67,10 +67,10 @@ class Settings:
     nist_max_hits: int = 5  # NIST 每峰返回命中数, 调大可保留更多候选.
     nist_search_timeout: float = 120.0  # NIST 单峰搜索超时秒数, 调大可降低超时中断.
     nist_avg_scans: int = 3  # 质谱平均扫描数, 调大可提升信噪比但会平滑细节.
-    pim_enable: bool = True  # 是否启用 PIM 预测, 关闭后不输出 PIM 列结果.
-    pim_ab_m: float = 0.3  # PIM 参数 ab_m, 调整后影响分子离子峰判定敏感度. 调大: 只允许更强的高 m/z 峰参与判断, 抗噪更强, 但更容易把真实分子离子峰(弱峰)跳过, 预测质量偏低.
-    pim_beta: float = 5.0  # PIM 参数 beta, 调整后影响高质量峰加权强度.
-    pim_epsilon_f: float = 0.0  # PIM 参数 epsilon_f, 调整后影响峰筛选阈值.
+    pim_enable: bool = True  # 是否启用 PIM 预测, 关闭后不输出 PIM 列结果. 
+    pim_ab_m: float = 1.5  # PIM 参数 ab_m, 调整后影响分子离子峰判定敏感度. 推荐范围：0.5 ~ 2.0.
+    pim_beta: float = 5.0  # PIM 参数 beta, 调整后影响高质量峰加权强度. 推荐范围：3.0 ~ 7.0	
+    pim_epsilon_f: float = 0.0  # PIM 参数 epsilon_f, 调整后影响峰筛选阈值. 可以尝试设为 0.01.
 
     # ---------- MSPepSearch 预测配置 ----------
     mspepsearch_enable: bool = True  # 是否启用 MSPepSearch 预测链路, 关闭后不执行 SS-HM/iHS-HM.
@@ -99,10 +99,10 @@ class Settings:
         default_factory=lambda: Path(__file__).parent.parent / "data" / "nist_runtime_map.pkl"
     )
     structure_offline_only: bool = False  # 是否严格离线结构模式, 打开后禁用 PubChem 网络回退.
-    sshm_hits: int = 25  # SS-HM 搜索返回命中数, 调大可增加候选覆盖.
-    sshm_b_ss: int = 75  # SS-HM 概率加权参数 B_SS, 调整后影响置信度分布.
-    ihshm_hits: int = 25  # iHS-HM 搜索返回命中数, 调大可增加候选覆盖.
-    ihshm_mEMF: int = 700  # iHS-HM 最小匹配因子阈值, 调高会更严格过滤低质量命中.
+    sshm_hits: int = 25  # SS-HM 搜索返回命中数, 调大可增加候选覆盖. 推荐范围50-100.
+    sshm_b_ss: int = 75  # SS-HM 概率加权参数 B_SS, 调整后影响置信度分布. 推荐范围50-100.
+    ihshm_hits: int = 25  # iHS-HM 搜索返回命中数, 调大可增加候选覆盖. 推荐范围25-50.
+    ihshm_mEMF: int = 700  # iHS-HM 最小匹配因子阈值, 调高会更严格过滤低质量命中. 推荐范围600 ~ 750.
     mspepsearch_timeout: float = 120.0  # MSPepSearch 超时秒数, 调大可降低复杂谱图超时失败.
 
     # ---------- 峰检测与积分参数 ----------
@@ -120,7 +120,7 @@ class Settings:
     use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
     # ---------- robust_v2 参数 ----------
-    integration_mode: str = "gcpy"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "robust_v2"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     baseline_method: str = "rolling_quantile"  # robust_v2 基线方法, 修改后改变背景估计方式.
     baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
     baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.
@@ -135,14 +135,14 @@ class Settings:
 
     # ---------- 峰过滤参数 ----------
     peak_rt_min: Optional[float] = 4.0  # 峰保留时间下限(min), 调大可忽略前段溶剂峰.
-    peak_rt_max: Optional[float] = 10.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
+    peak_rt_max: Optional[float] = 20.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
     tic_area_min: Optional[float] = 10000.0  # TIC 峰面积下限, 调大可过滤小面积峰.
     tic_area_max: Optional[float] = None  # TIC 峰面积上限, 设置后可过滤过载峰.
     fid_area_min: Optional[float] = 0.01  # FID 峰面积下限, 调大可过滤微小峰.
     fid_area_max: Optional[float] = None  # FID 峰面积上限, 设置后可过滤异常大峰.
 
     # ---------- TIC-FID 峰对齐参数 ----------
-    alignment_tolerance: float = 0.05  # FID 与 TIC 峰保留时间对齐容差(min), 调大可提高配对成功率.
+    alignment_tolerance: float = 0.2  # FID 与 TIC 峰保留时间对齐容差(min), 调大可提高配对成功率.
     alignment_include_tic_only: bool = False  # 是否输出仅 TIC 有峰行, 打开后对照表会增加 TIC-only 记录.
     alignment_include_fid_only: bool = True  # 是否输出仅 FID 有峰行, 关闭后对照表会隐藏 FID-only 记录.
 

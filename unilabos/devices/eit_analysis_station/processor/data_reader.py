@@ -5,7 +5,7 @@
     读取 Agilent .D 目录中的色谱/质谱数据.
     支持 TIC (总离子流色谱), FID (火焰离子化检测器) 和单扫描质谱.
     TIC 优先从智达软件自动导出的 tic_front.csv 读取,
-    备选使用 rainbow-api 解析 data.ms 二进制文件.
+    备选使用 rainbow-api 解析 data.ms 和 FID*.ch 二进制文件.
 参数:
     无.
 返回:
@@ -109,7 +109,9 @@ class GCMSDataReader:
     def read_fid(self, d_dir: Path) -> Tuple[np.ndarray, np.ndarray]:
         """
         功能:
-            使用 rainbow-api 解析 FID1A.ch, 读取 FID 检测器信号.
+            使用 rainbow-api 解析 FID .ch 文件, 读取 FID 检测器信号.
+            兼容 FID1A.ch, FID1B.ch 等不同通道命名.
+            优先使用 FID1A.ch, 若不存在则自动查找目录中其他 FID*.ch 文件.
         参数:
             d_dir: .D 目录路径.
         返回:
@@ -117,16 +119,33 @@ class GCMSDataReader:
         """
         import rainbow as rb
 
+        # 先扫描目录中所有 FID*.ch 文件, 确定实际可用的文件名
+        fid_candidates = sorted(d_dir.glob("FID*.ch"))
+        if len(fid_candidates) == 0:
+            raise FileNotFoundError(f"未找到任何 FID*.ch 文件: {d_dir}")
+
+        # 优先使用 FID1A.ch, 不存在则取排序后的第一个
+        fid_name = "FID1A.ch"
+        has_default = any(f.name == fid_name for f in fid_candidates)
+        if has_default is False:
+            fid_name = fid_candidates[0].name
+            if len(fid_candidates) > 1:
+                candidate_names = [f.name for f in fid_candidates]
+                logger.warning(
+                    "未找到 FID1A.ch, 目录中存在多个 FID 文件 %s, 使用 %s",
+                    candidate_names, fid_name,
+                )
+            else:
+                logger.info("未找到 FID1A.ch, 使用备选文件: %s", fid_name)
+
         datadir = rb.read(str(d_dir))
-        fid_file = datadir.get_file("FID1A.ch")
-        if fid_file is None:
-            raise FileNotFoundError(f"未找到 FID1A.ch: {d_dir}")
+        fid_file = datadir.get_file(fid_name)
 
         times = fid_file.xlabels              # shape: (n_points,)
         intensities = fid_file.data[:, 0]     # shape: (n_points,), 取第一列
 
-        logger.info("从 FID1A.ch 读取 %d 个数据点, 信号范围: %.2f - %.2f",
-                     len(times), intensities.min(), intensities.max())
+        logger.info("从 %s 读取 %d 个数据点, 信号范围: %.2f - %.2f",
+                     fid_name, len(times), intensities.min(), intensities.max())
         return times, intensities
 
     def read_ms_spectra_at_rt(
@@ -265,8 +284,8 @@ class GCMSDataReader:
         }
 
         for field_elem in root.findall("Field"):
-            name = field_elem.findtext("Name", "")
-            value = field_elem.findtext("Value", "")
+            name = field_elem.findtext("Name", "").strip()
+            value = field_elem.findtext("Value", "").strip()
             if name in field_map:
                 result[field_map[name]] = value
 

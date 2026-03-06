@@ -15,7 +15,7 @@ import networkx as nx
 from pysmiles.read_smiles import read_smiles
 from collections import defaultdict
 
-ary_dct = {0: '', 1: 'primary', 2: 'secondary', 3: 'tertiary'}
+ary_dct = {0: '', 1: 'primary', 2: 'secondary', 3: 'tertiary', 4: 'quaternary'}
 alk_dct = {2: 'alkyne', 3: 'alkene', 4: 'alkane'}
 
 
