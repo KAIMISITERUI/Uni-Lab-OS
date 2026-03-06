@@ -137,7 +137,7 @@ class SampleYieldResult:
         molar_ratio: 摩尔比 (产物/内标).
         n_product_mol: 产物物质的量(mol).
         yield_percent: 产率(%).
-        match_method: 峰匹配方式, 可选 rt/nist_mass/mass.
+        match_method: 峰匹配方式, 可选 NIST命中/RT命中/分子量命中.
         confidence_level: 峰判定置信度分数, 0-100.
         confidence_score: 峰判定置信度分数值, 0-100.
         confidence_reason: 置信度说明.
@@ -227,7 +227,7 @@ class PeakDecision:
         存储单个候选峰的判定结果.
     参数:
         row: 原始对照表行数据.
-        match_method: 峰匹配路径标记.
+        match_method: 峰匹配方式文本.
         fid_rt: FID 保留时间(min).
         fid_area: FID 峰面积.
         nist_hit: 选中的 NIST 命中信息.
@@ -305,6 +305,18 @@ class YieldCalculator:
         "PIM": "PIM置信指数",
         "SS-HM": "SS-HM置信度",
         "iHS-HM": "iHS-HM置信度",
+    }
+
+    _CONFIDENCE_BAND_RULES: Dict[str, Tuple[float, float, float]] = {
+        "nist_strong_with_mw": (92.0, 100.0, 8.0),
+        "nist_strong_without_mw": (85.0, 92.0, 7.0),
+        "nist_weak": (55.0, 70.0, 15.0),
+        "nist_none_absent_multi_match": (65.0, 80.0, 15.0),
+        "nist_none_absent_single_match": (45.0, 60.0, 15.0),
+        "nist_none_absent_none": (15.0, 15.0, 0.0),
+        "nist_none_contradict_multi_match": (60.0, 75.0, 15.0),
+        "nist_none_contradict_single_match": (40.0, 55.0, 15.0),
+        "nist_none_contradict_none": (10.0, 10.0, 0.0),
     }
 
     def __init__(
@@ -1590,6 +1602,252 @@ class YieldCalculator:
             return False
         return normalized_hit in candidates
 
+    def _classify_nist_evidence(
+        self,
+        nist_query: NISTLibraryQueryResult,
+        nist_target_matched: bool,
+        nist_mw_matched: bool,
+    ) -> str:
+        """
+        功能:
+            将当前峰的 NIST 证据归类为强支持, 弱支持, 缺失或矛盾.
+        参数:
+            nist_query: NIST 收录查询结果.
+            nist_target_matched: 当前峰的 NIST 候选是否直接支持目标.
+            nist_mw_matched: 当前峰的 NIST 候选分子量是否命中目标.
+        返回:
+            str: 证据层级, 可选 nist_strong/nist_weak/nist_none_absent/nist_none_contradict.
+        """
+        if nist_target_matched is True:
+            return "nist_strong"
+        if nist_mw_matched is True:
+            return "nist_weak"
+        if nist_query.has_record is True:
+            return "nist_none_contradict"
+        return "nist_none_absent"
+
+    def _summarize_prediction_evidence(
+        self,
+        mass_match_methods: List[str],
+        prediction_details: Dict[str, Dict[str, Optional[float]]],
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            汇总各预测方法的命中情况, 归一化置信度和平均预测质量.
+        参数:
+            mass_match_methods: 分子量预测命中的方法列表.
+            prediction_details: 分子量预测值与置信度明细.
+        返回:
+            Dict[str, Any]: 包含预测层级, 命中方法和逐方法评分明细.
+        """
+        enabled_methods = self._get_enabled_prediction_methods()
+        matched_method_names: List[str] = []
+        matched_confidences: List[float] = []
+        prediction_scores: Dict[str, Dict[str, Any]] = {}
+
+        for method_name in enabled_methods:
+            method_weight = self._PREDICTION_WEIGHTS[method_name]
+            method_data = prediction_details.get(method_name, {})
+            method_mw = method_data.get("mw")
+            method_confidence = method_data.get("confidence")
+            method_matched = method_name in mass_match_methods
+            method_conf_norm = self._normalize_prediction_confidence(
+                method_name=method_name,
+                raw_confidence=method_confidence,
+                mass_matched=method_matched,
+            )
+            if method_matched is True:
+                matched_method_names.append(method_name)
+                matched_confidences.append(method_conf_norm)
+
+            # 保留逐方法明细, 便于解释最终评分来源.
+            prediction_scores[method_name] = {
+                "weight": method_weight,
+                "mw": method_mw,
+                "confidence_raw": method_confidence,
+                "matched": method_matched,
+                "confidence_norm": round(method_conf_norm, 4),
+                "score": round(method_weight * method_conf_norm, 2),
+            }
+
+        matched_method_count = len(matched_method_names)
+        if matched_method_count >= 2:
+            prediction_evidence_level = "multi_match"
+        elif matched_method_count == 1:
+            prediction_evidence_level = "single_match"
+        else:
+            prediction_evidence_level = "none"
+
+        predictor_quality = 0.0
+        if matched_method_count > 0:
+            predictor_quality = round(sum(matched_confidences) / matched_method_count, 4)
+
+        return {
+            "enabled_methods": enabled_methods,
+            "matched_method_names": matched_method_names,
+            "matched_method_count": matched_method_count,
+            "prediction_evidence_level": prediction_evidence_level,
+            "predictor_quality": predictor_quality,
+            "prediction_scores": prediction_scores,
+        }
+
+    def _resolve_confidence_band(
+        self,
+        nist_evidence_level: str,
+        prediction_evidence_level: str,
+        nist_mw_matched: bool,
+    ) -> Tuple[str, float, float, float]:
+        """
+        功能:
+            根据 NIST 与预测证据层级选出固定评分分段和倍率.
+        参数:
+            nist_evidence_level: NIST 证据层级.
+            prediction_evidence_level: 预测证据层级.
+            nist_mw_matched: 当前峰的 NIST 分子量是否命中目标.
+        返回:
+            Tuple[str, float, float, float]:
+                (评分层级, 分段下界, 分段上界, 预测质量倍率).
+        """
+        if nist_evidence_level == "nist_strong":
+            if nist_mw_matched is True:
+                scoring_tier = "nist_strong_with_mw"
+            else:
+                scoring_tier = "nist_strong_without_mw"
+        elif nist_evidence_level == "nist_weak":
+            scoring_tier = "nist_weak"
+        else:
+            scoring_tier = f"{nist_evidence_level}_{prediction_evidence_level}"
+
+        band_min, band_max, quality_multiplier = self._CONFIDENCE_BAND_RULES[scoring_tier]
+        return scoring_tier, band_min, band_max, quality_multiplier
+
+    @staticmethod
+    def _format_score_band_value(value: float) -> str:
+        """
+        功能:
+            将评分分段端点格式化为紧凑文本.
+        参数:
+            value: 分段端点值.
+        返回:
+            str: 适合展示的分值文本.
+        """
+        if float(value).is_integer():
+            return str(int(value))
+        return f"{value:.2f}"
+
+    def _describe_nist_evidence(
+        self,
+        nist_evidence_level: str,
+        nist_mw_matched: bool,
+    ) -> str:
+        """
+        功能:
+            生成 NIST 证据层级的人类可读描述.
+        参数:
+            nist_evidence_level: NIST 证据层级.
+            nist_mw_matched: 当前峰的 NIST 分子量是否命中目标.
+        返回:
+            str: NIST 证据描述.
+        """
+        if nist_evidence_level == "nist_strong":
+            if nist_mw_matched is True:
+                return "NIST命中目标化合物, 且分子量一致"
+            return "NIST命中目标化合物, 但分子量未一致"
+        if nist_evidence_level == "nist_weak":
+            return "NIST仅支持分子量一致"
+        if nist_evidence_level == "nist_none_absent":
+            return "NIST无目标记录, 当前峰未获得NIST支持"
+        return "NIST有目标记录, 但当前峰候选未支持目标"
+
+    def _describe_prediction_evidence(
+        self,
+        enabled_methods: List[str],
+        matched_method_names: List[str],
+    ) -> str:
+        """
+        功能:
+            生成预测证据层级的人类可读描述.
+        参数:
+            enabled_methods: 当前启用的预测方法列表.
+            matched_method_names: 分子量命中的预测方法列表.
+        返回:
+            str: 预测证据描述.
+        """
+        if len(enabled_methods) == 0:
+            return "未启用预测方法"
+        if len(matched_method_names) == 0:
+            return "预测未命中"
+        return f"预测命中{len(matched_method_names)}项({','.join(matched_method_names)})"
+
+    def _describe_current_peak_nist_support(
+        self,
+        nist_target_matched: bool,
+        nist_formula_matched: bool,
+        nist_mw_matched: bool,
+    ) -> str:
+        """
+        功能:
+            生成“当前峰是否被 NIST 支持”的文本描述.
+        参数:
+            nist_target_matched: 当前峰的 NIST 候选是否直接支持目标.
+            nist_formula_matched: 当前峰的 NIST 候选分子式是否命中目标.
+            nist_mw_matched: 当前峰的 NIST 候选分子量是否命中目标.
+        返回:
+            str: 支持说明文本.
+        """
+        if nist_target_matched is True and nist_formula_matched is True and nist_mw_matched is True:
+            return "是(目标+分子式+分子量)"
+        if nist_target_matched is True and nist_formula_matched is True:
+            return "是(目标+分子式)"
+        if nist_target_matched is True and nist_mw_matched is True:
+            return "是(目标+分子量)"
+        if nist_target_matched is True:
+            return "是(目标)"
+        if nist_mw_matched is True:
+            return "是(分子量)"
+        return "否"
+
+    @staticmethod
+    def _is_full_nist_match(
+        nist_target_matched: bool,
+        nist_mw_matched: bool,
+    ) -> bool:
+        """
+        功能:
+            判断当前峰是否满足“完整 NIST 命中”.
+        参数:
+            nist_target_matched: 当前峰的 NIST 候选是否支持目标.
+            nist_mw_matched: 当前峰的 NIST 候选分子量是否命中目标.
+        返回:
+            bool: 目标与分子量同时命中时返回 True.
+        """
+        return nist_target_matched is True and nist_mw_matched is True
+
+    def _resolve_match_method_label(
+        self,
+        base_match_method: str,
+        nist_target_matched: bool,
+        nist_mw_matched: bool,
+    ) -> str:
+        """
+        功能:
+            将内部匹配路径转换为结果表使用的匹配方式文本.
+        参数:
+            base_match_method: 内部匹配路径标记.
+            nist_target_matched: 当前峰的 NIST 候选是否支持目标.
+            nist_mw_matched: 当前峰的 NIST 候选分子量是否命中目标.
+        返回:
+            str: 匹配方式文本.
+        """
+        if self._is_full_nist_match(
+            nist_target_matched=nist_target_matched,
+            nist_mw_matched=nist_mw_matched,
+        ) is True:
+            return "NIST命中"
+        if base_match_method == "rt":
+            return "RT命中"
+        return "分子量命中"
+
     def _build_confidence(
         self,
         nist_query: NISTLibraryQueryResult,
@@ -1602,7 +1860,7 @@ class YieldCalculator:
         """
         功能:
             根据 NIST 与分子量预测证据输出 0-100 置信度分数与说明.
-            分数使用“按启用方法归一化”, 未启用方法不计入满分.
+            分数使用“证据分层 + 固定分段”规则, 不再按满分归一化.
         参数:
             nist_query: NIST 收录查询结果.
             nist_target_matched: NIST 命中是否为目标化合物.
@@ -1614,84 +1872,55 @@ class YieldCalculator:
             Tuple[float, str, Dict[str, Any]]:
                 (置信度分数, 置信说明, 评分明细字典).
         """
-        nist_score = 0.0
-        nist_max_score = 90.0 if nist_query.has_record is True else 35.0
-        reason_parts: List[str] = []
-
-        if nist_query.has_record is True:
-            if nist_target_matched is True:
-                nist_score = 90.0
-                reason_parts.append("NIST命中目标化合物")
-            elif nist_mw_matched is True:
-                nist_score = 15.0
-                reason_parts.append("NIST命中分子量与目标一致")
-            else:
-                reason_parts.append("NIST未命中目标化合物")
-        else:
-            if nist_mw_matched is True and nist_formula_matched is True:
-                nist_score = 35.0
-                reason_parts.append("NIST未收录, 分子量与分子式命中")
-            elif nist_mw_matched is True:
-                nist_score = 15.0
-                reason_parts.append("NIST未收录, 仅分子量命中")
-            else:
-                reason_parts.append("NIST库未收录目标化合物")
-
-        enabled_methods = self._get_enabled_prediction_methods()
-        prediction_score = 0.0
-        enabled_prediction_max = 0.0
-        prediction_scores: Dict[str, Dict[str, Any]] = {}
-        for method_name in enabled_methods:
-            method_weight = self._PREDICTION_WEIGHTS[method_name]
-            enabled_prediction_max += method_weight
-            method_data = prediction_details.get(method_name, {})
-            method_mw = method_data.get("mw")
-            method_confidence = method_data.get("confidence")
-            method_matched = method_name in mass_match_methods
-            method_conf_norm = self._normalize_prediction_confidence(
-                method_name=method_name,
-                raw_confidence=method_confidence,
-                mass_matched=method_matched,
-            )
-            method_score = method_weight * method_conf_norm
-            prediction_score += method_score
-            prediction_scores[method_name] = {
-                "weight": method_weight,
-                "mw": method_mw,
-                "confidence_raw": method_confidence,
-                "matched": method_matched,
-                "confidence_norm": method_conf_norm,
-                "score": method_score,
-            }
-
-        if len(enabled_methods) == 0:
-            reason_parts.append("无启用分子量预测方法")
-        elif len(mass_match_methods) > 0:
-            reason_parts.append(f"分子量预测命中({','.join(mass_match_methods)})")
-        else:
-            reason_parts.append("分子量预测均未命中")
-
-        total_score = nist_score + prediction_score
-        total_max_score = nist_max_score + enabled_prediction_max
-        if total_max_score > 0:
-            confidence_score = round(total_score * 100.0 / total_max_score, 2)
-            confidence_score = max(0.0, min(100.0, confidence_score))
-        else:
-            confidence_score = 0.0
-
-        reason_parts.append(
-            f"综合得分={int(round(confidence_score))}(原始{total_score:.2f}/{total_max_score:.2f})"
+        nist_evidence_level = self._classify_nist_evidence(
+            nist_query=nist_query,
+            nist_target_matched=nist_target_matched,
+            nist_mw_matched=nist_mw_matched,
         )
+        prediction_summary = self._summarize_prediction_evidence(
+            mass_match_methods=mass_match_methods,
+            prediction_details=prediction_details,
+        )
+        scoring_tier, band_min, band_max, quality_multiplier = self._resolve_confidence_band(
+            nist_evidence_level=nist_evidence_level,
+            prediction_evidence_level=prediction_summary["prediction_evidence_level"],
+            nist_mw_matched=nist_mw_matched,
+        )
+
+        predictor_quality = float(prediction_summary["predictor_quality"])
+        confidence_score = round(band_min + quality_multiplier * predictor_quality, 2)
+        if confidence_score < band_min:
+            confidence_score = band_min
+        if confidence_score > band_max:
+            confidence_score = band_max
+
+        band_min_text = self._format_score_band_value(band_min)
+        band_max_text = self._format_score_band_value(band_max)
+        reason_parts = [
+            self._describe_nist_evidence(
+                nist_evidence_level=nist_evidence_level,
+                nist_mw_matched=nist_mw_matched,
+            ),
+            self._describe_prediction_evidence(
+                enabled_methods=prediction_summary["enabled_methods"],
+                matched_method_names=prediction_summary["matched_method_names"],
+            ),
+            f"平均预测置信度={predictor_quality:.4f}",
+            f"评分分段={band_min_text}-{band_max_text}",
+            f"综合得分={int(round(confidence_score))}",
+        ]
         detail = {
-            "nist_score": nist_score,
-            "nist_max": nist_max_score,
-            "prediction_score": prediction_score,
-            "prediction_max": enabled_prediction_max,
-            "raw_score": total_score,
-            "max_score": total_max_score,
-            "prediction_scores": prediction_scores,
+            "scoring_tier": scoring_tier,
+            "nist_evidence_level": nist_evidence_level,
+            "prediction_evidence_level": prediction_summary["prediction_evidence_level"],
+            "score_band_min": band_min,
+            "score_band_max": band_max,
+            "predictor_quality": predictor_quality,
+            "matched_method_count": prediction_summary["matched_method_count"],
+            "matched_method_names": prediction_summary["matched_method_names"],
+            "prediction_scores": prediction_summary["prediction_scores"],
         }
-        return confidence_score, "；".join(reason_parts), detail
+        return confidence_score, "; ".join(reason_parts), detail
 
     def _build_hit_summary(
         self,
@@ -1747,6 +1976,7 @@ class YieldCalculator:
             method_conf_raw = method_data.get("confidence_raw")
             method_matched = method_data.get("matched")
             method_score = method_data.get("score")
+            method_conf_norm = method_data.get("confidence_norm")
             if method_mw is None:
                 mw_text = "无"
             else:
@@ -1759,16 +1989,22 @@ class YieldCalculator:
                 score_text = "0.00"
             else:
                 score_text = f"{float(method_score):.2f}"
+            if method_conf_norm is None:
+                conf_norm_text = "0.0000"
+            else:
+                conf_norm_text = f"{float(method_conf_norm):.4f}"
             summary_parts.append(
-                f"{method_name}(MW={mw_text}, 置信度={conf_text}, 命中={'是' if method_matched is True else '否'}, 加分={score_text})"
+                f"{method_name}(MW={mw_text}, 置信度={conf_text}, 命中={'是' if method_matched is True else '否'}, 归一化={conf_norm_text}, 参考分={score_text})"
             )
 
-        raw_score = float(confidence_detail.get("raw_score", 0.0))
-        max_score = float(confidence_detail.get("max_score", 0.0))
+        band_min = float(confidence_detail.get("score_band_min", 0.0))
+        band_max = float(confidence_detail.get("score_band_max", 0.0))
+        predictor_quality = float(confidence_detail.get("predictor_quality", 0.0))
+        scoring_tier = str(confidence_detail.get("scoring_tier", ""))
         summary_parts.append(
-            f"raw/max={raw_score:.2f}/{max_score:.2f}, score={int(round(confidence_score))}"
+            f"评分层级={scoring_tier}, 分段={self._format_score_band_value(band_min)}-{self._format_score_band_value(band_max)}, 平均预测置信度={predictor_quality:.4f}, score={int(round(confidence_score))}"
         )
-        return "；".join(summary_parts)
+        return "; ".join(summary_parts)
 
     def _build_remark(
         self,
@@ -1776,43 +2012,44 @@ class YieldCalculator:
         nist_target_matched: bool,
         nist_mw_matched: bool,
         nist_formula_matched: bool,
+        mass_match_methods: List[str],
         prediction_details: Dict[str, Dict[str, Optional[float]]],
+        nist_hit: Optional[NISTHitInfo],
     ) -> str:
         """
         功能:
-            生成精简的备注文本, 合并 NIST/命中/预测信息.
+            生成精简的备注文本, 明确区分目标收录状态与当前峰证据状态.
         参数:
             nist_query: NIST 收录查询结果.
             nist_target_matched: NIST 命中是否为目标化合物.
             nist_mw_matched: NIST 命中分子量是否匹配目标.
             nist_formula_matched: NIST 命中分子式是否匹配目标.
+            mass_match_methods: 分子量预测命中的方法列表.
             prediction_details: 分子量预测值与置信度明细.
+            nist_hit: 当前峰选中的最佳 NIST 候选.
         返回:
             str: 备注文本.
         """
         parts: List[str] = []
-
-        # NIST 库收录情况, 附带命中方式
-        query_mode_labels = {
-            "inchikey_exact": "InChIKey匹配到记录",
-            "smiles_exact": "SMILES匹配到记录",
-            "formula_mw_fallback": "分子式+分子量匹配到记录",
-        }
-        if nist_query.has_record is True:
-            mode_label = query_mode_labels.get(nist_query.query_mode, "有记录")
-            parts.append(f"NIST: {mode_label}")
+        if self._is_full_nist_match(
+            nist_target_matched=nist_target_matched,
+            nist_mw_matched=nist_mw_matched,
+        ) is True:
+            parts.append(f"NIST目标记录=是({nist_query.query_mode})")
         else:
-            parts.append("NIST: 无记录")
-
-        # 命中判定
-        if nist_target_matched is True and nist_mw_matched is True:
-            parts.append("全符合")
-        elif nist_formula_matched is True:
-            parts.append("分子式符合")
-        elif nist_mw_matched is True:
-            parts.append("分子量符合")
+            parts.append("NIST目标记录=否")
+        parts.append(
+            "当前峰NIST支持="
+            + self._describe_current_peak_nist_support(
+                nist_target_matched=nist_target_matched,
+                nist_formula_matched=nist_formula_matched,
+                nist_mw_matched=nist_mw_matched,
+            )
+        )
+        if nist_hit is None or nist_hit.molecular_weight is None:
+            parts.append("当前峰NIST最佳候选MW=无")
         else:
-            parts.append("未命中")
+            parts.append(f"当前峰NIST最佳候选MW={int(round(float(nist_hit.molecular_weight)))}")
 
         # 各预测方法的分子量和置信度 (MW 保留整数)
         enabled_methods = self._get_enabled_prediction_methods()
@@ -1822,7 +2059,8 @@ class YieldCalculator:
             conf = method_data.get("confidence")
             mw_text = str(int(round(float(mw)))) if mw is not None else "无"
             conf_text = f"{float(conf):.4f}" if conf is not None else "无"
-            parts.append(f"{method_name}: MW={mw_text}, 置信度={conf_text}")
+            method_matched = "命中" if method_name in mass_match_methods else "未命中"
+            parts.append(f"{method_name}: MW={mw_text}, {method_matched}, 置信度={conf_text}")
 
         return "; ".join(parts)
 
@@ -1945,12 +2183,18 @@ class YieldCalculator:
             nist_target_matched=nist_target_matched,
             nist_mw_matched=nist_mw_matched,
             nist_formula_matched=nist_formula_matched,
+            mass_match_methods=matched_methods,
             prediction_details=predictions,
+            nist_hit=best_hit,
         )
 
         return PeakDecision(
             row=row,
-            match_method=match_method,
+            match_method=self._resolve_match_method_label(
+                base_match_method=match_method,
+                nist_target_matched=nist_target_matched,
+                nist_mw_matched=nist_mw_matched,
+            ),
             fid_rt=self._parse_opt_float(row.get("FID保留时间(min)")),
             fid_area=self._parse_opt_float(row.get("FID峰面积")),
             nist_hit=best_hit,
@@ -2099,8 +2343,6 @@ class YieldCalculator:
             has_mass_evidence = (len(decision.mass_match_methods) > 0)
             if has_nist_evidence is False and has_mass_evidence is False:
                 continue
-
-            decision.match_method = "nist_mass" if has_nist_evidence is True else "mass"
 
             decisions.append(decision)
 
