@@ -660,6 +660,7 @@ def _menu_other(manager):
         ("1", "设备初始化"),
         ("2", "控制过渡舱门"),
         ("3", "控制W1货架"),
+        ("4", "异常通知监控"),
         ("0", "返回上级菜单"),
     ]
 
@@ -705,6 +706,52 @@ def _menu_other(manager):
                 continue
 
             _safe_run(manager.control_w1_shelf, position, action)
+        elif choice == "4":
+            _menu_notification(manager)
+        else:
+            print("无效选择, 请重新输入")
+
+
+# ===================== 10. 异常通知监控 =====================
+
+def _menu_notification(manager):
+    """异常通知监控子菜单"""
+    import datetime as _dt
+
+    options = [
+        ("1", "启动通知监控"),
+        ("2", "停止通知监控"),
+        ("3", "查看监控状态"),
+        ("0", "返回上级菜单"),
+    ]
+
+    while True:
+        _print_menu("异常通知监控", options)
+        choice = input("请选择操作: ").strip()
+
+        if choice == "0":
+            return
+        elif choice == "1":
+            _safe_run(manager.start_notification_monitor)
+        elif choice == "2":
+            _safe_run(manager.stop_notification_monitor)
+        elif choice == "3":
+            status = _safe_run(manager.notification_monitor_status)
+            if status is not None:
+                running_text = "运行中" if status.get("running") else "已停止"
+                email_text = "可用" if status.get("email_available") else "未配置"
+                last_poll = status.get("last_poll_time")
+                if last_poll is not None:
+                    last_poll_text = _dt.datetime.fromtimestamp(last_poll).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    last_poll_text = "无"
+
+                print(f"\n  监控状态: {running_text}")
+                print(f"  邮件渠道: {email_text}")
+                print(f"  已处理通知数: {status.get('total_processed', 0)}")
+                print(f"  去重记录数: {status.get('processed_ids_count', 0)}")
+                print(f"  上次轮询: {last_poll_text}")
+            _pause()
         else:
             print("无效选择, 请重新输入")
 

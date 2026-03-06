@@ -96,6 +96,9 @@ class SynthesisStationController:
             self._data_manager = None
             self._logger.debug("数据存储已禁用")
 
+        # 异常通知监控器 (惰性创建, 调用 start_notification_monitor 时初始化)
+        self._notification_monitor = None
+
     @property
     def client(self) -> ApiClient:
         return self._client
@@ -4614,6 +4617,51 @@ class SynthesisStationController:
             recovery_type=recovery_type,
             resume_task=resume_task,
         )
+
+    # ---------- 异常通知监控 ----------
+    def start_notification_monitor(self) -> None:
+        """
+        功能:
+            启动异常通知邮件监控, 后台守护线程周期轮询 Notice API.
+            首次调用时惰性创建 NotificationMonitor 实例.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        from ..notification.monitor import NotificationMonitor
+
+        if self._notification_monitor is None:
+            self._notification_monitor = NotificationMonitor(
+                controller=self,
+                settings=self._settings.notification,
+            )
+        self._notification_monitor.start()
+
+    def stop_notification_monitor(self) -> None:
+        """
+        功能:
+            停止异常通知邮件监控.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        if self._notification_monitor is not None:
+            self._notification_monitor.stop()
+
+    def notification_monitor_status(self) -> Dict:
+        """
+        功能:
+            返回通知监控器的运行状态信息.
+        参数:
+            无.
+        返回:
+            Dict, 包含 running, total_processed, last_poll_time 等字段.
+        """
+        if self._notification_monitor is None:
+            return {"running": False, "total_processed": 0, "message": "监控器未初始化"}
+        return self._notification_monitor.status_info
 
     # ---------- 方法模块 ---------- 弃用
     def create_method(self, payload: JsonDict) -> JsonDict:

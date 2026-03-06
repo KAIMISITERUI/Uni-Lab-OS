@@ -62,6 +62,25 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             **kwargs,
         )
 
+    def login(self) -> tuple:
+        """
+        功能:
+            登录并缓存 token, 登录成功后根据配置自动启动异常通知监控.
+        参数:
+            无.
+        返回:
+            Tuple[str, str], (token_type, access_token).
+        """
+        result = super().login()
+        # 登录成功后自动启动异常通知邮件监控 (CLI 启动路径)
+        try:
+            if self._settings.notification.enabled:
+                self.start_notification_monitor()
+                logger.info("异常通知邮件监控已启动")
+        except Exception as e:
+            logger.warning("异常通知监控启动失败, 不影响主流程: %s", e)
+        return result
+
     def _read_table_file_with_required_columns(
         self,
         path: Path,

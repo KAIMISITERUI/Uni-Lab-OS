@@ -1061,6 +1061,14 @@ class EITSynthesisWorkstation(WorkstationBase):
         self._ros_node.create_timer(30.0, self.resource_synchronizer.sync_from_external)
         logger.info(f"EIT 工作站 {ros_node.device_id} 定时同步任务已通过 ROS Timer 启动")
 
+        # 自动启动异常通知邮件监控 (通过 Uni-Lab-OS 系统启动时触发)
+        try:
+            if self.controller._settings.notification.enabled:
+                self.controller.start_notification_monitor()
+                logger.info("异常通知邮件监控已启动")
+        except Exception as e:
+            logger.warning(f"异常通知监控启动失败, 不影响主流程: {e}")
+
     @property
     def station_status(self) -> Dict[str, Any]:
         """[状态上报] 对接底层控制器获取工站环境数据"""

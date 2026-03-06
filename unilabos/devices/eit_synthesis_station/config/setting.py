@@ -1,7 +1,9 @@
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from ..notification.notification_settings import NotificationSettings
 
 
 @dataclass
@@ -36,6 +38,9 @@ class Settings:
 
     # 任务提交配置
     auto_rename_on_duplicate: bool = True   # 遇到 409 冲突时自动重命名任务, 追加 _YYYYMMDD_HHmmss 后缀
+
+    # 异常通知配置
+    notification: NotificationSettings = field(default_factory=NotificationSettings)
 
     @staticmethod
     def from_env() -> "Settings":
@@ -84,6 +89,9 @@ class Settings:
         auto_rename_str = os.getenv("SYN_STATION_AUTO_RENAME_ON_DUPLICATE", str(Settings.auto_rename_on_duplicate))
         auto_rename_on_duplicate = auto_rename_str.strip().lower() in ("1", "true", "yes", "y", "on")
 
+        # 异常通知配置
+        notification = NotificationSettings.from_env()
+
         return Settings(
             base_url=base_url,
             username=username,
@@ -95,6 +103,7 @@ class Settings:
             enable_data_logging=enable_data_logging,
             task_retention_days=task_retention_days,
             auto_rename_on_duplicate=auto_rename_on_duplicate,
+            notification=notification,
         )
 
 
