@@ -1978,6 +1978,192 @@ class SynthesisStationController:
 
         return records
 
+    # ---------- AGV 转运辅助方法 ----------
+
+    def _build_agv_transfer_tasks(
+        self,
+        records: List[Dict[str, str]],
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """
+        功能:
+            将上料记录列表转换为 AGV 转运任务列表.
+            从 record 的 position / tray_type / shelf_position 字段解析出
+            source_tray, target_tray, material_type 三元组.
+        参数:
+            records: List[Dict], 由 _iter_batch_in_records 返回的记录列表,
+                     每条需含 position, tray_type, shelf_position 字段.
+        返回:
+            Tuple[List[Dict], List[str]]:
+                - transfer_tasks: 有效的 AGV 转运任务列表
+                - errors: 解析过程中的错误信息列表
+        """
+        from ..config.constants import (
+            RESOURCE_CODE_TO_MATERIAL_TYPE,
+            TB_CODE_TO_SYNTHESIS_TRAY,
+            TRAY_CODE_DISPLAY_NAME,
+        )
+
+        transfer_tasks: List[Dict[str, Any]] = []
+        errors: List[str] = []
+
+        for record in records:
+            position = record["position"]
+            tray_type_text = record["tray_type"]
+            shelf_position = record["shelf_position"]
+
+            # 跳过没有 shelf_position 的行
+            if not shelf_position:
+                self._logger.warning(f"跳过没有 shelf_position 的行: {position}")
+                continue
+
+            # 解析托盘类型代码, 格式: "托盘名称(代码)" 或 "托盘名称(代码) [范围]"
+            match = re.search(r"\((\d+)\)", tray_type_text)
+            if not match:
+                error_msg = f"无法解析托盘类型代码: {tray_type_text}"
+                self._logger.error(error_msg)
+                errors.append(error_msg)
+                continue
+
+            tray_type_code = int(match.group(1))
+
+            # 映射目标托盘位置: position (TB-x-x) -> synthesis_station_tray_x-x
+            target_tray = TB_CODE_TO_SYNTHESIS_TRAY.get(position)
+            if target_tray is None:
+                error_msg = f"无法映射上料位置 {position} 到合成工站托盘"
+                self._logger.error(error_msg)
+                errors.append(error_msg)
+                continue
+
+            # 映射源托盘位置: shelf_position (x-x) -> shelf_tray_x-x
+            source_tray = f"shelf_tray_{shelf_position}"
+
+            # 映射物料类型
+            material_type = RESOURCE_CODE_TO_MATERIAL_TYPE.get(tray_type_code)
+            if material_type is None:
+                tray_type_name = TRAY_CODE_DISPLAY_NAME.get(
+                    tray_type_code, f"未知托盘({tray_type_code})"
+                )
+                self._logger.warning(
+                    f"未知的资源类型 {tray_type_code} ({tray_type_name}), 使用 None"
+                )
+
+            # 构建转运任务
+            task = {
+                "source_tray": source_tray,
+                "target_tray": target_tray,
+                "material_type": material_type,
+            }
+            transfer_tasks.append(task)
+            self._logger.info(
+                f"转运任务: {source_tray} -> {target_tray}, "
+                f"物料类型: {material_type}"
+            )
+
+        return transfer_tasks, errors
+
+    def _ensure_outer_door_open(self) -> List[str]:
+        """
+        功能:
+            检查过渡舱外门状态, 如果关闭则执行开门操作.
+        返回:
+            List[str], 操作过程中的错误信息列表(空列表表示无错误).
+        """
+        errors: List[str] = []
+        try:
+            device_status_list = self.list_device_status()
+            outer_door_status = None
+            for device in device_status_list:
+                if device.get("device_name") == "过渡舱外门":
+                    outer_door_status = device.get("status")
+                    break
+
+            if outer_door_status == "CLOSE":
+                self._logger.info("过渡舱外门状态为关闭, 正在开门...")
+                door_result = self.open_close_door("open")
+                self._logger.info(f"开门操作完成: {door_result}")
+            elif outer_door_status == "OPEN":
+                self._logger.info("过渡舱外门已打开, 无需操作")
+            else:
+                self._logger.warning(f"过渡舱外门状态未知: {outer_door_status}")
+        except Exception as e:
+            error_msg = f"检查或操作过渡舱外门时发生异常: {str(e)}"
+            self._logger.error(error_msg)
+            errors.append(error_msg)
+
+        return errors
+
+    def _execute_agv_transfer_batches(
+        self,
+        transfer_tasks: List[Dict[str, Any]],
+        agv_controller: Any,
+        *,
+        block: bool = True,
+        agv_batch_size: int = 4,
+    ) -> Tuple[int, List[Dict[str, Any]], List[str]]:
+        """
+        功能:
+            将转运任务按 AGV 单次最大运载量分批执行.
+            任意一批失败则立即终止后续批次.
+        参数:
+            transfer_tasks: AGV 转运任务列表.
+            agv_controller: AGVController 实例.
+            block: 是否阻塞等待每批完成.
+            agv_batch_size: AGV 单次最大转运托盘数, 默认 4.
+        返回:
+            Tuple[int, List[Dict], List[str]]:
+                - transferred_count: 成功转运的托盘数
+                - batches_result: 每批次的详情列表
+                - errors: 错误信息列表
+        """
+        batches_result: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        transferred_count = 0
+
+        for batch_index in range(0, len(transfer_tasks), agv_batch_size):
+            batch_tasks = transfer_tasks[batch_index:batch_index + agv_batch_size]
+            batch_num = batch_index // agv_batch_size + 1
+
+            self._logger.info(
+                f"开始执行第 {batch_num} 批转运, 共 {len(batch_tasks)} 个托盘"
+            )
+
+            try:
+                result = agv_controller.batch_transfer_materials(
+                    batch_tasks, block=block
+                )
+
+                batch_result = {
+                    "batch_num": batch_num,
+                    "tasks": batch_tasks,
+                    "success": result,
+                }
+                batches_result.append(batch_result)
+
+                if result:
+                    transferred_count += len(batch_tasks)
+                    self._logger.info(f"第 {batch_num} 批转运成功")
+                else:
+                    error_msg = f"第 {batch_num} 批转运失败"
+                    self._logger.error(error_msg)
+                    errors.append(error_msg)
+                    # 立即停止后续批次
+                    break
+
+            except Exception as e:
+                error_msg = f"第 {batch_num} 批转运异常: {str(e)}"
+                self._logger.error(error_msg)
+                errors.append(error_msg)
+                batches_result.append({
+                    "batch_num": batch_num,
+                    "tasks": batch_tasks,
+                    "success": False,
+                    "error": str(e),
+                })
+                # 立即停止后续批次
+                break
+
+        return transferred_count, batches_result, errors
+
     def auto_load_trays_from_agv(
         self,
         batch_in_file: Optional[str] = None,
@@ -2002,13 +2188,8 @@ class SynthesisStationController:
         from pathlib import Path
         import openpyxl
         import sys
-        from ..config.constants import (
-            RESOURCE_CODE_TO_MATERIAL_TYPE,
-            TB_CODE_TO_SYNTHESIS_TRAY,
-            TRAY_CODE_DISPLAY_NAME,
-        )
 
-        # 创建AGV控制器实例
+        # 创建 AGV 控制器实例
         sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
         from eit_agv.controller.agv_controller import AGVController
         agv_controller = AGVController()
@@ -2032,62 +2213,8 @@ class SynthesisStationController:
         finally:
             wb.close()
 
-        # 3. 解析上料信息
-        transfer_tasks_all = []
-        errors = []
-
-        for record in batch_records:
-            position = record["position"]  # TB-x-x
-            tray_type_text = record["tray_type"]
-            shelf_position = record["shelf_position"]
-
-            # 跳过没有 shelf_position 的行
-            if not shelf_position:
-                self._logger.warning(f"跳过没有 shelf_position 的行: {position}")
-                continue
-
-            # 3.1 解析托盘类型代码
-            # tray_type_text 格式: "托盘名称(代码)" 或 "托盘名称(代码) [范围]"
-            import re
-            match = re.search(r"\((\d+)\)", tray_type_text)
-            if not match:
-                error_msg = f"无法解析托盘类型代码: {tray_type_text}"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                continue
-
-            tray_type_code = int(match.group(1))
-
-            # 3.2 映射目标托盘位置: position (TB-x-x) -> synthesis_station_tray_x-x
-            target_tray = TB_CODE_TO_SYNTHESIS_TRAY.get(position)
-            if target_tray is None:
-                error_msg = f"无法映射上料位置 {position} 到合成工站托盘"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                continue
-
-            # 3.3 映射源托盘位置: shelf_position (x-x) -> shelf_tray_x-x
-            source_tray = f"shelf_tray_{shelf_position}"
-
-            # 3.4 映射物料类型
-            material_type = RESOURCE_CODE_TO_MATERIAL_TYPE.get(tray_type_code)
-            if material_type is None:
-                tray_type_name = TRAY_CODE_DISPLAY_NAME.get(tray_type_code, f"未知托盘({tray_type_code})")
-                self._logger.warning(
-                    f"未知的资源类型 {tray_type_code} ({tray_type_name}), 使用 None"
-                )
-
-            # 3.5 构建转运任务
-            task = {
-                "source_tray": source_tray,
-                "target_tray": target_tray,
-                "material_type": material_type,
-            }
-            transfer_tasks_all.append(task)
-            self._logger.info(
-                f"转运任务: {source_tray} -> {target_tray}, "
-                f"物料类型: {material_type}"
-            )
+        # 3. 解析上料信息 -> 转运任务
+        transfer_tasks_all, errors = self._build_agv_transfer_tasks(batch_records)
 
         if len(transfer_tasks_all) == 0:
             self._logger.warning("没有有效的转运任务")
@@ -2099,76 +2226,22 @@ class SynthesisStationController:
                 "errors": errors,
             }
 
-        # 3.6 检查过渡舱外门状态, 如果关闭则先开门
-        try:
-            device_status_list = self.list_device_status()
-            outer_door_status = None
-            for device in device_status_list:
-                if device.get("device_name") == "过渡舱外门":
-                    outer_door_status = device.get("status")
-                    break
+        # 4. 检查并打开过渡舱外门
+        door_errors = self._ensure_outer_door_open()
+        errors.extend(door_errors)
 
-            if outer_door_status == "CLOSE":
-                self._logger.info("过渡舱外门状态为关闭, 正在开门...")
-                door_result = self.open_close_door("open")
-                self._logger.info(f"开门操作完成: {door_result}")
-            elif outer_door_status == "OPEN":
-                self._logger.info("过渡舱外门已打开, 无需操作")
-            else:
-                self._logger.warning(f"过渡舱外门状态未知: {outer_door_status}")
-        except Exception as e:
-            error_msg = f"检查或操作过渡舱外门时发生异常: {str(e)}"
-            self._logger.error(error_msg)
-            errors.append(error_msg)
+        # 5. 分批执行 AGV 转运
+        transferred_count, batches_result, transfer_errors = (
+            self._execute_agv_transfer_batches(
+                transfer_tasks_all, agv_controller, block=block
+            )
+        )
+        errors.extend(transfer_errors)
 
-        # 4. 分批处理: AGV 一次最多转运 4 个托盘
-        batch_size = 4
-        batches_result = []
-        transferred_count = 0
-
-        for batch_index in range(0, len(transfer_tasks_all), batch_size):
-            batch_tasks = transfer_tasks_all[batch_index:batch_index + batch_size]
-            batch_num = batch_index // batch_size + 1
-
-            self._logger.info(f"开始执行第 {batch_num} 批转运, 共 {len(batch_tasks)} 个托盘")
-
-            try:
-                result = agv_controller.batch_transfer_materials(batch_tasks, block=block)
-
-                batch_result = {
-                    "batch_num": batch_num,
-                    "tasks": batch_tasks,
-                    "success": result,
-                }
-                batches_result.append(batch_result)
-
-                if result:
-                    transferred_count += len(batch_tasks)
-                    self._logger.info(f"第 {batch_num} 批转运成功")
-                else:
-                    error_msg = f"第 {batch_num} 批转运失败"
-                    self._logger.error(error_msg)
-                    errors.append(error_msg)
-                    # 立即停止后续批次
-                    break
-
-            except Exception as e:
-                error_msg = f"第 {batch_num} 批转运异常: {str(e)}"
-                self._logger.error(error_msg)
-                errors.append(error_msg)
-                batches_result.append(
-                    {
-                        "batch_num": batch_num,
-                        "tasks": batch_tasks,
-                        "success": False,
-                        "error": str(e),
-                    }
-                )
-                # 立即停止后续批次
-                break
-
-        # 5. 返回结果
-        success = transferred_count == len(transfer_tasks_all) and len(errors) == 0
+        # 6. 返回结果
+        success = (
+            transferred_count == len(transfer_tasks_all) and len(errors) == 0
+        )
 
         return {
             "success": success,
@@ -2177,7 +2250,7 @@ class SynthesisStationController:
             "batches": batches_result,
             "errors": errors,
         }
-    
+
     # ---------- 下料函数 ----------
     def batch_out_tray(
         self,

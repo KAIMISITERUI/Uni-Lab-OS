@@ -13,6 +13,26 @@
     python -m pytest eit_agv/tests/test_auto_charge_check.py -v
 """
 
+import unittest
+
+def load_tests(loader, tests, pattern):
+    """
+    功能:
+        兼容旧测试模块路径, 并避免在 unittest discover 时重复加载新回归用例.
+    参数:
+        loader: unittest 测试加载器.
+        tests: 默认测试集合.
+        pattern: 测试发现模式.
+    返回:
+        unittest.TestSuite, 直接运行旧模块时转发到新回归用例, discover 时返回空集合.
+    """
+    if pattern is not None:
+        return loader.suiteClass()
+
+    from eit_agv.tests import test_auto_charge_check_regression
+
+    return loader.loadTestsFromModule(test_auto_charge_check_regression)
+
 import json
 import os
 import tempfile

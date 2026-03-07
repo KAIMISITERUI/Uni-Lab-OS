@@ -350,10 +350,52 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info(f"化学品对齐完成并回写文件: {path}")
 
     # ---------- 2. 上料动作 ----------
+
+    def _read_batch_in_records(self, file_path: str) -> List[Dict[str, str]]:
+        """
+        功能:
+            读取上料表格文件(xlsx/csv), 返回标准化记录列表.
+        参数:
+            file_path: str, 上料文件路径.
+        返回:
+            List[Dict[str, str]], 包含 position, tray_type, content,
+            shelf_position, storage 字段的记录列表.
+        异常:
+            FileNotFoundError: 文件不存在时自动生成模板并抛出.
+        """
+        path = Path(file_path)
+        if not path.exists():
+            logger.warning(f"未找到{file_path}. 自动生成模板文件")
+            self._generate_batch_in_tray_template(path.with_suffix(".xlsx"))
+            raise FileNotFoundError(f"上料文件不存在: {file_path}")
+
+        if path.suffix == ".xlsx":
+            wb = openpyxl.load_workbook(path)
+            try:
+                ws, header_row, header_map = self._select_batch_in_sheet(wb)
+                records = self._iter_batch_in_records(ws, header_row, header_map)
+            finally:
+                wb.close()
+            return records
+        else:
+            # CSV 回退: 构造与 xlsx 相同的 dict 结构
+            df = pd.read_csv(path)
+            df = df.fillna("")
+            records: List[Dict[str, str]] = []
+            for _, row in df.iterrows():
+                records.append({
+                    "position": str(row[0]).strip(),
+                    "tray_type": str(row[1]).strip(),
+                    "content": str(row[2]).strip(),
+                    "shelf_position": str(row[3]).strip() if len(row) > 3 else "",
+                    "storage": str(row[4]).strip() if len(row) > 4 else "",
+                })
+            return records
+
     def batch_in_tray_by_file(self, file_path: str) -> JsonDict:
         """
         功能:
-            读取上料表格，转换为中间格式，调用父类生成 Payload 并执行上料
+            读取上料表格, 转换为中间格式, 调用父类生成 Payload 并执行上料
         参数:
             file_path: 文件路径
         返回:
@@ -366,7 +408,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             return {}
 
         rows: List[Tuple[str, str, str]] = []
-        
+
         # 读取文件
         if path.suffix == '.xlsx':
             wb = openpyxl.load_workbook(path)
@@ -400,85 +442,208 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         self,
         file_path: str = None,
         *,
-        block: bool = True
+        block: bool = True,
+        chamber_capacity: int = 8,
     ) -> JsonDict:
         """
         功能:
-            根据 batch_in_tray.xlsx 中的信息, 先使用 AGV 批量转移物料到合成工站,
-            然后让 AGV 前往充电站, 最后执行上料操作
+            根据 batch_in_tray.xlsx 中的信息, 分轮次(每轮最多 chamber_capacity 个托盘)
+            执行: 开过渡舱门 -> AGV 转运 -> 机器人上料.
+            全部轮次结束后 AGV 前往充电站.
+            当总托盘数 <= chamber_capacity 时, 行为与旧版本一致(单轮).
         参数:
             file_path: 上料文件路径, 默认为 sheet/batch_in_tray.xlsx
             block: 是否阻塞等待 AGV 转运完成
+            chamber_capacity: 过渡舱单次最大容纳托盘数, 默认 8
         返回:
-            Dict, 包含转运、充电和上料的结果:
-                - transfer_result: Dict, AGV 转运结果
+            Dict, 包含多轮次的聚合结果:
+                - success: bool, 是否全部轮次成功
+                - total_trays: int, 总托盘数
+                - transferred_trays: int, 成功转运的托盘数
+                - loaded_trays: int, 成功上料的托盘数
+                - rounds: List[Dict], 每轮次详情
                 - charging_result: Dict, AGV 充电结果
-                - in_tray_result: Dict, 上料结果
+                - errors: List[str], 所有错误信息
+                - message: str, 结果摘要
         """
-        # 设置默认文件路径
+        # 0. 默认文件路径
         if file_path is None:
             file_path = str(MODULE_ROOT / "sheet" / "batch_in_tray.xlsx")
 
-        # 1. 使用 AGV 批量转移物料到合成工站
-        logger.info("开始使用 AGV 批量转移物料到合成工站")
-        transfer_result = self.auto_load_trays_from_agv(
-            batch_in_file=file_path,
-            block=block
-        )
-
-        # 检查转运是否成功
-        if not transfer_result.get("success"):
-            logger.error("AGV 转运失败, 停止后续操作")
+        # 1. 一次性读取全部记录
+        try:
+            all_records = self._read_batch_in_records(file_path)
+        except FileNotFoundError:
             return {
-                "transfer_result": transfer_result,
+                "success": False,
+                "total_trays": 0,
+                "transferred_trays": 0,
+                "loaded_trays": 0,
+                "rounds": [],
                 "charging_result": None,
-                "in_tray_result": None,
-                "success": False,
-                "message": "AGV 转运失败"
+                "errors": ["上料文件不存在"],
+                "message": "上料文件不存在",
             }
 
-        logger.info(f"AGV 转运成功, 共转运 {transfer_result.get('transferred_trays')} 个托盘")
-
-        # 2. 让 AGV 前往充电站
-        logger.info("开始让 AGV 前往充电站")
-        charging_result = None
-        try:
-            import sys
-            from pathlib import Path
-            sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-            from eit_agv.controller.agv_controller import AGVController
-            agv_controller = AGVController()
-
-            charging_result = agv_controller.go_to_charging_station()
-            if charging_result is not None:
-                logger.info("AGV 已成功前往充电站")
-            else:
-                logger.warning("AGV 前往充电站失败, 但继续执行上料操作")
-        except Exception as e:
-            logger.error(f"AGV 前往充电站时发生异常: {e}, 但继续执行上料操作")
-
-        # 3. 执行上料操作
-        logger.info("开始执行上料操作")
-        in_tray_result = None
-        try:
-            in_tray_result = self.batch_in_tray_by_file(file_path)
-            logger.info(f"上料操作完成, 结果: {in_tray_result}")
-        except Exception as e:
-            logger.error(f"上料操作发生异常: {e}")
+        if not all_records:
+            logger.warning("上料记录为空")
             return {
-                "transfer_result": transfer_result,
-                "charging_result": charging_result,
-                "in_tray_result": None,
                 "success": False,
-                "message": f"上料操作失败: {e}"
+                "total_trays": 0,
+                "transferred_trays": 0,
+                "loaded_trays": 0,
+                "rounds": [],
+                "charging_result": None,
+                "errors": ["上料记录为空"],
+                "message": "上料记录为空",
             }
+
+        # 2. 创建 AGV 控制器(仅创建一次)
+        import sys
+        sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+        from eit_agv.controller.agv_controller import AGVController
+        agv_controller = AGVController()
+
+        # 3. 按 chamber_capacity 分轮
+        total_records = len(all_records)
+        rounds_result: List[JsonDict] = []
+        all_errors: List[str] = []
+        total_transferred = 0
+        total_loaded = 0
+        overall_success = True
+
+        for round_start in range(0, total_records, chamber_capacity):
+            round_end = min(round_start + chamber_capacity, total_records)
+            round_num = round_start // chamber_capacity + 1
+            round_records = all_records[round_start:round_end]
+
+            logger.info(
+                f"===== 第 {round_num} 轮上料开始 "
+                f"(记录 {round_start + 1}~{round_end}/{total_records}) ====="
+            )
+
+            # 3a. 打开过渡舱外门
+            door_errors = self._ensure_outer_door_open()
+            if door_errors:
+                all_errors.extend(door_errors)
+                logger.error(f"第 {round_num} 轮开门失败, 终止后续操作")
+                rounds_result.append({
+                    "round_num": round_num,
+                    "success": False,
+                    "phase": "open_door",
+                    "errors": door_errors,
+                })
+                overall_success = False
+                break
+
+            # 3b. AGV 转运本轮托盘(内部按 4 个一批)
+            round_tasks, build_errors = self._build_agv_transfer_tasks(round_records)
+            all_errors.extend(build_errors)
+
+            transferred = 0
+            batches: List[JsonDict] = []
+            if round_tasks:
+                transferred, batches, transfer_errors = (
+                    self._execute_agv_transfer_batches(
+                        round_tasks, agv_controller, block=block
+                    )
+                )
+                total_transferred += transferred
+                all_errors.extend(transfer_errors)
+
+                if transfer_errors:
+                    logger.error(f"第 {round_num} 轮 AGV 转运失败, 终止后续操作")
+                    rounds_result.append({
+                        "round_num": round_num,
+                        "success": False,
+                        "phase": "agv_transfer",
+                        "transferred": transferred,
+                        "batches": batches,
+                        "errors": transfer_errors,
+                    })
+                    overall_success = False
+                    break
+
+            # 3c. AGV 转运完成后先回充电站等待, 机器人上料期间 AGV 充电
+            try:
+                charging_result = agv_controller.go_to_charging_station()
+                if charging_result is not None:
+                    logger.info(f"第 {round_num} 轮 AGV 已返回充电站")
+                else:
+                    logger.warning(f"第 {round_num} 轮 AGV 返回充电站失败")
+            except Exception as e:
+                logger.warning(f"第 {round_num} 轮 AGV 返回充电站异常: {e}, 继续执行上料")
+
+            # 3d. 执行本轮上料(机器人将托盘从过渡舱搬到工位)
+            round_rows = [
+                (r["position"], r["tray_type"], r["content"])
+                for r in round_records
+            ]
+            payload = self.build_batch_in_tray_payload(round_rows)
+
+            in_tray_result = None
+            if payload:
+                try:
+                    in_tray_result = self.batch_in_tray(payload)
+                    total_loaded += len(round_rows)
+                    logger.info(f"第 {round_num} 轮上料完成")
+                except Exception as e:
+                    error_msg = f"第 {round_num} 轮上料异常: {e}"
+                    logger.error(error_msg)
+                    all_errors.append(error_msg)
+                    rounds_result.append({
+                        "round_num": round_num,
+                        "success": False,
+                        "phase": "in_tray",
+                        "transferred": transferred,
+                        "batches": batches,
+                        "in_tray_result": None,
+                        "errors": [error_msg],
+                    })
+                    overall_success = False
+                    break
+            else:
+                logger.warning(f"第 {round_num} 轮上料 payload 为空, 跳过上料")
+
+            # 本轮成功
+            rounds_result.append({
+                "round_num": round_num,
+                "success": True,
+                "phase": "completed",
+                "transferred": transferred,
+                "batches": batches,
+                "in_tray_result": in_tray_result,
+                "loaded_count": len(round_rows),
+            })
+
+            logger.info(f"===== 第 {round_num} 轮上料完成 =====")
+
+        # 4. 确保 AGV 在充电站(正常流程中每轮转运后已回充电站, 此处为保底)
+        final_charging_result = None
+        try:
+            final_charging_result = agv_controller.go_to_charging_station()
+            if final_charging_result is not None:
+                logger.info("AGV 已确认在充电站")
+            else:
+                logger.warning("AGV 返回充电站失败")
+        except Exception as e:
+            logger.error(f"AGV 返回充电站时发生异常: {e}")
+
+        # 5. 聚合返回
+        overall_success = overall_success and len(all_errors) == 0
 
         return {
-            "transfer_result": transfer_result,
-            "charging_result": charging_result,
-            "in_tray_result": in_tray_result,
-            "success": True,
-            "message": "AGV 转运、充电和上料操作全部完成"
+            "success": overall_success,
+            "total_trays": total_records,
+            "transferred_trays": total_transferred,
+            "loaded_trays": total_loaded,
+            "rounds": rounds_result,
+            "charging_result": final_charging_result,
+            "errors": all_errors,
+            "message": (
+                "全部轮次完成" if overall_success
+                else f"执行过程中出现错误, 完成 {len([r for r in rounds_result if r.get('success')])} 轮"
+            ),
         }
 
     def _generate_batch_in_tray_template(self, file_path: Path) -> None:
@@ -1208,10 +1373,13 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 }
 
         # 4. 准备料盘规格信息和位置管理
+        # TB 位共 8 个, 上料完成后空出可复用; 货架共 3 行 × 4 列 = 12 个位置
         position_list = ["TB-2-1", "TB-2-2", "TB-2-3", "TB-2-4",
-                        "TB-1-1", "TB-1-2", "TB-1-3", "TB-1-4"]
+                         "TB-1-1", "TB-1-2", "TB-1-3", "TB-1-4",
+                         "TB-2-1", "TB-2-2", "TB-2-3", "TB-2-4"]
         shelf_position_list = ["3-1", "3-2", "3-3", "3-4",
-                              "2-1", "2-2", "2-3", "2-4"]
+                               "2-1", "2-2", "2-3", "2-4",
+                               "1-1", "1-2", "1-3", "1-4"]
 
         # 料盘类型到规格的映射
         tray_spec_map = {
@@ -1229,8 +1397,11 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             int(ResourceCode.TIP_TRAY_5ML): TraySpec.TIP_TRAY_5ML,
         }
 
-        # 跟踪每种料盘类型的使用情况: {tray_type_code: [(position, shelf_position, current_slot_index, max_slots)]}
+        # 跟踪每种料盘类型的使用情况:
+        # {tray_type_code: [(position, shelf_position, current_slot_index, max_slots, alloc_idx)]}
         tray_usage = {}
+        # 按索引追踪已分配的位置, 避免 TB 位复用时误判
+        allocated_position_indices: set = set()
 
         def _get_slot_name(slot_index: int, cols: int, rows: int) -> str:
             """
@@ -1251,7 +1422,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         def _allocate_slot(tray_type_code: int, tray_type_name: str) -> Tuple[str, str, str]:
             """
             功能:
-                为指定料盘类型分配一个坑位
+                为指定料盘类型分配一个坑位.
+                优先填满已有的未满料盘, 否则从位置列表中分配新位置.
+                使用索引追踪已分配位置, 支持 TB 位跨轮次复用.
             参数:
                 tray_type_code: 料盘类型代码
                 tray_type_name: 料盘类型名称
@@ -1272,7 +1445,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
             # 查找是否有未满的料盘
             for tray_info in tray_usage[tray_type_code]:
-                position, shelf_position, current_slot, max_slots_in_tray = tray_info
+                position, shelf_position, current_slot, max_slots_in_tray = tray_info[:4]
                 if current_slot < max_slots_in_tray:
                     # 找到未满的料盘, 分配下一个坑位
                     slot_name = _get_slot_name(current_slot, cols, rows)
@@ -1280,31 +1453,26 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                     logger.info(f"使用现有料盘 {position}, 坑位 {slot_name}")
                     return position, shelf_position, slot_name
 
-            # 没有未满的料盘, 需要分配新位置
-            if len(tray_usage[tray_type_code]) >= len(position_list):
-                raise ValueError(f"可用位置已用完, 无法分配新料盘")
-
-            # 找到下一个可用位置
-            used_positions = set()
-            for trays in tray_usage.values():
-                for tray_info in trays:
-                    used_positions.add(tray_info[0])
-
-            new_position = None
-            new_shelf_position = None
-            for i, pos in enumerate(position_list):
-                if pos not in used_positions:
-                    new_position = pos
-                    new_shelf_position = shelf_position_list[i]
+            # 没有未满的料盘, 需要分配新位置(按索引遍历)
+            new_idx = None
+            for i in range(len(position_list)):
+                if i not in allocated_position_indices:
+                    new_idx = i
                     break
 
-            if new_position is None:
-                raise ValueError(f"可用位置已用完, 无法分配新料盘")
+            if new_idx is None:
+                raise ValueError("可用位置已用完, 无法分配新料盘")
+
+            allocated_position_indices.add(new_idx)
+            new_position = position_list[new_idx]
+            new_shelf_position = shelf_position_list[new_idx]
 
             # 创建新料盘记录
             slot_name = _get_slot_name(0, cols, rows)
-            tray_usage[tray_type_code].append([new_position, new_shelf_position, 1, max_slots])
-            logger.info(f"分配新料盘 {new_position}, 类型 {tray_type_name}")
+            tray_usage[tray_type_code].append(
+                [new_position, new_shelf_position, 1, max_slots, new_idx]
+            )
+            logger.info(f"分配新料盘 {new_position}(shelf {new_shelf_position}), 类型 {tray_type_name}")
             return new_position, new_shelf_position, slot_name
 
         def _normalize_consumable_name(raw_name: str) -> str:
@@ -1423,17 +1591,19 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             # 生成单个坑位的内容: "坑位|物质名|数量单位"
             slot_content = f"{slot_name}|{substance}|{amount_display}{final_unit}"
 
-            # 按位置分组
-            if position not in position_groups:
-                position_groups[position] = {
+            # 按位置+货架分组(同一 TB 位在不同轮次对应不同货架, 需区分)
+            tray_key = f"{position}_{shelf_position}"
+            if tray_key not in position_groups:
+                position_groups[tray_key] = {
+                    "position": position,
                     "tray_type": tray_type_name,
                     "contents": [],
                     "shelf_position": shelf_position,
                     "storages": []
                 }
 
-            position_groups[position]["contents"].append(slot_content)
-            position_groups[position]["storages"].append(f"{substance}|{storage_location if storage_location else '未知'}")
+            position_groups[tray_key]["contents"].append(slot_content)
+            position_groups[tray_key]["storages"].append(f"{substance}|{storage_location if storage_location else '未知'}")
             logger.info(f"添加固体上料项: {substance} -> {position} {slot_name}, {final_amount}{final_unit}")
 
         # 第三遍: 处理液体
@@ -1503,17 +1673,19 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             # 生成单个坑位的内容: "坑位|物质名|数量单位"
             slot_content = f"{slot_name}|{substance}|{amount_display}{final_unit}"
 
-            # 按位置分组
-            if position not in position_groups:
-                position_groups[position] = {
+            # 按位置+货架分组(同一 TB 位在不同轮次对应不同货架, 需区分)
+            tray_key = f"{position}_{shelf_position}"
+            if tray_key not in position_groups:
+                position_groups[tray_key] = {
+                    "position": position,
                     "tray_type": tray_type_name,
                     "contents": [],
                     "shelf_position": shelf_position,
                     "storages": []
                 }
 
-            position_groups[position]["contents"].append(slot_content)
-            position_groups[position]["storages"].append(f"{substance}|{storage_location if storage_location else '未知'}")
+            position_groups[tray_key]["contents"].append(slot_content)
+            position_groups[tray_key]["storages"].append(f"{substance}|{storage_location if storage_location else '未知'}")
             logger.info(f"添加液体上料项: {substance} -> {position} {slot_name}, {final_amount}{final_unit}")
 
         # 第四遍: 处理耗材
@@ -1564,17 +1736,19 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             # 耗材的content格式: 满盘数量
             slot_content = str(full_tray_capacity)
 
-            # 按位置分组
-            if position not in position_groups:
-                position_groups[position] = {
+            # 按位置+货架分组(同一 TB 位在不同轮次对应不同货架, 需区分)
+            tray_key = f"{position}_{shelf_position}"
+            if tray_key not in position_groups:
+                position_groups[tray_key] = {
+                    "position": position,
                     "tray_type": tray_type_name,
                     "contents": [],
                     "shelf_position": shelf_position,
                     "storages": []
                 }
 
-            position_groups[position]["contents"].append(slot_content)
-            position_groups[position]["storages"].append(f"{consumable_display_name}|耗材库")
+            position_groups[tray_key]["contents"].append(slot_content)
+            position_groups[tray_key]["storages"].append(f"{consumable_display_name}|耗材库")
             logger.info(
                 "添加耗材上料项: %s -> %s, 标准名=%s, 满盘数量 %s(需求 %s)",
                 substance,
@@ -1597,13 +1771,13 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         # 6. 合并同一位置的内容并生成最终数据
         batch_in_data = []
-        for position in sorted(position_groups.keys()):
-            group = position_groups[position]
+        for tray_key in sorted(position_groups.keys()):
+            group = position_groups[tray_key]
             # 用分号连接同一料盘的所有坑位
             combined_content = ";".join(group["contents"])
             combined_storage = ";".join(group["storages"])
             batch_in_data.append({
-                "position": position,
+                "position": group["position"],
                 "tray_type": group["tray_type"],
                 "content": combined_content,
                 "shelf_position": group["shelf_position"],

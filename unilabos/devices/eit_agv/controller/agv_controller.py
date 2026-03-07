@@ -468,7 +468,7 @@ class AGVController:
             logger.debug(f"目标位姿: {lift_pose}")
             result = self.arm.move_linear(
                 pose=lift_pose,
-                v=tray_position.speed * 0.5,
+                v=tray_position.speed * 0.25,
                 a=tray_position.acceleration,
                 block=block
             )
@@ -921,9 +921,12 @@ class AGVController:
                 1. AGV导航任务正在运行(WAITING/RUNNING/SUSPENDED)
             主要逻辑:
                 - 不在CP6         → 不执行任何操作(not_at_cp6)
-                - 在CP6且电量<50% → 执行充电循环CP6->PP5->CP6
+                - 在CP6且电量<50%:
+                    - 先查询完整电池状态, 已在充电则跳过进出站(already_charging)
+                    - 无法确认是否正在充电则保守跳过(charging_state_unknown)
+                    - 未在充电时执行充电循环CP6->PP5->CP6
                     - 到达PP5后检查设备状态, 非空闲则认为被接管, 跳过后续(intercepted_after_pp5)
-                    - 返回CP6后查询完整电池状态, 确认是否正在充电(charge_cycle_completed)
+                    - 返回CP6后再次查询完整电池状态, 确认是否正在充电(charge_cycle_completed)
                 - 在CP6且电量>=50%→ 无需动作(battery_sufficient)
         参数:
             无
@@ -932,7 +935,7 @@ class AGVController:
                 - status: "success" / "skipped" / "error"
                 - action: 执行的动作标识
                 - battery_level: 电池电量(查询成功时包含)
-                - charging: 是否正在充电(充电循环完成时包含)
+                - charging: 是否正在充电(相关分支时包含)
                 - message: 详细信息
         """
         logger.info("开始自动充电检查")
@@ -997,7 +1000,30 @@ class AGVController:
 
             # 步骤4: 已在CP6, 电量低则执行充电循环
             if battery_level < 0.5:
-                logger.info(f"电池电量{battery_level * 100:.1f}%低于50%, 开始充电循环")
+                logger.info("步骤4: 电量低于50%, 先确认当前是否正在充电")
+                battery_full_info = self.query_battery_status(simple=False)
+                charging_flag = battery_full_info.get("charging") if battery_full_info is not None else None
+
+                if charging_flag is None:
+                    logger.warning("无法确认AGV当前是否正在充电, 本次不执行进出站")
+                    return {
+                        "status": "skipped",
+                        "action": "charging_state_unknown",
+                        "battery_level": battery_level,
+                        "message": "无法确认是否正在充电, 本次不执行进出站"
+                    }
+
+                if charging_flag is True:
+                    logger.info("检测到AGV当前已在充电, 跳过CP6->PP5->CP6充电循环")
+                    return {
+                        "status": "success",
+                        "action": "already_charging",
+                        "battery_level": battery_level,
+                        "charging": True,
+                        "message": f"电量{battery_level * 100:.1f}%低于50%, 但当前已在充电, 跳过CP6->PP5->CP6"
+                    }
+
+                logger.info(f"电池电量{battery_level * 100:.1f}%低于50%, 当前未在充电, 开始充电循环")
 
                 # 步骤4.1: 移动到PP5充电过渡点
                 logger.info("步骤4.1: 移动到PP5充电过渡点")
@@ -2010,7 +2036,8 @@ class AGVController:
                 logger.info(f"执行站点{station_id}点位校准")
                 calibration_result = self.calibrate_station(block=block)
                 if calibration_result is None:
-                    logger.warning(f"站点{station_id}校准失败, 使用原有校准数据")
+                    logger.error(f"站点{station_id}校准失败, 停止运行")
+                    return False
                 else:
                     logger.info(f"站点{station_id}校准成功")
 
@@ -2060,7 +2087,8 @@ class AGVController:
                 logger.info(f"执行站点{station_id}点位校准")
                 calibration_result = self.calibrate_station(block=block)
                 if calibration_result is None:
-                    logger.warning(f"站点{station_id}校准失败, 使用原有校准数据")
+                    logger.error(f"站点{station_id}校准失败, 停止运行")
+                    return False
                 else:
                     logger.info(f"站点{station_id}校准成功")
 
@@ -2456,9 +2484,8 @@ class AGVController:
                     vision_offset = calibration_result
                     logger.info(f"视觉补偿完成, 偏移量: x={vision_offset['x']:.3f}, y={vision_offset['y']:.3f}, z={vision_offset['z']:.3f}")
                 else:
-                    logger.warning("视觉补偿校准失败, 继续使用原有校准数据")
-                    # 尝试获取已有的校准偏移量
-                    vision_offset = self.position_manager.get_calibration_offset(selected_station)
+                    logger.error("视觉补偿校准失败, 停止运行")
+                    return None
 
         # 步骤3: 获取该工站的所有点位供用户选择
         tray_positions = self.position_manager.get_category('tray_position')
@@ -2716,7 +2743,8 @@ class AGVController:
 
             calibration_result = self.calibrate_station(block=block)
             if calibration_result is None:
-                logger.warning("点位校准失败, 使用原有校准数据继续测试")
+                logger.error("点位校准失败, 停止测试")
+                return results
             else:
                 logger.info(f"点位校准成功: x={calibration_result['x']:.3f}, y={calibration_result['y']:.3f}, z={calibration_result['z']:.3f}")
 
@@ -4065,9 +4093,10 @@ def main():
             # 自动充电检查(单次)
             print("\n--- 自动充电检查 ---")
             print("说明: 执行一次充电检查")
-            print("  - 如果不在CP6, 则移动到CP6")
-            print("  - 如果在CP6, 查询电池电量")
-            print("  - 如果电量低于50%, 则执行充电循环(CP6->PP5->CP6)")
+            print("  - 如果不在CP6, 则跳过本次检查")
+            print("  - 如果在CP6, 先查询电池电量")
+            print("  - 如果电量低于50%, 先确认是否已在充电")
+            print("  - 仅在未充电时执行充电循环(CP6->PP5->CP6)")
 
             try:
                 result = controller.auto_charge_check()
