@@ -394,6 +394,35 @@ class PeakIntegrator:
         net_signal = np.maximum(net_signal, 0)
         return float(np.trapz(net_signal, times * 60.0))
 
+    @staticmethod
+    def _integrate_with_baseline_array(
+        times: np.ndarray,
+        intensities: np.ndarray,
+        baseline: np.ndarray,
+    ) -> float:
+        """
+        功能:
+            使用给定基线数组进行逐点扣基线积分.
+        参数:
+            times: 峰段时间数组(min).
+            intensities: 峰段原始强度数组.
+            baseline: 与峰段等长的全局基线数组.
+        返回:
+            float, 峰面积.
+        """
+        if len(times) < 2:
+            return 0.0
+
+        if len(times) != len(intensities) or len(times) != len(baseline):
+            return 0.0
+
+        if np.any(~np.isfinite(intensities)) or np.any(~np.isfinite(baseline)):
+            return 0.0
+
+        net_signal = intensities - baseline
+        net_signal = np.maximum(net_signal, 0.0)
+        return float(np.trapz(net_signal, times * 60.0))
+
     def _find_legacy_boundaries(
         self,
         signal: np.ndarray,
@@ -758,6 +787,7 @@ class PeakIntegrator:
 
         self.last_baseline = baseline
         corrected_signal = np.maximum(smoothed_signal - baseline, 0)
+        baseline_available = baseline is not None and len(baseline) == len(intensities)
 
         peak_indices, _ = find_peaks(
             corrected_signal,
@@ -785,7 +815,26 @@ class PeakIntegrator:
 
             peak_times = times[left_idx:right_idx + 1]
             peak_intensities = intensities[left_idx:right_idx + 1]
-            area = self._integrate_with_local_baseline(peak_times, peak_intensities)
+            if baseline_available:
+                peak_baseline = baseline[left_idx:right_idx + 1]
+                if len(peak_baseline) == len(peak_times) and np.all(np.isfinite(peak_baseline)):
+                    area = self._integrate_with_baseline_array(
+                        peak_times,
+                        peak_intensities,
+                        peak_baseline,
+                    )
+                else:
+                    logger.warning(
+                        "RT=%.3f 的全局基线片段无效, 已回退到局部端点基线积分.",
+                        float(times[int(peak_idx)]),
+                    )
+                    area = self._integrate_with_local_baseline(peak_times, peak_intensities)
+            else:
+                logger.warning(
+                    "RT=%.3f 缺少可用全局基线, 已回退到局部端点基线积分.",
+                    float(times[int(peak_idx)]),
+                )
+                area = self._integrate_with_local_baseline(peak_times, peak_intensities)
 
             results.append(
                 self._build_peak_result(

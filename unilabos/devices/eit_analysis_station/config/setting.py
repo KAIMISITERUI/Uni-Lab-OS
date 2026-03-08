@@ -106,6 +106,7 @@ class Settings:
     mspepsearch_timeout: float = 120.0  # MSPepSearch 超时秒数, 调大可降低复杂谱图超时失败.
 
     # ---------- 峰检测与积分参数 ----------
+    integration_mode: str = "robust_v2"  # 处理模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
     peak_prominence: float = 10000.0  # TIC 最小峰显著性阈值, 调高会减少弱峰识别.
     peak_min_distance: int = 5  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
@@ -120,7 +121,6 @@ class Settings:
     use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
     # ---------- robust_v2 参数 ----------
-    integration_mode: str = "robust_v2"  # 积分模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     baseline_method: str = "rolling_quantile"  # robust_v2 基线方法, 修改后改变背景估计方式.
     baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
     baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.
@@ -128,14 +128,14 @@ class Settings:
     boundary_edge_ratio: float = 0.005  # 边缘阈值比例, 调整后影响峰起止截断位置.
     boundary_expand_factor: float = 6.0  # 边界扩展系数, 调大可覆盖更多拖尾区域.
     boundary_min_span_min: float = 0.08  # 峰最小宽度(min), 调大可过滤过窄噪声峰.
-    boundary_max_span_min: float = 1.00  # 峰最大宽度(min), 调小可抑制异常宽峰.
+    boundary_max_span_min: float = 2.00  # 峰最大宽度(min), 调小可抑制异常宽峰.
 
     # ---------- gcpy 参数 ----------
     gcpy_whittaker_lmbd: float = 10.0  # gcpy 模式 Whittaker 平滑参数, 调大可使信号更平滑.
 
     # ---------- 峰过滤参数 ----------
     peak_rt_min: Optional[float] = 4.0  # 峰保留时间下限(min), 调大可忽略前段溶剂峰.
-    peak_rt_max: Optional[float] = 20.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
+    peak_rt_max: Optional[float] = 10.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
     tic_area_min: Optional[float] = 10000.0  # TIC 峰面积下限, 调大可过滤小面积峰.
     tic_area_max: Optional[float] = None  # TIC 峰面积上限, 设置后可过滤过载峰.
     fid_area_min: Optional[float] = 0.01  # FID 峰面积下限, 调大可过滤微小峰.

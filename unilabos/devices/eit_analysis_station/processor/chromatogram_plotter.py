@@ -86,7 +86,7 @@ class ChromatogramPlotter:
             rt_min: X 轴最小保留时间 (min), None 使用数据范围.
             rt_max: X 轴最大保留时间 (min), None 使用数据范围.
             y_range_min: Y 轴最小显示范围, 确保小信号图不会过于压缩.
-            baseline: ALS 基线数组, 与 times/intensities 等长. 提供时用于峰区域填充,
+            baseline: 全局基线数组, 与 times/intensities 等长. 提供时用于峰区域填充,
                       None 时回退到峰端点连线基线.
             fill_baseline_mode: 填充基线模式, local 表示局部端点连线, global 表示优先使用传入 baseline.
         返回:
@@ -113,7 +113,7 @@ class ChromatogramPlotter:
                 peak_times = times[mask]
                 peak_intensities = intensities[mask]
                 if global_baseline_valid:
-                    peak_baseline = baseline[mask]
+                    peak_baseline = np.minimum(baseline[mask], peak_intensities)
                 else:
                     # 默认使用局部端点连线, 与积分算法保持一致.
                     peak_baseline = np.linspace(

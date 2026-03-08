@@ -17,6 +17,7 @@ import pickle
 import re
 import shutil
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 # 无效 CAS 号模式, 跳过查询.
 _INVALID_CAS_PATTERNS = {"", "0", "0-00-0", "---", "N/A", "n/a"}
 _MSP_SEQ_REGEX = re.compile(r"NIST\s+MS#\s*(\d+).*?Seq#\s*([MR])\s*(\d+)", re.IGNORECASE)
-_RUNTIME_CACHE_VERSION = 2
+_RUNTIME_CACHE_VERSION = 3
 
 
 def _normalize_cas_digits(cas_number: str) -> str:
@@ -45,6 +46,34 @@ def _normalize_cas_digits(cas_number: str) -> str:
 def _sanitize_cas(cas_number: str) -> str:
     """将 CAS 号转为合法文件名, 如 '74-95-3' -> '74-95-3'."""
     return re.sub(r"[^\d\-]", "_", cas_number.strip())
+
+
+def _normalize_inchikey(inchikey: str) -> str:
+    """
+    功能:
+        规范化 InChIKey, 去除空白并转为大写.
+    参数:
+        inchikey: 原始 InChIKey 字符串.
+    返回:
+        str, 规范化后的 InChIKey, 空值返回空字符串.
+    """
+    return re.sub(r"\s+", "", str(inchikey).strip()).upper()
+
+
+def _sanitize_identifier(identifier: str) -> str:
+    """
+    功能:
+        将任意查询标识转换为安全文件名片段.
+    参数:
+        identifier: 原始查询标识, 如 InChIKey 或化合物名.
+    返回:
+        str, 适合作为文件名的字符串.
+    """
+    sanitized = re.sub(r"[^A-Za-z0-9._\-]+", "_", str(identifier).strip())
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    if sanitized == "":
+        return "query"
+    return sanitized
 
 
 def build_structure_key(nist_id: Optional[int], cas_number: str) -> Optional[str]:
@@ -113,6 +142,21 @@ def _render_rdkit_mol_to_png_bytes(
         return None
 
 
+@dataclass(frozen=True)
+class PubChemQueryCandidate:
+    """
+    功能:
+        描述一次 PubChem 结构查询候选项.
+    参数:
+        query_type: 查询类型, 支持 inchikey/name/cas.
+        identifier: 查询值.
+    返回:
+        PubChemQueryCandidate.
+    """
+    query_type: str
+    identifier: str
+
+
 class NistLocalStructureFetcher:
     """
     功能:
@@ -164,6 +208,9 @@ class NistLocalStructureFetcher:
         self._by_nist_ms: Dict[str, str] = {}
         self._by_seq_mainlib: Dict[str, str] = {}
         self._by_seq_replib: Dict[str, str] = {}
+        self._inchikey_by_nist_ms: Dict[str, str] = {}
+        self._inchikey_by_seq_mainlib: Dict[str, str] = {}
+        self._inchikey_by_seq_replib: Dict[str, str] = {}
         self._load_runtime_mapping()
 
         self._fallback_fetcher: Optional[StructureFetcher] = None
@@ -279,58 +326,93 @@ class NistLocalStructureFetcher:
             if self._try_load_runtime_cache() is True:
                 return
 
-        by_nist_ms, by_seq_mainlib, by_seq_replib = self._build_runtime_mapping_from_seed()
+        (
+            by_nist_ms,
+            by_seq_mainlib,
+            by_seq_replib,
+            inchikey_by_nist_ms,
+            inchikey_by_seq_mainlib,
+            inchikey_by_seq_replib,
+        ) = self._build_runtime_mapping_from_seed()
         self._by_nist_ms = by_nist_ms
         self._by_seq_mainlib = by_seq_mainlib
         self._by_seq_replib = by_seq_replib
+        self._inchikey_by_nist_ms = inchikey_by_nist_ms
+        self._inchikey_by_seq_mainlib = inchikey_by_seq_mainlib
+        self._inchikey_by_seq_replib = inchikey_by_seq_replib
 
         if self._runtime_cache_path is not None:
             self._save_runtime_cache()
 
         logger.info(
-            "运行时结构映射构建完成: NIST键=%d, mainlib序号键=%d, replib序号键=%d",
+            "运行时结构映射构建完成: NIST键=%d, mainlib序号键=%d, replib序号键=%d, InChIKey(mainlib)=%d, InChIKey(replib)=%d",
             len(self._by_nist_ms),
             len(self._by_seq_mainlib),
             len(self._by_seq_replib),
+            len(self._inchikey_by_seq_mainlib),
+            len(self._inchikey_by_seq_replib),
         )
 
-    def _build_runtime_mapping_from_seed(self) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+    def _build_runtime_mapping_from_seed(
+        self,
+    ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
         """
         功能:
             从 seed MSP 与 seed MOL 构建运行时映射.
         参数:
             无.
         返回:
-            Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
-                by_nist_ms, by_seq_mainlib, by_seq_replib.
+            Tuple[Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
+                by_nist_ms, by_seq_mainlib, by_seq_replib,
+                inchikey_by_nist_ms, inchikey_by_seq_mainlib, inchikey_by_seq_replib.
         """
         by_nist_ms: Dict[str, str] = {}
         by_seq_mainlib: Dict[str, str] = {}
         by_seq_replib: Dict[str, str] = {}
+        inchikey_by_nist_ms: Dict[str, str] = {}
+        inchikey_by_seq_mainlib: Dict[str, str] = {}
+        inchikey_by_seq_replib: Dict[str, str] = {}
 
         if self._seed_msp_path is None:
-            return by_nist_ms, by_seq_mainlib, by_seq_replib
+            return (
+                by_nist_ms,
+                by_seq_mainlib,
+                by_seq_replib,
+                inchikey_by_nist_ms,
+                inchikey_by_seq_mainlib,
+                inchikey_by_seq_replib,
+            )
         if self._seed_msp_path.exists() is False:
-            return by_nist_ms, by_seq_mainlib, by_seq_replib
+            return (
+                by_nist_ms,
+                by_seq_mainlib,
+                by_seq_replib,
+                inchikey_by_nist_ms,
+                inchikey_by_seq_mainlib,
+                inchikey_by_seq_replib,
+            )
 
         available_cas_digits = self._scan_seed_mol_cas_digits()
 
         current_cas_digits = ""
+        current_inchikey = ""
         with self._seed_msp_path.open("r", encoding="utf-8", errors="replace") as handle:
             for raw_line in handle:
                 line = raw_line.strip()
                 if line == "":
                     current_cas_digits = ""
+                    current_inchikey = ""
                     continue
 
                 if line.startswith("CASNO:"):
                     cas_raw = line.split(":", 1)[1]
                     current_cas_digits = _normalize_cas_digits(cas_raw)
                     continue
+                if line.startswith("InChIKey:"):
+                    current_inchikey = _normalize_inchikey(line.split(":", 1)[1])
+                    continue
 
                 if line.startswith("Comment:") is False:
-                    continue
-                if current_cas_digits == "":
                     continue
                 match = _MSP_SEQ_REGEX.search(line)
                 if match is None:
@@ -340,15 +422,21 @@ class NistLocalStructureFetcher:
                 seq_prefix = match.group(2).upper()
                 seq_id = str(int(match.group(3)))
 
-                if nist_ms not in by_nist_ms:
+                if current_cas_digits != "" and nist_ms not in by_nist_ms:
                     by_nist_ms[nist_ms] = current_cas_digits
+                if current_inchikey != "" and nist_ms not in inchikey_by_nist_ms:
+                    inchikey_by_nist_ms[nist_ms] = current_inchikey
 
                 if seq_prefix == "M":
-                    if seq_id not in by_seq_mainlib:
+                    if current_cas_digits != "" and seq_id not in by_seq_mainlib:
                         by_seq_mainlib[seq_id] = current_cas_digits
+                    if current_inchikey != "" and seq_id not in inchikey_by_seq_mainlib:
+                        inchikey_by_seq_mainlib[seq_id] = current_inchikey
                 elif seq_prefix == "R":
-                    if seq_id not in by_seq_replib:
+                    if current_cas_digits != "" and seq_id not in by_seq_replib:
                         by_seq_replib[seq_id] = current_cas_digits
+                    if current_inchikey != "" and seq_id not in inchikey_by_seq_replib:
+                        inchikey_by_seq_replib[seq_id] = current_inchikey
 
         if len(available_cas_digits) > 0:
             logger.info(
@@ -357,7 +445,14 @@ class NistLocalStructureFetcher:
                 len(available_cas_digits),
             )
 
-        return by_nist_ms, by_seq_mainlib, by_seq_replib
+        return (
+            by_nist_ms,
+            by_seq_mainlib,
+            by_seq_replib,
+            inchikey_by_nist_ms,
+            inchikey_by_seq_mainlib,
+            inchikey_by_seq_replib,
+        )
 
     def _scan_seed_mol_cas_digits(self) -> Set[str]:
         """
@@ -423,12 +518,17 @@ class NistLocalStructureFetcher:
         self._by_nist_ms = self._sanitize_mapping_dict(payload.get("by_nist_ms"))
         self._by_seq_mainlib = self._sanitize_mapping_dict(payload.get("by_seq_mainlib"))
         self._by_seq_replib = self._sanitize_mapping_dict(payload.get("by_seq_replib"))
+        self._inchikey_by_nist_ms = self._sanitize_mapping_dict(payload.get("inchikey_by_nist_ms"))
+        self._inchikey_by_seq_mainlib = self._sanitize_mapping_dict(payload.get("inchikey_by_seq_mainlib"))
+        self._inchikey_by_seq_replib = self._sanitize_mapping_dict(payload.get("inchikey_by_seq_replib"))
 
         logger.info(
-            "已加载运行时结构映射缓存: NIST键=%d, mainlib序号键=%d, replib序号键=%d, 缓存=%s",
+            "已加载运行时结构映射缓存: NIST键=%d, mainlib序号键=%d, replib序号键=%d, InChIKey(mainlib)=%d, InChIKey(replib)=%d, 缓存=%s",
             len(self._by_nist_ms),
             len(self._by_seq_mainlib),
             len(self._by_seq_replib),
+            len(self._inchikey_by_seq_mainlib),
+            len(self._inchikey_by_seq_replib),
             self._runtime_cache_path,
         )
         return True
@@ -513,6 +613,9 @@ class NistLocalStructureFetcher:
                 "by_nist_ms": self._by_nist_ms,
                 "by_seq_mainlib": self._by_seq_mainlib,
                 "by_seq_replib": self._by_seq_replib,
+                "inchikey_by_nist_ms": self._inchikey_by_nist_ms,
+                "inchikey_by_seq_mainlib": self._inchikey_by_seq_mainlib,
+                "inchikey_by_seq_replib": self._inchikey_by_seq_replib,
             }
             with self._runtime_cache_path.open("wb") as handle:
                 pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -605,6 +708,61 @@ class NistLocalStructureFetcher:
             return self._by_seq_mainlib.get(sequence_key, "")
         if normalized_library == "replib":
             return self._by_seq_replib.get(sequence_key, "")
+        return ""
+
+    def _resolve_seed_inchikey(self, match: CompoundMatch) -> str:
+        """
+        功能:
+            根据命中结果推导用于 PubChem 精确查询的 InChIKey.
+            优先级:
+            1. 命中项自带 InChIKey.
+            2. library + Id(Seq#) 映射.
+            3. 当库类型未知时, 按 NIST MS# 映射.
+        参数:
+            match: 单个化合物命中.
+        返回:
+            str, 规范化后的 InChIKey. 空字符串表示不可定位.
+        """
+        direct_inchikey = _normalize_inchikey(match.inchikey)
+        if direct_inchikey != "":
+            return direct_inchikey
+
+        if match.nist_id is not None and match.nist_id > 0:
+            seq_inchikey = self._resolve_inchikey_by_seq(match.library, match.nist_id)
+            if seq_inchikey != "":
+                return seq_inchikey
+
+            normalized_library = self._normalize_library_name(match.library)
+            if normalized_library == "":
+                nist_ms_key = str(match.nist_id)
+                return self._inchikey_by_nist_ms.get(nist_ms_key, "")
+
+            logger.debug(
+                "库序号 InChIKey 映射缺失, 跳过 NIST MS# 兜底避免错配: 化合物=%s, Lib=%s, Id=%s",
+                match.compound_name or "(未知)",
+                match.library or "(空)",
+                match.nist_id,
+            )
+
+        return ""
+
+    def _resolve_inchikey_by_seq(self, library_name: str, sequence_id: int) -> str:
+        """
+        功能:
+            按库类型与序号查找 InChIKey.
+        参数:
+            library_name: 命中来源库名称.
+            sequence_id: 命中 Id(Seq#).
+        返回:
+            str, InChIKey. 未命中返回空字符串.
+        """
+        normalized_library = self._normalize_library_name(library_name)
+        sequence_key = str(sequence_id)
+
+        if normalized_library == "mainlib":
+            return self._inchikey_by_seq_mainlib.get(sequence_key, "")
+        if normalized_library == "replib":
+            return self._inchikey_by_seq_replib.get(sequence_key, "")
         return ""
 
     @staticmethod
@@ -743,10 +901,46 @@ class NistLocalStructureFetcher:
 
         return candidates
 
+    def _resolve_fallback_query_candidates(self, match: CompoundMatch) -> List[PubChemQueryCandidate]:
+        """
+        功能:
+            组装 PubChem 回退候选, 顺序为 InChIKey -> 全名 -> CAS.
+        参数:
+            match: 单个化合物命中.
+        返回:
+            List[PubChemQueryCandidate], 去重后的查询候选列表.
+        """
+        candidates: List[PubChemQueryCandidate] = []
+        seen_pairs: Set[Tuple[str, str]] = set()
+
+        def _append_candidate(query_type: str, identifier: str) -> None:
+            normalized_identifier = str(identifier).strip()
+            if normalized_identifier == "":
+                return
+            pair = (query_type, normalized_identifier)
+            if pair in seen_pairs:
+                return
+            seen_pairs.add(pair)
+            candidates.append(PubChemQueryCandidate(query_type=query_type, identifier=normalized_identifier))
+
+        resolved_inchikey = self._resolve_seed_inchikey(match)
+        if resolved_inchikey != "":
+            _append_candidate("inchikey", resolved_inchikey)
+
+        compound_name = str(match.compound_name).strip()
+        if compound_name != "":
+            _append_candidate("name", compound_name)
+
+        for cas_number in self._resolve_fallback_cas_candidates(match):
+            _append_candidate("cas", cas_number)
+
+        return candidates
+
     def _fetch_with_legacy_fallback(self, match: CompoundMatch) -> Optional[Path]:
         """
         功能:
-            在非严格离线模式下回退到历史 CAS -> PubChem 链路.
+            在非严格离线模式下回退到 PubChem 链路.
+            查询顺序: InChIKey -> 全名 -> CAS.
         参数:
             match: 单个化合物命中.
         返回:
@@ -758,25 +952,32 @@ class NistLocalStructureFetcher:
         if self._fallback_fetcher is None:
             return None
 
-        cas_candidates = self._resolve_fallback_cas_candidates(match)
-        if len(cas_candidates) == 0:
+        query_candidates = self._resolve_fallback_query_candidates(match)
+        if len(query_candidates) == 0:
             logger.info(
-                "本地结构未命中且无可用 CAS, 跳过 PubChem 回退: 化合物=%s, NIST#=%s, Lib=%s",
+                "本地结构未命中且无可用查询候选, 跳过 PubChem 回退: 化合物=%s, NIST#=%s, Lib=%s",
                 match.compound_name or "(未知)",
                 match.nist_id,
                 match.library or "(空)",
             )
             return None
 
-        for cas_number in cas_candidates:
+        for candidate in query_candidates:
             logger.info(
-                "本地结构未命中, 回退 PubChem: 化合物=%s, CAS=%s, NIST#=%s, Lib=%s",
+                "本地结构未命中, 回退 PubChem: 化合物=%s, 查询类型=%s, 值=%s, NIST#=%s, Lib=%s",
                 match.compound_name or "(未知)",
-                cas_number,
+                candidate.query_type,
+                candidate.identifier,
                 match.nist_id,
                 match.library or "(空)",
             )
-            fetched_path = self._fallback_fetcher.fetch_structure(cas_number)
+            if candidate.query_type == "cas":
+                fetched_path = self._fallback_fetcher.fetch_structure(candidate.identifier)
+            else:
+                fetched_path = self._fallback_fetcher.fetch_structure_by_identifier(
+                    candidate.identifier,
+                    candidate.query_type,
+                )
             if fetched_path is not None:
                 return fetched_path
         return None
@@ -798,7 +999,9 @@ class StructureFetcher:
         无.
     """
 
-    _PUBCHEM_CID_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{cas}/cids/TXT"
+    _PUBCHEM_CID_BY_RN_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/xref/RN/{identifier}/cids/TXT"
+    _PUBCHEM_CID_BY_NAME_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{identifier}/cids/TXT"
+    _PUBCHEM_CID_BY_INCHIKEY_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/{identifier}/cids/TXT"
     _PUBCHEM_SDF_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/record/SDF"
 
     def __init__(
@@ -835,21 +1038,10 @@ class StructureFetcher:
         if cas_number.strip() in _INVALID_CAS_PATTERNS:
             return None
 
-        sanitized = _sanitize_cas(cas_number)
-        filename = f"{sanitized}.png"
-
-        # 第一级: 任务缓存.
-        task_path = self._task_cache_dir / filename
-        if task_path.exists():
-            return task_path
-
-        # 第二级: 全局缓存 (命中后复制到任务缓存).
-        if self._global_cache_dir is not None:
-            global_path = self._global_cache_dir / filename
-            if global_path.exists():
-                shutil.copy2(str(global_path), str(task_path))
-                logger.debug("从全局缓存复制结构图: %s -> %s", global_path, task_path)
-                return task_path
+        filename = f"{_sanitize_cas(cas_number)}.png"
+        cached_path = self._get_cached_structure_path(filename)
+        if cached_path is not None:
+            return cached_path
 
         # 第三级: PubChem 在线下载 SDF, 然后本地渲染.
         sdf_text = self._download_sdf_from_pubchem(cas_number)
@@ -860,15 +1052,45 @@ class StructureFetcher:
         if png_data is None:
             return None
 
-        # 写入任务缓存.
-        task_path.write_bytes(png_data)
+        task_path = self._write_cached_structure_file(filename, png_data)
         logger.info("结构图已通过 PubChem SDF 渲染并缓存: %s (%s)", cas_number, task_path)
 
-        # 同步写入全局缓存.
-        if self._global_cache_dir is not None:
-            global_path = self._global_cache_dir / filename
-            global_path.write_bytes(png_data)
+        return task_path
 
+    def fetch_structure_by_identifier(self, identifier: str, query_type: str) -> Optional[Path]:
+        """
+        功能:
+            按指定标识类型直接从 PubChem 获取结构图.
+            适用于 InChIKey 或化合物全名等非 CAS 查询.
+        参数:
+            identifier: 查询标识.
+            query_type: 查询类型, 支持 inchikey 或 name.
+        返回:
+            Optional[Path], 结构图路径, 失败返回 None.
+        """
+        normalized_identifier = str(identifier).strip()
+        if normalized_identifier == "":
+            return None
+
+        if query_type not in {"inchikey", "name"}:
+            logger.warning("PubChem 查询类型不支持: %s", query_type)
+            return None
+
+        filename = self._build_query_cache_filename(normalized_identifier, query_type)
+        cached_path = self._get_cached_structure_path(filename)
+        if cached_path is not None:
+            return cached_path
+
+        sdf_text = self._download_sdf_from_pubchem_by_identifier(normalized_identifier, query_type)
+        if sdf_text is None:
+            return None
+
+        png_data = self._render_pubchem_sdf_to_png(sdf_text)
+        if png_data is None:
+            return None
+
+        task_path = self._write_cached_structure_file(filename, png_data)
+        logger.info("结构图已通过 PubChem %s 查询渲染并缓存: %s (%s)", query_type, normalized_identifier, task_path)
         return task_path
 
     def fetch_batch(self, cas_numbers: List[str]) -> Dict[str, Optional[Path]]:
@@ -936,11 +1158,69 @@ class StructureFetcher:
             logger.warning("requests 库未安装, 无法从 PubChem 下载 SDF 结构.")
             return None
 
+    def _get_cached_structure_path(self, filename: str) -> Optional[Path]:
+        """
+        功能:
+            优先从任务缓存和全局缓存中读取已存在的结构图.
+        参数:
+            filename: 结构图文件名.
+        返回:
+            Optional[Path], 命中时返回任务缓存中的路径.
+        """
+        task_path = self._task_cache_dir / filename
+        if task_path.exists():
+            return task_path
+
+        if self._global_cache_dir is not None:
+            global_path = self._global_cache_dir / filename
+            if global_path.exists():
+                shutil.copy2(str(global_path), str(task_path))
+                logger.debug("从全局缓存复制结构图: %s -> %s", global_path, task_path)
+                return task_path
+
+        return None
+
+    def _write_cached_structure_file(self, filename: str, png_data: bytes) -> Path:
+        """
+        功能:
+            将结构图写入任务缓存, 并同步到全局缓存.
+        参数:
+            filename: 结构图文件名.
+            png_data: PNG 二进制内容.
+        返回:
+            Path, 任务缓存中的目标路径.
+        """
+        task_path = self._task_cache_dir / filename
+        task_path.write_bytes(png_data)
+        if self._global_cache_dir is not None:
+            global_path = self._global_cache_dir / filename
+            global_path.write_bytes(png_data)
+        return task_path
+
+    @staticmethod
+    def _build_query_cache_filename(identifier: str, query_type: str) -> str:
+        """
+        功能:
+            根据查询类型生成结构图缓存文件名.
+        参数:
+            identifier: 查询值.
+            query_type: 查询类型, 如 inchikey/name.
+        返回:
+            str, 缓存文件名.
+        """
+        query_prefix_map = {
+            "inchikey": "INCHIKEY",
+            "name": "NAME",
+        }
+        prefix = query_prefix_map.get(query_type, "QUERY")
+        return f"{prefix}_{_sanitize_identifier(identifier)}.png"
+
     def _download_sdf_from_pubchem(self, cas_number: str) -> Optional[str]:
         """
         功能:
             通过 PubChem REST API 下载化合物 SDF.
             两步: 先由 CAS 号查 CID, 再由 CID 下载 SDF.
+            CID 查询顺序优先使用 xref/RN, 未命中时回退到 name.
         参数:
             cas_number: CAS 注册号.
         返回:
@@ -950,38 +1230,125 @@ class StructureFetcher:
         if requests_module is None:
             return None
 
-        cid = self._query_pubchem_cid(requests_module, cas_number)
+        cid = self._query_pubchem_cid_with_fallbacks(requests_module, cas_number)
         if cid is None:
             return None
         return self._query_pubchem_sdf(requests_module, cid)
 
-    def _query_pubchem_cid(self, requests_module: object, cas_number: str) -> Optional[str]:
+    def _download_sdf_from_pubchem_by_identifier(
+        self,
+        identifier: str,
+        namespace: str,
+    ) -> Optional[str]:
         """
         功能:
-            通过 PubChem 查询 CAS 对应的 CID.
+            按指定命名空间从 PubChem 下载化合物 SDF.
+            流程: identifier -> CID -> SDF.
+        参数:
+            identifier: 查询值.
+            namespace: 查询命名空间, 支持 inchikey 或 name.
+        返回:
+            Optional[str], SDF 字符串, 失败返回 None.
+        """
+        requests_module = self._load_requests_module()
+        if requests_module is None:
+            return None
+
+        cid = self._query_pubchem_cid(requests_module, identifier, namespace)
+        if cid is None:
+            return None
+        return self._query_pubchem_sdf(requests_module, cid)
+
+    def _query_pubchem_cid_with_fallbacks(
+        self,
+        requests_module: object,
+        cas_number: str,
+    ) -> Optional[str]:
+        """
+        功能:
+            按预设顺序查询 PubChem CID.
+            优先用 xref/RN 精确匹配 CAS, 未命中再回退到 name.
         参数:
             requests_module: requests 模块对象.
             cas_number: CAS 注册号.
         返回:
+            Optional[str], 首个命中的 CID, 失败返回 None.
+        """
+        query_strategies = [
+            "xref/RN",
+            "name",
+        ]
+
+        for namespace in query_strategies:
+            cid = self._query_pubchem_cid(requests_module, cas_number, namespace)
+            if cid is not None:
+                if namespace != "xref/RN":
+                    logger.info("PubChem CID 已通过名称回退命中: CAS=%s, CID=%s", cas_number, cid)
+                return cid
+
+        logger.info("PubChem CID 查询未命中: CAS=%s, 已尝试 xref/RN 和 name", cas_number)
+        return None
+
+    def _query_pubchem_cid(
+        self,
+        requests_module: object,
+        identifier: str,
+        namespace: str = "xref/RN",
+    ) -> Optional[str]:
+        """
+        功能:
+            通过 PubChem 指定命名空间查询 CID.
+        参数:
+            requests_module: requests 模块对象.
+            identifier: 查询输入, 当前支持 CAS.
+            namespace: PubChem 查询命名空间, 支持 xref/RN 或 name.
+        返回:
             Optional[str], CID 字符串, 失败返回 None.
         """
-        cid_url = self._PUBCHEM_CID_URL.format(cas=cas_number)
+        if namespace == "xref/RN":
+            cid_url = self._PUBCHEM_CID_BY_RN_URL.format(identifier=identifier)
+        elif namespace == "name":
+            cid_url = self._PUBCHEM_CID_BY_NAME_URL.format(identifier=identifier)
+        elif namespace == "inchikey":
+            cid_url = self._PUBCHEM_CID_BY_INCHIKEY_URL.format(identifier=identifier)
+        else:
+            logger.warning("PubChem CID 查询命名空间不支持: %s", namespace)
+            return None
+
         try:
             resp = requests_module.get(cid_url, timeout=self._timeout)
             if resp.status_code != 200:
-                logger.debug("PubChem CID 查询失败: CAS=%s, HTTP %d", cas_number, resp.status_code)
+                logger.debug(
+                    "PubChem CID 查询失败: 输入=%s, namespace=%s, HTTP %d",
+                    identifier,
+                    namespace,
+                    resp.status_code,
+                )
                 return None
             lines = resp.text.strip().splitlines()
             if len(lines) == 0:
-                logger.debug("PubChem CID 查询失败: CAS=%s, 返回内容为空", cas_number)
+                logger.debug(
+                    "PubChem CID 查询失败: 输入=%s, namespace=%s, 返回内容为空",
+                    identifier,
+                    namespace,
+                )
                 return None
             cid = lines[0].strip()
             if cid == "":
-                logger.debug("PubChem CID 查询失败: CAS=%s, CID 为空", cas_number)
+                logger.debug(
+                    "PubChem CID 查询失败: 输入=%s, namespace=%s, CID 为空",
+                    identifier,
+                    namespace,
+                )
                 return None
             return cid
         except Exception as exc:
-            logger.debug("PubChem CID 查询异常: CAS=%s, %s", cas_number, exc)
+            logger.debug(
+                "PubChem CID 查询异常: 输入=%s, namespace=%s, %s",
+                identifier,
+                namespace,
+                exc,
+            )
             return None
 
     def _query_pubchem_sdf(self, requests_module: object, cid: str) -> Optional[str]:

@@ -35,6 +35,7 @@ class CompoundMatch:
         存储单个化合物的谱库匹配结果.
     参数:
         compound_name: 化合物名称.
+        inchikey: InChIKey, 用于结构回退时优先精确定位 PubChem 记录.
         cas_number: CAS 注册号.
         match_score: 匹配度 (0-100), 取 MF (Match Factor) 的百分制值.
         reverse_match_score: 反向匹配度 (0-100), 取 RMF.
@@ -47,6 +48,7 @@ class CompoundMatch:
         CompoundMatch.
     """
     compound_name: str = ""
+    inchikey: str = ""
     cas_number: str = ""
     match_score: float = 0.0
     reverse_match_score: float = 0.0
@@ -775,6 +777,7 @@ class NISTMatcher:
                         continue
 
                     name = self._extract_str_from_row(row, ["Name", "Compound Name", "Hit Name", "Library Hit"])
+                    inchikey = self._extract_str_from_row(row, ["InChIKey", "InChI Key"])
                     cas = self._extract_str_from_row(row, ["CAS#", "CAS", "CAS Number"])
                     score = self._extract_float_from_row(row, ["Match Score", "Score", "Match", "Quality"])
                     formula = self._extract_str_from_row(row, ["Formula", "Molecular Formula"])
@@ -782,6 +785,7 @@ class NISTMatcher:
 
                     results[rt] = [CompoundMatch(
                         compound_name=name or "",
+                        inchikey=inchikey or "",
                         cas_number=cas or "",
                         match_score=score or 0.0,
                         formula=formula or "",

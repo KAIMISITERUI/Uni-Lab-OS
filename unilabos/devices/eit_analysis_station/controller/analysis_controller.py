@@ -1450,12 +1450,12 @@ class AnalysisStationController:
 
             # 根据积分模式决定填充基线方式, 使绘图区域与实际积分一致
             mode = self._settings.integration_mode.strip().lower()
-            if mode == "gcpy":
+            if mode == "gcpy" or mode == "robust_v2":
                 fill_mode = "global"
             elif mode == "legacy" and self._settings.use_als_baseline is True:
                 fill_mode = "global"
             else:
-                # robust_v2 或 legacy 无 ALS, 积分使用局部端点连线
+                # legacy 无 ALS 时, 积分使用局部端点连线.
                 fill_mode = "local"
 
             # TIC 色谱图
