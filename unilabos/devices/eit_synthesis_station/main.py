@@ -266,7 +266,6 @@ def _menu_quick_workflow(manager):
                 ("等待任务完成", lambda: manager.wait_task_with_ops()),
                 ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
                 ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),
-                ("提交分析任务", lambda: manager.run_analysis()),
                 ("谱图数据处理", lambda: manager.poll_analysis_run()),
             ]
             _run_workflow(steps, quick=True)
@@ -309,7 +308,6 @@ def _menu_quick_workflow(manager):
                 ("等待任务完成", lambda: manager.wait_task_with_ops()),
                 ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
                 ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),
-                ("提交分析任务", lambda: manager.run_analysis()),
                 ("谱图数据处理", lambda: manager.poll_analysis_run()),
             ]
             _run_workflow(steps, quick=True)
