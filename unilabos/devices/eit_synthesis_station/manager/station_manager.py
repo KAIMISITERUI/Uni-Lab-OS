@@ -2051,7 +2051,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         """
         # 延迟绝对导入，避免模块级相对导入越界问题
         # 运行目录为 devices/，eit_analysis_station 可直接作为顶层包访问
-        from eit_analysis_station.controller.analysis_controller import AnalysisStationController
+        from unilabos.devices.eit_analysis_station.controller.analysis_controller import AnalysisStationController
 
         # 创建分析站控制器实例，使用其默认配置
         analysis_ctrl = AnalysisStationController()
@@ -2073,7 +2073,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         返回:
             Dict: process_gc_ms_results 的返回值, 包含 success/return_info/report_path.
         """
-        from eit_analysis_station.controller.analysis_controller import AnalysisStationController
+        from unilabos.devices.eit_analysis_station.controller.analysis_controller import AnalysisStationController
 
         analysis_ctrl = AnalysisStationController()
 

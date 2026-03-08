@@ -22,8 +22,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from eit_analysis_station.processor.data_reader import GCMSDataReader
-from eit_analysis_station.processor.peak_integrator import PeakIntegrator, PeakResult
+from unilabos.devices.eit_analysis_station.processor.data_reader import GCMSDataReader
+from unilabos.devices.eit_analysis_station.processor.peak_integrator import PeakIntegrator, PeakResult
 
 logger = logging.getLogger(__name__)
 

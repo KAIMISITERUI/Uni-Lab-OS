@@ -2626,7 +2626,7 @@ class SynthesisStationController:
                         analysis_task_ids
                     )
 
-                    from eit_analysis_station.controller.analysis_controller import (
+                    from unilabos.devices.eit_analysis_station.controller.analysis_controller import (
                         AnalysisStationController,
                     )
                     analysis_ctrl = AnalysisStationController()
@@ -2690,7 +2690,7 @@ class SynthesisStationController:
                             "兜底路径触发分析提交 (回调未正常执行), task_ids=%s",
                             analysis_task_ids
                         )
-                        from eit_analysis_station.controller.analysis_controller import (
+                        from unilabos.devices.eit_analysis_station.controller.analysis_controller import (
                             AnalysisStationController,
                         )
                         analysis_ctrl = AnalysisStationController()

@@ -7,6 +7,7 @@ import threading
 import time
 import re
 import json
+import traceback
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -26,6 +27,7 @@ from unilabos.resources.eit_synthesis_station import bottle_carriers, items
 from unilabos.resources.eit_synthesis_station.decks import EIT_Synthesis_Station_Deck
 from unilabos.resources.warehouse import WareHouse
 from unilabos.resources.itemized_carrier import BottleCarrier
+from unilabos_msgs.srv import SerialCommand  # type: ignore
 
 def normalize_layout_code(eit_code: Optional[str]) -> Optional[str]:
     if not eit_code or "-" not in eit_code:
@@ -396,10 +398,37 @@ class EITSynthesisResourceSynchronizer(ResourceSynchronizer):
                 nodes_by_uuid.pop(node_uuid, None)
             flattened_trees.append(list(nodes_by_uuid.values()))
         ROS2DeviceNode.run_async_func(
-            self.workstation._ros_node.update_resource,
+            self._update_resource_with_tree_dump,
             True,
             **{"resources": resources, "resource_tree_dump": flattened_trees},
         )
+
+    async def _update_resource_with_tree_dump(
+        self,
+        resources: List[Resource],
+        resource_tree_dump: List[List[Dict[str, Any]]],
+    ) -> None:
+        """
+        功能:
+            使用扁平化后的资源树执行资源更新, 避免基类 update_resource 无法接收额外参数.
+        参数:
+            resources: 本地资源对象列表, 用于根据服务端返回结果回填 uuid.
+            resource_tree_dump: 已扁平化的资源树序列化结果.
+        返回:
+            None.
+        """
+        ros_node = self.workstation._ros_node
+        request = SerialCommand.Request()
+        # 直接上报扁平化结果, 保持前端所需的资源树结构.
+        request.command = json.dumps({"data": {"data": resource_tree_dump}, "action": "update"})
+        response = await ros_node._resource_clients["c2s_update_resource_tree"].call_async(request)  # type: ignore
+        try:
+            uuid_maps = json.loads(response.response)
+            ros_node.resource_tracker.loop_update_uuid(resources, uuid_maps)
+        except Exception as exc:
+            ros_node.lab_logger().error(f"更新资源 uuid 失败: {exc}")
+            ros_node.lab_logger().error(traceback.format_exc())
+        ros_node.lab_logger().trace(f"资源更新结果: {response}")
 
     def sync_to_external(self, resource: Resource) -> bool:
         """[虚拟 -> 硬件] 组装 BatchInTray payload，补齐化学品与单位后同步。"""
