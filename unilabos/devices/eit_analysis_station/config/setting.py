@@ -106,7 +106,7 @@ class Settings:
     mspepsearch_timeout: float = 120.0  # MSPepSearch 超时秒数, 调大可降低复杂谱图超时失败.
 
     # ---------- 峰检测与积分参数 ----------
-    integration_mode: str = "robust_v2"  # 处理模式, 可选 robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "robust_v3"  # 处理模式, 可选 robust_v3 / robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
     peak_prominence: float = 10000.0  # TIC 最小峰显著性阈值, 调高会减少弱峰识别.
     peak_min_distance: int = 5  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
@@ -120,15 +120,19 @@ class Settings:
     als_p: float = 0.01  # ALS 非对称参数 p, 调整后影响正负残差惩罚.
     use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
-    # ---------- robust_v2 参数 ----------
-    baseline_method: str = "rolling_quantile"  # robust_v2 基线方法, 修改后改变背景估计方式.
+    # ---------- robust_v2/v3 参数 ----------
+    baseline_method: str = "rolling_quantile"  # robust_v2/v3 基线方法, 修改后改变背景估计方式.
     baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
     baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.
     boundary_sigma_factor: float = 3.0  # 边界 sigma 系数, 调大通常会扩展积分边界.
     boundary_edge_ratio: float = 0.005  # 边缘阈值比例, 调整后影响峰起止截断位置.
     boundary_expand_factor: float = 6.0  # 边界扩展系数, 调大可覆盖更多拖尾区域.
-    boundary_min_span_min: float = 0.08  # 峰最小宽度(min), 调大可过滤过窄噪声峰.
-    boundary_max_span_min: float = 2.00  # 峰最大宽度(min), 调小可抑制异常宽峰.
+    boundary_min_span_min: float = 0.08  # 边界搜索最小跨度(min), 调大可避免边界收缩过窄.
+    boundary_max_span_min: float = 2.00  # 边界搜索最大跨度(min), 调小可限制异常拖尾扩展.
+    robust_v3_shoulder_filter_enable: bool = True  # robust_v3 是否启用肩峰过滤, 关闭后行为退化为 robust_v2.
+    robust_v3_shoulder_width_max_min: float = 0.035  # 肩峰半高宽上限(min), 调大将更严格过滤窄肩峰.
+    robust_v3_shoulder_gap_max_min: float = 0.09  # 肩峰与强邻峰的最大间隔(min), 调大将扩大肩峰判定范围.
+    robust_v3_shoulder_relative_prominence_max: float = 0.15  # 肩峰相对显著性上限, 调大将过滤更显著的弱邻峰.
 
     # ---------- gcpy 参数 ----------
     gcpy_whittaker_lmbd: float = 10.0  # gcpy 模式 Whittaker 平滑参数, 调大可使信号更平滑.
@@ -200,6 +204,10 @@ class Settings:
             ANALYSIS_BOUNDARY_SIGMA_FACTOR, ANALYSIS_BOUNDARY_EDGE_RATIO,
             ANALYSIS_BOUNDARY_EXPAND_FACTOR, ANALYSIS_BOUNDARY_MIN_SPAN_MIN,
             ANALYSIS_BOUNDARY_MAX_SPAN_MIN,
+            ANALYSIS_ROBUST_V3_SHOULDER_FILTER_ENABLE,
+            ANALYSIS_ROBUST_V3_SHOULDER_WIDTH_MAX_MIN,
+            ANALYSIS_ROBUST_V3_SHOULDER_GAP_MAX_MIN,
+            ANALYSIS_ROBUST_V3_SHOULDER_RELATIVE_PROMINENCE_MAX,
             ANALYSIS_PEAK_RT_MIN, ANALYSIS_PEAK_RT_MAX,
             ANALYSIS_TIC_AREA_MIN, ANALYSIS_TIC_AREA_MAX,
             ANALYSIS_FID_AREA_MIN, ANALYSIS_FID_AREA_MAX,
@@ -299,6 +307,22 @@ class Settings:
             boundary_expand_factor=_float("ANALYSIS_BOUNDARY_EXPAND_FACTOR", defaults.boundary_expand_factor),
             boundary_min_span_min=_float("ANALYSIS_BOUNDARY_MIN_SPAN_MIN", defaults.boundary_min_span_min),
             boundary_max_span_min=_float("ANALYSIS_BOUNDARY_MAX_SPAN_MIN", defaults.boundary_max_span_min),
+            robust_v3_shoulder_filter_enable=_bool(
+                "ANALYSIS_ROBUST_V3_SHOULDER_FILTER_ENABLE",
+                defaults.robust_v3_shoulder_filter_enable,
+            ),
+            robust_v3_shoulder_width_max_min=_float(
+                "ANALYSIS_ROBUST_V3_SHOULDER_WIDTH_MAX_MIN",
+                defaults.robust_v3_shoulder_width_max_min,
+            ),
+            robust_v3_shoulder_gap_max_min=_float(
+                "ANALYSIS_ROBUST_V3_SHOULDER_GAP_MAX_MIN",
+                defaults.robust_v3_shoulder_gap_max_min,
+            ),
+            robust_v3_shoulder_relative_prominence_max=_float(
+                "ANALYSIS_ROBUST_V3_SHOULDER_RELATIVE_PROMINENCE_MAX",
+                defaults.robust_v3_shoulder_relative_prominence_max,
+            ),
             report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
             structure_cache_dir=_path("ANALYSIS_STRUCTURE_CACHE_DIR", defaults.structure_cache_dir),
             chemical_list_path=_path("ANALYSIS_CHEMICAL_LIST_PATH", defaults.chemical_list_path),

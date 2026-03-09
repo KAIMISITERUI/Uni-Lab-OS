@@ -272,26 +272,24 @@ class ChromatogramPlotter:
         if not self._has_overlap(tmp_bbox, placed_bboxes):
             return (0, 8)
 
-        # 交替向左/右偏移尝试, 逐步增大偏移距离
+        # 仅沿 y 方向逐级上移, 避免标注重叠
         for shift in range(1, 8):
-            for x_dir in (-1, 1):
-                x_off = x_dir * shift * 20  # 每级水平偏移 20 points
-                y_off = 8 + shift * 12      # 同时逐级上移避免箭头交叉
+            y_off = 8 + shift * 12  # 同时逐级上移避免箭头交叉
 
-                tmp2 = ax.annotate(
-                    label_text,
-                    xy=(peak.retention_time, peak.height),
-                    xytext=(x_off, y_off),
-                    textcoords="offset points",
-                    ha="center", va="bottom",
-                    fontsize=6,
-                )
-                fig.canvas.draw()
-                bbox2 = tmp2.get_window_extent(renderer)
-                tmp2.remove()
+            tmp2 = ax.annotate(
+                label_text,
+                xy=(peak.retention_time, peak.height),
+                xytext=(0, y_off),
+                textcoords="offset points",
+                ha="center", va="bottom",
+                fontsize=6,
+            )
+            fig.canvas.draw()
+            bbox2 = tmp2.get_window_extent(renderer)
+            tmp2.remove()
 
-                if not self._has_overlap(bbox2, placed_bboxes):
-                    return (x_off, y_off)
+            if not self._has_overlap(bbox2, placed_bboxes):
+                return (0, y_off)
 
         # 所有位置都重叠, 用最大偏移
         return (0, 8 + 7 * 12)

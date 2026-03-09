@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 功能:
-    对色谱信号(TIC/FID)执行峰检测与积分, 支持 legacy 和 robust_v2 两种模式.
+    对色谱信号(TIC/FID)执行峰检测与积分, 支持 legacy, robust_v2, robust_v3 和 gcpy 模式.
 参数:
     无.
 返回:
@@ -16,7 +16,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from scipy import sparse
 from scipy.ndimage import percentile_filter
-from scipy.signal import find_peaks, peak_widths, savgol_filter
+from scipy.signal import find_peaks, peak_prominences, peak_widths, savgol_filter
 from scipy.sparse.linalg import spsolve
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,8 @@ class PeakIntegrator:
 
         - legacy: 兼容历史流程(ALS/非ALS + valley/peak_widths).
         - robust_v2: 滚动分位数基线(可回退 ALS) + 噪声阈值 + 自适应限宽边界.
+        - robust_v3: robust_v2 + find_peaks 后肩峰过滤.
+        - gcpy: Whittaker 平滑 + 线性插值基线扣除.
 
     参数:
         smoothing_window: Savitzky-Golay 平滑窗口(奇数).
@@ -67,8 +69,8 @@ class PeakIntegrator:
         als_lambda: ALS 平滑参数.
         als_p: ALS 不对称权重参数.
         use_valley_boundary: legacy 模式是否使用 valley+回落定界.
-        integration_mode: 积分模式, robust_v2 或 legacy.
-        baseline_method: robust_v2 基线方式, rolling_quantile 或 als.
+        integration_mode: 积分模式, robust_v2, robust_v3, legacy 或 gcpy.
+        baseline_method: robust_v2/robust_v3 基线方式, rolling_quantile 或 als.
         baseline_quantile: rolling_quantile 的分位数(0-100).
         baseline_window_min: rolling_quantile 窗口长度(min).
         boundary_sigma_factor: 边界噪声阈值倍数.
@@ -76,6 +78,10 @@ class PeakIntegrator:
         boundary_expand_factor: 基于半高宽扩展搜索半径系数.
         boundary_min_span_min: 边界最小半径(min).
         boundary_max_span_min: 边界最大半径(min).
+        shoulder_filter_enable: 是否启用肩峰过滤.
+        shoulder_filter_width_max_min: 判定肩峰的半高宽上限(min).
+        shoulder_filter_gap_max_min: 判定肩峰的邻峰间隔上限(min).
+        shoulder_filter_relative_prominence_max: 判定肩峰的相对显著性上限.
     返回:
         无.
     """
@@ -99,6 +105,10 @@ class PeakIntegrator:
         boundary_expand_factor: float = 6.0,
         boundary_min_span_min: float = 0.08,
         boundary_max_span_min: float = 0.80,
+        shoulder_filter_enable: bool = False,
+        shoulder_filter_width_max_min: float = 0.035,
+        shoulder_filter_gap_max_min: float = 0.09,
+        shoulder_filter_relative_prominence_max: float = 0.15,
         gcpy_whittaker_lmbd: float = 10.0,
     ):
         self._smoothing_window = self._ensure_odd(max(3, int(smoothing_window)))
@@ -112,7 +122,7 @@ class PeakIntegrator:
         self._als_p = float(als_p)
         self._use_valley_boundary = bool(use_valley_boundary)
 
-        # robust_v2 参数
+        # robust_v2/v3 参数
         self._integration_mode = str(integration_mode).strip().lower()
         self._baseline_method = str(baseline_method).strip().lower()
         self._baseline_quantile = float(baseline_quantile)
@@ -122,6 +132,10 @@ class PeakIntegrator:
         self._boundary_expand_factor = float(boundary_expand_factor)
         self._boundary_min_span_min = float(boundary_min_span_min)
         self._boundary_max_span_min = float(boundary_max_span_min)
+        self._shoulder_filter_enable = bool(shoulder_filter_enable)
+        self._shoulder_filter_width_max_min = float(shoulder_filter_width_max_min)
+        self._shoulder_filter_gap_max_min = float(shoulder_filter_gap_max_min)
+        self._shoulder_filter_relative_prominence_max = float(shoulder_filter_relative_prominence_max)
 
         # gcpy 参数
         self._gcpy_whittaker_lmbd = float(gcpy_whittaker_lmbd)
@@ -673,6 +687,87 @@ class PeakIntegrator:
         for item in results:
             item.area_percent = item.area / total_area * 100.0
 
+    def _filter_shoulder_peak_indices(
+        self,
+        times: np.ndarray,
+        corrected_signal: np.ndarray,
+        peak_indices: np.ndarray,
+    ) -> Tuple[np.ndarray, List[Optional[int]]]:
+        """
+        功能:
+            在 robust_v3 中识别需要并入前峰的拖尾肩峰.
+        参数:
+            times: 时间数组(min).
+            corrected_signal: 基线校正后的检测信号.
+            peak_indices: 原始峰索引数组.
+        返回:
+            Tuple[np.ndarray, List[Optional[int]]]:
+                keep_mask: True 表示保留该峰, False 表示并入前峰.
+                merge_targets: 记录每个峰并入的目标峰编号, 未并入时为 None.
+        """
+        merge_targets: List[Optional[int]] = [None] * len(peak_indices)
+        if self._shoulder_filter_enable is False:
+            return np.ones(len(peak_indices), dtype=bool), merge_targets
+
+        if len(peak_indices) <= 1:
+            return np.ones(len(peak_indices), dtype=bool), merge_targets
+
+        dt = self._median_dt(times)
+        if dt <= 0:
+            logger.warning("时间轴步长无效, 跳过肩峰过滤.")
+            return np.ones(len(peak_indices), dtype=bool), merge_targets
+
+        prominences = peak_prominences(corrected_signal, peak_indices)[0]
+        widths_50 = peak_widths(corrected_signal, peak_indices, rel_height=0.5)[0]
+        widths_50_min = widths_50 * dt
+
+        keep_mask = np.ones(len(peak_indices), dtype=bool)
+        for peak_no, peak_idx in enumerate(peak_indices):
+            if peak_no == 0:
+                continue
+
+            current_width_min = float(widths_50_min[peak_no])
+            current_prominence = float(prominences[peak_no])
+            if not np.isfinite(current_width_min) or not np.isfinite(current_prominence):
+                continue
+
+            if current_width_min > self._shoulder_filter_width_max_min:
+                continue
+
+            merge_target_no = peak_no - 1
+            while merge_target_no >= 0 and not keep_mask[merge_target_no]:
+                merge_target_no -= 1
+
+            if merge_target_no < 0:
+                continue
+
+            previous_gap_min = float(times[int(peak_idx)] - times[int(peak_indices[merge_target_no])])
+            previous_prominence = float(prominences[merge_target_no])
+            if previous_gap_min > self._shoulder_filter_gap_max_min:
+                continue
+
+            if previous_prominence <= current_prominence:
+                continue
+
+            prominence_ratio = current_prominence / previous_prominence
+            if prominence_ratio > self._shoulder_filter_relative_prominence_max:
+                continue
+
+            keep_mask[peak_no] = False
+            merge_targets[peak_no] = merge_target_no
+            logger.info(
+                "RT=%.3f 的峰判定为前峰拖尾肩峰, 并入 RT=%.3f 的前峰. 半高宽=%.4f min, 前峰间隔=%.4f min, prominence=%.4f, 前峰prominence=%.4f, 比值=%.4f",
+                float(times[int(peak_idx)]),
+                float(times[int(peak_indices[merge_target_no])]),
+                current_width_min,
+                previous_gap_min,
+                current_prominence,
+                previous_prominence,
+                prominence_ratio,
+            )
+
+        return keep_mask, merge_targets
+
     def _integrate_legacy(self, times: np.ndarray, intensities: np.ndarray) -> List[PeakResult]:
         """
         功能:
@@ -754,13 +849,22 @@ class PeakIntegrator:
         logger.info("legacy 模式积分完成, 峰数量: %d", len(results))
         return results
 
-    def _integrate_robust_v2(self, times: np.ndarray, intensities: np.ndarray) -> List[PeakResult]:
+    def _integrate_robust_common(
+        self,
+        times: np.ndarray,
+        intensities: np.ndarray,
+        *,
+        apply_shoulder_filter: bool,
+        mode_name: str,
+    ) -> List[PeakResult]:
         """
         功能:
-            执行 robust_v2 积分流程.
+            执行 robust 系列公共积分流程.
         参数:
             times: 时间数组.
             intensities: 强度数组.
+            apply_shoulder_filter: 是否在 find_peaks 后执行肩峰过滤.
+            mode_name: 当前模式名称, 用于日志.
         返回:
             List[PeakResult], 峰列表.
         """
@@ -795,18 +899,48 @@ class PeakIntegrator:
             distance=self._min_distance,
         )
         if len(peak_indices) == 0:
-            logger.info("robust_v2 模式未检测到峰.")
+            logger.info("%s 模式未检测到峰.", mode_name)
             return []
 
         boundaries = self._find_robust_boundaries(times, corrected_signal, peak_indices)
+        keep_mask = np.ones(len(peak_indices), dtype=bool)
+        merge_targets: List[Optional[int]] = [None] * len(peak_indices)
+        if apply_shoulder_filter is True:
+            keep_mask, merge_targets = self._filter_shoulder_peak_indices(times, corrected_signal, peak_indices)
+            if not np.any(keep_mask):
+                logger.info("%s 模式肩峰并峰后未检测到峰.", mode_name)
+                return []
+
+        merged_right_boundary_map = {}
+        if apply_shoulder_filter is True:
+            for peak_no, merge_target_no in enumerate(merge_targets):
+                if merge_target_no is None:
+                    continue
+
+                boundary = boundaries[peak_no]
+                if boundary is None:
+                    continue
+
+                _, merged_right_idx = boundary
+                previous_right_idx = merged_right_boundary_map.get(merge_target_no)
+                if previous_right_idx is None or merged_right_idx > previous_right_idx:
+                    merged_right_boundary_map[merge_target_no] = merged_right_idx
 
         results: List[PeakResult] = []
         for i, peak_idx in enumerate(peak_indices):
+            if not keep_mask[i]:
+                continue
+
             boundary = boundaries[i]
             if boundary is None:
                 continue
 
             left_idx, right_idx = boundary
+            merged_right_idx = merged_right_boundary_map.get(i)
+            if merged_right_idx is not None and merged_right_idx > right_idx:
+                # 并峰后将前峰右边界扩展到被并入肩峰的右边界.
+                right_idx = merged_right_idx
+
             left_idx = max(0, left_idx)
             right_idx = min(len(times) - 1, right_idx)
             if right_idx <= left_idx:
@@ -848,8 +982,42 @@ class PeakIntegrator:
             )
 
         self._update_area_percent(results)
-        logger.info("robust_v2 模式积分完成, 峰数量: %d", len(results))
+        logger.info("%s 模式积分完成, 峰数量: %d", mode_name, len(results))
         return results
+
+    def _integrate_robust_v2(self, times: np.ndarray, intensities: np.ndarray) -> List[PeakResult]:
+        """
+        功能:
+            执行 robust_v2 积分流程.
+        参数:
+            times: 时间数组.
+            intensities: 强度数组.
+        返回:
+            List[PeakResult], 峰列表.
+        """
+        return self._integrate_robust_common(
+            times,
+            intensities,
+            apply_shoulder_filter=False,
+            mode_name="robust_v2",
+        )
+
+    def _integrate_robust_v3(self, times: np.ndarray, intensities: np.ndarray) -> List[PeakResult]:
+        """
+        功能:
+            执行 robust_v3 积分流程.
+        参数:
+            times: 时间数组.
+            intensities: 强度数组.
+        返回:
+            List[PeakResult], 峰列表.
+        """
+        return self._integrate_robust_common(
+            times,
+            intensities,
+            apply_shoulder_filter=True,
+            mode_name="robust_v3",
+        )
 
     def _integrate_gcpy(
         self, times: np.ndarray, intensities: np.ndarray
@@ -970,7 +1138,11 @@ class PeakIntegrator:
         if mode == "gcpy":
             return self._integrate_gcpy(times, intensities)
 
-        if mode != "robust_v2":
-            logger.warning("未知 integration_mode=%s, 自动使用 robust_v2.", mode)
+        if mode == "robust_v2":
+            return self._integrate_robust_v2(times, intensities)
 
-        return self._integrate_robust_v2(times, intensities)
+        if mode == "robust_v3":
+            return self._integrate_robust_v3(times, intensities)
+
+        logger.warning("未知 integration_mode=%s, 自动使用 robust_v3.", mode)
+        return self._integrate_robust_v3(times, intensities)

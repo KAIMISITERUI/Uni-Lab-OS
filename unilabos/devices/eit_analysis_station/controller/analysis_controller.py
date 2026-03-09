@@ -1304,6 +1304,10 @@ class AnalysisStationController:
                 boundary_expand_factor=self._settings.boundary_expand_factor,
                 boundary_min_span_min=self._settings.boundary_min_span_min,
                 boundary_max_span_min=self._settings.boundary_max_span_min,
+                shoulder_filter_enable=self._settings.robust_v3_shoulder_filter_enable,
+                shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
+                shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
+                shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
@@ -1338,6 +1342,10 @@ class AnalysisStationController:
                 boundary_expand_factor=self._settings.boundary_expand_factor,
                 boundary_min_span_min=self._settings.boundary_min_span_min,
                 boundary_max_span_min=self._settings.boundary_max_span_min,
+                shoulder_filter_enable=self._settings.robust_v3_shoulder_filter_enable,
+                shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
+                shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
+                shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
@@ -1450,7 +1458,7 @@ class AnalysisStationController:
 
             # 根据积分模式决定填充基线方式, 使绘图区域与实际积分一致
             mode = self._settings.integration_mode.strip().lower()
-            if mode == "gcpy" or mode == "robust_v2":
+            if mode == "gcpy" or mode == "robust_v2" or mode == "robust_v3":
                 fill_mode = "global"
             elif mode == "legacy" and self._settings.use_als_baseline is True:
                 fill_mode = "global"
