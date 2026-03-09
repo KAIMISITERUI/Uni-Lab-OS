@@ -517,6 +517,22 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             round_num = round_start // chamber_capacity + 1
             round_records = all_records[round_start:round_end]
 
+            round_validate_errors = self._validate_agv_transfer_round_records(
+                round_records,
+                round_num=round_num,
+            )
+            if round_validate_errors:
+                all_errors.extend(round_validate_errors)
+                logger.error(f"第 {round_num} 轮上料记录校验失败, 终止后续操作")
+                rounds_result.append({
+                    "round_num": round_num,
+                    "success": False,
+                    "phase": "validate_round",
+                    "errors": round_validate_errors,
+                })
+                overall_success = False
+                break
+
             logger.info(
                 f"===== 第 {round_num} 轮上料开始 "
                 f"(记录 {round_start + 1}~{round_end}/{total_records}) ====="
@@ -539,6 +555,16 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             # 3b. AGV 转运本轮托盘(内部按 4 个一批)
             round_tasks, build_errors = self._build_agv_transfer_tasks(round_records)
             all_errors.extend(build_errors)
+            if build_errors:
+                logger.error(f"第 {round_num} 轮 AGV 任务构建失败, 终止后续操作")
+                rounds_result.append({
+                    "round_num": round_num,
+                    "success": False,
+                    "phase": "build_agv_tasks",
+                    "errors": build_errors,
+                })
+                overall_success = False
+                break
 
             transferred = 0
             batches: List[JsonDict] = []
@@ -645,6 +671,58 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 else f"执行过程中出现错误, 完成 {len([r for r in rounds_result if r.get('success')])} 轮"
             ),
         }
+
+    def _validate_agv_transfer_round_records(
+        self,
+        records: List[Dict[str, str]],
+        *,
+        round_num: int,
+    ) -> List[str]:
+        """
+        功能:
+            校验单轮 AGV 上料记录是否满足唯一性要求.
+            同一轮次内 position 与 shelf_position 都必须唯一, 且不能为空.
+        参数:
+            records: List[Dict[str, str]], 单轮上料记录列表.
+            round_num: int, 当前轮次编号.
+        返回:
+            List[str], 校验失败时的错误信息列表.
+        """
+        errors: List[str] = []
+        positions: List[str] = []
+        shelf_positions: List[str] = []
+
+        for index, record in enumerate(records, start=1):
+            position = str(record.get("position", "")).strip()
+            shelf_position = str(record.get("shelf_position", "")).strip()
+
+            if position == "":
+                errors.append(f"第 {round_num} 轮第 {index} 条记录缺少 position, 无法执行 AGV 上料")
+            else:
+                positions.append(position)
+
+            if shelf_position == "":
+                errors.append(f"第 {round_num} 轮第 {index} 条记录缺少 shelf_position, 无法执行 AGV 上料")
+            else:
+                shelf_positions.append(shelf_position)
+
+        duplicate_positions = self._collect_duplicate_texts(positions)
+        if duplicate_positions:
+            errors.append(
+                "第 "
+                f"{round_num} 轮存在重复的 position: {', '.join(duplicate_positions)}. "
+                "同一轮次不能复用 TB 位, 请检查 batch_in_tray.xlsx 顺序或重新生成上料文件"
+            )
+
+        duplicate_shelf_positions = self._collect_duplicate_texts(shelf_positions)
+        if duplicate_shelf_positions:
+            errors.append(
+                "第 "
+                f"{round_num} 轮存在重复的 shelf_position: {', '.join(duplicate_shelf_positions)}. "
+                "同一轮次不能复用同一个货架位, 请检查 batch_in_tray.xlsx 顺序或重新生成上料文件"
+            )
+
+        return errors
 
     def _generate_batch_in_tray_template(self, file_path: Path) -> None:
         """
@@ -1717,7 +1795,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             tray_type_name = f"{tray_display_name}({tray_type_code})"
             consumable_display_name = CONSUMABLE_CODE_DISPLAY_NAME.get(consumable_code, substance)
 
-            # 获取托盘规格，计算满盘数量
+            # 获取托盘规格, 计算满盘数量
             spec = tray_spec_map.get(tray_type_code)
             if spec is None:
                 logger.warning(f"未找到托盘规格: {tray_type_code}, 跳过")
@@ -1726,7 +1804,71 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             cols, rows = spec
             full_tray_capacity = cols * rows
 
-            # 分配位置
+            # REACTION_TUBE_TRAY_2ML 特殊处理: 按需求数量选择12/24/36/48规格
+            if tray_type_code == int(ResourceCode.REACTION_TUBE_TRAY_2ML):
+                tray_capacity = 24  # 一盘24个
+                available_specs = [12, 24, 36, 48]
+
+                # 选择最小的满足需求的规格, 超出48则取48
+                chosen_spec = available_specs[-1]
+                for spec_val in available_specs:
+                    if consumable_count <= spec_val:
+                        chosen_spec = spec_val
+                        break
+
+                # 按每盘24个拆分到多个托盘
+                remaining = chosen_spec
+                tray_allocations = []
+                while remaining > 0:
+                    tray_amount = min(remaining, tray_capacity)
+                    tray_allocations.append(tray_amount)
+                    remaining -= tray_amount
+
+                # 为每个托盘分配独立位置
+                for tray_amount in tray_allocations:
+                    new_idx = None
+                    for i in range(len(position_list)):
+                        if i not in allocated_position_indices:
+                            new_idx = i
+                            break
+
+                    if new_idx is None:
+                        logger.warning("可用位置已用完, 无法分配新料盘, 跳过耗材 %s", substance)
+                        break
+
+                    allocated_position_indices.add(new_idx)
+                    position = position_list[new_idx]
+                    shelf_position = shelf_position_list[new_idx]
+
+                    # 记录到tray_usage, 标记已用坑位数以避免被复用
+                    if tray_type_code not in tray_usage:
+                        tray_usage[tray_type_code] = []
+                    tray_usage[tray_type_code].append(
+                        [position, shelf_position, tray_amount, full_tray_capacity, new_idx]
+                    )
+
+                    slot_content = str(tray_amount)
+
+                    tray_key = f"{position}_{shelf_position}"
+                    if tray_key not in position_groups:
+                        position_groups[tray_key] = {
+                            "position": position,
+                            "tray_type": tray_type_name,
+                            "contents": [],
+                            "shelf_position": shelf_position,
+                            "storages": []
+                        }
+
+                    position_groups[tray_key]["contents"].append(slot_content)
+                    position_groups[tray_key]["storages"].append(f"{consumable_display_name}|耗材库")
+                    logger.info(
+                        "添加耗材上料项(反应试管): %s -> %s, 选定规格 %s, 本盘数量 %s(需求 %s)",
+                        substance, position, chosen_spec, tray_amount, consumable_count,
+                    )
+
+                continue
+
+            # 其他耗材: 按满盘分配
             try:
                 position, shelf_position, slot_name = _allocate_slot(tray_type_code, tray_type_name)
             except ValueError as e:
@@ -1770,9 +1912,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             )
 
         # 6. 合并同一位置的内容并生成最终数据
+        # 保持首次分配顺序, 避免第二轮复用的 TB 位被字符串排序插回第一轮.
         batch_in_data = []
-        for tray_key in sorted(position_groups.keys()):
-            group = position_groups[tray_key]
+        for group in position_groups.values():
             # 用分号连接同一料盘的所有坑位
             combined_content = ";".join(group["contents"])
             combined_storage = ";".join(group["storages"])

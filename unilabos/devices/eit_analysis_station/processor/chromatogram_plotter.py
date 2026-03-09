@@ -11,6 +11,7 @@
 """
 
 import logging
+import textwrap
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -200,7 +201,7 @@ class ChromatogramPlotter:
             if compound_matches is not None:
                 match_list = self._find_match(peak.retention_time, compound_matches)
                 if match_list is not None and len(match_list) > 0:
-                    name = match_list[0].compound_name
+                    name = self._wrap_compound_name(match_list[0].compound_name)
                     label_text += f"\n{name}"
 
             label_items.append((peak, label_text))
@@ -333,6 +334,29 @@ class ChromatogramPlotter:
             return f"{area:.2f}"
         else:
             return f"{area:.4f}"
+
+    @staticmethod
+    def _wrap_compound_name(name: str, max_line_length: int = 22) -> str:
+        """
+        功能:
+            对过长化合物名称自动换行, 减少峰标注的横向占位.
+        参数:
+            name: 原始化合物名称.
+            max_line_length: 单行最大字符数.
+        返回:
+            str, 插入换行后的化合物名称.
+        """
+        normalized_name = " ".join(str(name).split())
+        if len(normalized_name) <= max_line_length:
+            return normalized_name
+
+        # 优先按空格和连字符断行, 实在过长时再切分连续长串.
+        return textwrap.fill(
+            normalized_name,
+            width=max_line_length,
+            break_long_words=True,
+            break_on_hyphens=True,
+        )
 
     def plot_ms_spectrum(
         self,

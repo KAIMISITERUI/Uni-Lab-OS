@@ -34,6 +34,7 @@ def _build_integrator(
     *,
     integration_mode: str = "robust_v3",
     shoulder_filter_enable: bool = True,
+    tail_artifact_filter_enable: bool = True,
 ) -> PeakIntegrator:
     """
     功能:
@@ -63,6 +64,10 @@ def _build_integrator(
         shoulder_filter_width_max_min=0.035,
         shoulder_filter_gap_max_min=0.09,
         shoulder_filter_relative_prominence_max=0.15,
+        tail_artifact_filter_enable=tail_artifact_filter_enable,
+        tail_artifact_gap_max_min=0.12,
+        tail_artifact_relative_prominence_max=0.08,
+        tail_artifact_half_width_asymmetry_min=4.0,
     )
 
 
@@ -207,6 +212,7 @@ def run_synthetic_shoulder_regression() -> bool:
         min_distance=5,
         integration_mode="robust_v3",
         shoulder_filter_enable=False,
+        tail_artifact_filter_enable=False,
     ).integrate(times, signal)
 
     if _has_peak_in_window(peaks_v2, 8.72, 8.77) is False:
@@ -237,6 +243,66 @@ def run_synthetic_shoulder_regression() -> bool:
         "合成肩峰回归通过: robust_v2=%s, robust_v3=%s",
         _rounded_rts(peaks_v2),
         _rounded_rts(peaks_v3),
+    )
+    return True
+
+
+def run_synthetic_tail_artifact_regression() -> bool:
+    """
+    功能:
+        验证 robust_v3 可以过滤强峰拖尾后的单侧假峰.
+    参数:
+        无.
+    返回:
+        bool, True 表示通过.
+    """
+    rng = np.random.default_rng(7)
+    times = np.arange(8.0, 9.2, 0.01)
+    baseline = 1.8e4 + 2.5e3 * np.sin((times - 8.0) * 1.1)
+    main_peak = _gaussian(times, center=8.67, sigma=0.006, amplitude=1.8e7)
+    tail_signal = np.where(times > 8.67, 2.5e5 * np.exp(-(times - 8.67) / 0.06), 0.0)
+    signal = baseline + main_peak + tail_signal + rng.normal(0.0, 1800.0, size=len(times))
+
+    peaks_disabled = _build_integrator(
+        prominence=10000.0,
+        min_distance=5,
+        integration_mode="robust_v3",
+        shoulder_filter_enable=True,
+        tail_artifact_filter_enable=False,
+    ).integrate(times, signal)
+    peaks_enabled = _build_integrator(
+        prominence=10000.0,
+        min_distance=5,
+        integration_mode="robust_v3",
+        shoulder_filter_enable=True,
+        tail_artifact_filter_enable=True,
+    ).integrate(times, signal)
+
+    if len(peaks_disabled) < 2 or _has_peak_in_window(peaks_disabled, 8.72, 8.78) is False:
+        logger.error(
+            "合成拖尾假峰回归失败: 关闭拖尾假峰过滤时, 未保留预期尾部伪峰. peaks=%s",
+            _rounded_rts(peaks_disabled),
+        )
+        return False
+    if len(peaks_enabled) != 1 or _has_peak(peaks_enabled, 8.67, 0.03) is False:
+        logger.error(
+            "合成拖尾假峰回归失败: 启用拖尾假峰过滤后, 主峰保留结果异常. peaks=%s",
+            _rounded_rts(peaks_enabled),
+        )
+        return False
+
+    merged_peak = _closest_peak(peaks_enabled, 8.67)
+    if merged_peak.end_time < 8.74:
+        logger.error(
+            "合成拖尾假峰回归失败: 启用拖尾假峰过滤后, 主峰未吸收尾部面积. end_time=%.4f",
+            merged_peak.end_time,
+        )
+        return False
+
+    logger.info(
+        "合成拖尾假峰回归通过: disabled=%s, enabled=%s",
+        _rounded_rts(peaks_disabled),
+        _rounded_rts(peaks_enabled),
     )
     return True
 
@@ -452,6 +518,7 @@ def run_robust_v2_compat_smoke(data_root: Path) -> bool:
             min_distance=min_distance,
             integration_mode="robust_v3",
             shoulder_filter_enable=False,
+            tail_artifact_filter_enable=False,
         ).integrate(times, intensities)
 
         if _rounded_rts(peaks_v2) != _rounded_rts(peaks_v3_disabled):
@@ -501,6 +568,7 @@ def main() -> int:
     checks: List[Callable[[], bool]] = [
         run_synthetic_doublet_regression,
         run_synthetic_shoulder_regression,
+        run_synthetic_tail_artifact_regression,
         lambda: run_real_sample_regression(args.data_root),
         lambda: run_robust_v2_compat_smoke(args.data_root),
     ]

@@ -99,6 +99,31 @@ class SynthesisStationController:
         # 异常通知监控器 (惰性创建, 调用 start_notification_monitor 时初始化)
         self._notification_monitor = None
 
+    @staticmethod
+    def _collect_duplicate_texts(values: List[str]) -> List[str]:
+        """
+        功能:
+            按首次重复出现的顺序收集重复文本.
+        参数:
+            values: List[str], 待检查的文本列表.
+        返回:
+            List[str], 去重后的重复文本列表.
+        """
+        seen_values: set[str] = set()
+        duplicate_values: List[str] = []
+
+        for raw_value in values:
+            value = str(raw_value).strip()
+            if value == "":
+                continue
+            if value in seen_values:
+                if value not in duplicate_values:
+                    duplicate_values.append(value)
+                continue
+            seen_values.add(value)
+
+        return duplicate_values
+
     @property
     def client(self) -> ApiClient:
         return self._client
@@ -2005,6 +2030,8 @@ class SynthesisStationController:
 
         transfer_tasks: List[Dict[str, Any]] = []
         errors: List[str] = []
+        target_tray_to_position: Dict[str, str] = {}
+        source_tray_to_shelf_position: Dict[str, str] = {}
 
         for record in records:
             position = record["position"]
@@ -2037,6 +2064,28 @@ class SynthesisStationController:
             # 映射源托盘位置: shelf_position (x-x) -> shelf_tray_x-x
             source_tray = f"shelf_tray_{shelf_position}"
 
+            # 同一批次内目标 TB 位不能重复, 否则 AGV 会对同一工位重复放料
+            if target_tray in target_tray_to_position:
+                existed_position = target_tray_to_position[target_tray]
+                error_msg = (
+                    f"检测到重复的目标工位: {existed_position} 与 {position} "
+                    f"均映射到 {target_tray}, 请检查上料文件轮次或 position 配置"
+                )
+                self._logger.error(error_msg)
+                errors.append(error_msg)
+                continue
+
+            # 同一批次内货架位也不能重复, 避免对同一源位重复取料
+            if source_tray in source_tray_to_shelf_position:
+                existed_shelf_position = source_tray_to_shelf_position[source_tray]
+                error_msg = (
+                    f"检测到重复的货架位: {existed_shelf_position} 与 {shelf_position} "
+                    f"均映射到 {source_tray}, 请检查上料文件中的 shelf_position 配置"
+                )
+                self._logger.error(error_msg)
+                errors.append(error_msg)
+                continue
+
             # 映射物料类型
             material_type = RESOURCE_CODE_TO_MATERIAL_TYPE.get(tray_type_code)
             if material_type is None:
@@ -2053,6 +2102,8 @@ class SynthesisStationController:
                 "target_tray": target_tray,
                 "material_type": material_type,
             }
+            target_tray_to_position[target_tray] = position
+            source_tray_to_shelf_position[source_tray] = shelf_position
             transfer_tasks.append(task)
             self._logger.info(
                 f"转运任务: {source_tray} -> {target_tray}, "
@@ -2215,6 +2266,16 @@ class SynthesisStationController:
 
         # 3. 解析上料信息 -> 转运任务
         transfer_tasks_all, errors = self._build_agv_transfer_tasks(batch_records)
+
+        if len(errors) > 0:
+            self._logger.error("上料文件校验失败, 停止 AGV 转运: %s", "; ".join(errors))
+            return {
+                "success": False,
+                "total_trays": len(batch_records),
+                "transferred_trays": 0,
+                "batches": [],
+                "errors": errors,
+            }
 
         if len(transfer_tasks_all) == 0:
             self._logger.warning("没有有效的转运任务")
@@ -5183,3 +5244,4 @@ class SynthesisStationController:
             self._logger.warning("资源核查未通过, 缺失项 %s", missing_items)
 
         return result
+

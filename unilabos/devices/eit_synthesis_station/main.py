@@ -237,8 +237,9 @@ def _menu_quick_workflow(manager):
     options = [
         ("1", "完整合成流程(AGV上料)"),
         ("2", "完整合成流程(手动上料)"),
-        ("3", "提交任务流程"),
-        ("4", "合成任务+分析执行流程"),
+        ("3", "上传任务流程"),
+        ("4", "提交合成任务+分析执行流程"),
+        ("5", "等待任务完成+分析执行流程"),
         ("0", "返回上级菜单"),
     ]
 
@@ -305,6 +306,16 @@ def _menu_quick_workflow(manager):
                 ("AGV上料", lambda: manager.batch_in_tray_with_agv_transfer()),
                 ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
                 ("启动任务", lambda: manager.start_task()),
+                ("等待任务完成", lambda: manager.wait_task_with_ops()),
+                ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
+                ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),
+                ("谱图数据处理", lambda: manager.poll_analysis_run()),
+            ]
+            _run_workflow(steps, quick=True)
+
+        elif choice == "5":
+            # 执行流程
+            steps = [
                 ("等待任务完成", lambda: manager.wait_task_with_ops()),
                 ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
                 ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),

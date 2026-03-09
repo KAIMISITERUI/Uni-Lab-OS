@@ -57,7 +57,7 @@ class PeakIntegrator:
 
         - legacy: 兼容历史流程(ALS/非ALS + valley/peak_widths).
         - robust_v2: 滚动分位数基线(可回退 ALS) + 噪声阈值 + 自适应限宽边界.
-        - robust_v3: robust_v2 + find_peaks 后肩峰过滤.
+        - robust_v3: robust_v2 + find_peaks 后相邻假峰过滤.
         - gcpy: Whittaker 平滑 + 线性插值基线扣除.
 
     参数:
@@ -82,6 +82,10 @@ class PeakIntegrator:
         shoulder_filter_width_max_min: 判定肩峰的半高宽上限(min).
         shoulder_filter_gap_max_min: 判定肩峰的邻峰间隔上限(min).
         shoulder_filter_relative_prominence_max: 判定肩峰的相对显著性上限.
+        tail_artifact_filter_enable: 是否启用拖尾假峰过滤.
+        tail_artifact_gap_max_min: 判定拖尾假峰与前峰的最大间隔(min).
+        tail_artifact_relative_prominence_max: 判定拖尾假峰的相对显著性上限.
+        tail_artifact_half_width_asymmetry_min: 判定拖尾假峰的右左半高宽比下限.
     返回:
         无.
     """
@@ -109,6 +113,10 @@ class PeakIntegrator:
         shoulder_filter_width_max_min: float = 0.035,
         shoulder_filter_gap_max_min: float = 0.09,
         shoulder_filter_relative_prominence_max: float = 0.15,
+        tail_artifact_filter_enable: bool = True,
+        tail_artifact_gap_max_min: float = 0.12,
+        tail_artifact_relative_prominence_max: float = 0.08,
+        tail_artifact_half_width_asymmetry_min: float = 4.0,
         gcpy_whittaker_lmbd: float = 10.0,
     ):
         self._smoothing_window = self._ensure_odd(max(3, int(smoothing_window)))
@@ -136,6 +144,10 @@ class PeakIntegrator:
         self._shoulder_filter_width_max_min = float(shoulder_filter_width_max_min)
         self._shoulder_filter_gap_max_min = float(shoulder_filter_gap_max_min)
         self._shoulder_filter_relative_prominence_max = float(shoulder_filter_relative_prominence_max)
+        self._tail_artifact_filter_enable = bool(tail_artifact_filter_enable)
+        self._tail_artifact_gap_max_min = float(tail_artifact_gap_max_min)
+        self._tail_artifact_relative_prominence_max = float(tail_artifact_relative_prominence_max)
+        self._tail_artifact_half_width_asymmetry_min = float(tail_artifact_half_width_asymmetry_min)
 
         # gcpy 参数
         self._gcpy_whittaker_lmbd = float(gcpy_whittaker_lmbd)
@@ -156,6 +168,25 @@ class PeakIntegrator:
         if value % 2 == 0:
             return value + 1
         return value
+
+    @staticmethod
+    def _safe_ratio(numerator: float, denominator: float) -> float:
+        """
+        功能:
+            计算安全比值, 避免 0 或非法值导致异常.
+        参数:
+            numerator: 分子.
+            denominator: 分母.
+        返回:
+            float, 合法时返回比值, 否则返回 inf.
+        """
+        if not np.isfinite(numerator) or not np.isfinite(denominator):
+            return float("inf")
+
+        if denominator <= 0:
+            return float("inf")
+
+        return float(numerator / denominator)
 
     def _als_baseline(
         self,
@@ -687,7 +718,7 @@ class PeakIntegrator:
         for item in results:
             item.area_percent = item.area / total_area * 100.0
 
-    def _filter_shoulder_peak_indices(
+    def _filter_adjacent_artifact_peak_indices(
         self,
         times: np.ndarray,
         corrected_signal: np.ndarray,
@@ -695,7 +726,7 @@ class PeakIntegrator:
     ) -> Tuple[np.ndarray, List[Optional[int]]]:
         """
         功能:
-            在 robust_v3 中识别需要并入前峰的拖尾肩峰.
+            在 robust_v3 中识别需要并入前峰的肩峰或拖尾假峰.
         参数:
             times: 时间数组(min).
             corrected_signal: 基线校正后的检测信号.
@@ -706,7 +737,7 @@ class PeakIntegrator:
                 merge_targets: 记录每个峰并入的目标峰编号, 未并入时为 None.
         """
         merge_targets: List[Optional[int]] = [None] * len(peak_indices)
-        if self._shoulder_filter_enable is False:
+        if self._shoulder_filter_enable is False and self._tail_artifact_filter_enable is False:
             return np.ones(len(peak_indices), dtype=bool), merge_targets
 
         if len(peak_indices) <= 1:
@@ -714,11 +745,15 @@ class PeakIntegrator:
 
         dt = self._median_dt(times)
         if dt <= 0:
-            logger.warning("时间轴步长无效, 跳过肩峰过滤.")
+            logger.warning("时间轴步长无效, 跳过 robust_v3 后置假峰过滤.")
             return np.ones(len(peak_indices), dtype=bool), merge_targets
 
         prominences = peak_prominences(corrected_signal, peak_indices)[0]
-        widths_50 = peak_widths(corrected_signal, peak_indices, rel_height=0.5)[0]
+        widths_50, _, left_ips_50, right_ips_50 = peak_widths(
+            corrected_signal,
+            peak_indices,
+            rel_height=0.5,
+        )
         widths_50_min = widths_50 * dt
 
         keep_mask = np.ones(len(peak_indices), dtype=bool)
@@ -731,9 +766,6 @@ class PeakIntegrator:
             if not np.isfinite(current_width_min) or not np.isfinite(current_prominence):
                 continue
 
-            if current_width_min > self._shoulder_filter_width_max_min:
-                continue
-
             merge_target_no = peak_no - 1
             while merge_target_no >= 0 and not keep_mask[merge_target_no]:
                 merge_target_no -= 1
@@ -741,30 +773,62 @@ class PeakIntegrator:
             if merge_target_no < 0:
                 continue
 
-            previous_gap_min = float(times[int(peak_idx)] - times[int(peak_indices[merge_target_no])])
+            current_rt = float(times[int(peak_idx)])
+            previous_rt = float(times[int(peak_indices[merge_target_no])])
+            previous_gap_min = float(current_rt - previous_rt)
             previous_prominence = float(prominences[merge_target_no])
-            if previous_gap_min > self._shoulder_filter_gap_max_min:
-                continue
 
             if previous_prominence <= current_prominence:
                 continue
 
-            prominence_ratio = current_prominence / previous_prominence
-            if prominence_ratio > self._shoulder_filter_relative_prominence_max:
+            prominence_ratio = self._safe_ratio(current_prominence, previous_prominence)
+
+            if self._shoulder_filter_enable is True:
+                if previous_gap_min <= self._shoulder_filter_gap_max_min:
+                    if current_width_min <= self._shoulder_filter_width_max_min:
+                        if prominence_ratio <= self._shoulder_filter_relative_prominence_max:
+                            keep_mask[peak_no] = False
+                            merge_targets[peak_no] = merge_target_no
+                            logger.info(
+                                "RT=%.3f 的峰判定为前峰拖尾肩峰, 并入 RT=%.3f 的前峰. 半高宽=%.4f min, 前峰间隔=%.4f min, prominence=%.4f, 前峰prominence=%.4f, 比值=%.4f",
+                                current_rt,
+                                previous_rt,
+                                current_width_min,
+                                previous_gap_min,
+                                current_prominence,
+                                previous_prominence,
+                                prominence_ratio,
+                            )
+                            continue
+
+            if self._tail_artifact_filter_enable is False:
+                continue
+
+            if previous_gap_min > self._tail_artifact_gap_max_min:
+                continue
+
+            if prominence_ratio > self._tail_artifact_relative_prominence_max:
+                continue
+
+            left_half_width_min = max(0.0, float((float(peak_idx) - left_ips_50[peak_no]) * dt))
+            right_half_width_min = max(0.0, float((right_ips_50[peak_no] - float(peak_idx)) * dt))
+            half_width_asymmetry = self._safe_ratio(right_half_width_min, left_half_width_min)
+            if half_width_asymmetry < self._tail_artifact_half_width_asymmetry_min:
                 continue
 
             keep_mask[peak_no] = False
             merge_targets[peak_no] = merge_target_no
             logger.info(
-                "RT=%.3f 的峰判定为前峰拖尾肩峰, 并入 RT=%.3f 的前峰. 半高宽=%.4f min, 前峰间隔=%.4f min, prominence=%.4f, 前峰prominence=%.4f, 比值=%.4f",
-                float(times[int(peak_idx)]),
-                float(times[int(peak_indices[merge_target_no])]),
-                current_width_min,
+                "RT=%.3f 的峰判定为前峰拖尾假峰, 并入 RT=%.3f 的前峰. 峰间隔=%.4f min, prominence=%.4f, 前峰prominence=%.4f, 比值=%.4f, 右左半高宽比=%.4f",
+                current_rt,
+                previous_rt,
                 previous_gap_min,
                 current_prominence,
                 previous_prominence,
                 prominence_ratio,
+                half_width_asymmetry,
             )
+            continue
 
         return keep_mask, merge_targets
 
@@ -863,7 +927,7 @@ class PeakIntegrator:
         参数:
             times: 时间数组.
             intensities: 强度数组.
-            apply_shoulder_filter: 是否在 find_peaks 后执行肩峰过滤.
+            apply_shoulder_filter: 是否在 find_peaks 后执行 robust_v3 后置假峰过滤.
             mode_name: 当前模式名称, 用于日志.
         返回:
             List[PeakResult], 峰列表.
@@ -906,9 +970,13 @@ class PeakIntegrator:
         keep_mask = np.ones(len(peak_indices), dtype=bool)
         merge_targets: List[Optional[int]] = [None] * len(peak_indices)
         if apply_shoulder_filter is True:
-            keep_mask, merge_targets = self._filter_shoulder_peak_indices(times, corrected_signal, peak_indices)
+            keep_mask, merge_targets = self._filter_adjacent_artifact_peak_indices(
+                times,
+                corrected_signal,
+                peak_indices,
+            )
             if not np.any(keep_mask):
-                logger.info("%s 模式肩峰并峰后未检测到峰.", mode_name)
+                logger.info("%s 模式后置假峰合并后未检测到峰.", mode_name)
                 return []
 
         merged_right_boundary_map = {}
@@ -938,7 +1006,7 @@ class PeakIntegrator:
             left_idx, right_idx = boundary
             merged_right_idx = merged_right_boundary_map.get(i)
             if merged_right_idx is not None and merged_right_idx > right_idx:
-                # 并峰后将前峰右边界扩展到被并入肩峰的右边界.
+                # 并峰后将前峰右边界扩展到被并入相邻假峰的右边界.
                 right_idx = merged_right_idx
 
             left_idx = max(0, left_idx)

@@ -108,7 +108,7 @@ class Settings:
     # ---------- 峰检测与积分参数 ----------
     integration_mode: str = "robust_v3"  # 处理模式, 可选 robust_v3 / robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
-    peak_prominence: float = 10000.0  # TIC 最小峰显著性阈值, 调高会减少弱峰识别.
+    peak_prominence: float = 20000.0  # TIC 最小峰显著性阈值, 小幅调高以抑制平基线弱假峰.
     peak_min_distance: int = 5  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
     peak_width_rel_height: float = 0.99  # 峰宽计算相对高度, 调整后影响峰边界与面积.
     fid_peak_prominence: float = 0.5  # FID 最小峰显著性阈值, 调高会减少弱峰识别.
@@ -133,6 +133,10 @@ class Settings:
     robust_v3_shoulder_width_max_min: float = 0.035  # 肩峰半高宽上限(min), 调大将更严格过滤窄肩峰.
     robust_v3_shoulder_gap_max_min: float = 0.09  # 肩峰与强邻峰的最大间隔(min), 调大将扩大肩峰判定范围.
     robust_v3_shoulder_relative_prominence_max: float = 0.15  # 肩峰相对显著性上限, 调大将过滤更显著的弱邻峰.
+    robust_v3_tail_artifact_filter_enable: bool = True  # robust_v3 是否启用拖尾假峰过滤, 关闭后仅保留肩峰过滤.
+    robust_v3_tail_artifact_gap_max_min: float = 0.12  # 拖尾假峰与前峰最大间隔(min), 调大将扩大拖尾合并范围.
+    robust_v3_tail_artifact_relative_prominence_max: float = 0.08  # 拖尾假峰相对显著性上限, 调大将合并更强的尾部小峰.
+    robust_v3_tail_artifact_half_width_asymmetry_min: float = 4.0  # 拖尾假峰右/左半高宽不对称下限, 调大将减少误合并.
 
     # ---------- gcpy 参数 ----------
     gcpy_whittaker_lmbd: float = 10.0  # gcpy 模式 Whittaker 平滑参数, 调大可使信号更平滑.
@@ -208,6 +212,10 @@ class Settings:
             ANALYSIS_ROBUST_V3_SHOULDER_WIDTH_MAX_MIN,
             ANALYSIS_ROBUST_V3_SHOULDER_GAP_MAX_MIN,
             ANALYSIS_ROBUST_V3_SHOULDER_RELATIVE_PROMINENCE_MAX,
+            ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_FILTER_ENABLE,
+            ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_GAP_MAX_MIN,
+            ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_RELATIVE_PROMINENCE_MAX,
+            ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_HALF_WIDTH_ASYMMETRY_MIN,
             ANALYSIS_PEAK_RT_MIN, ANALYSIS_PEAK_RT_MAX,
             ANALYSIS_TIC_AREA_MIN, ANALYSIS_TIC_AREA_MAX,
             ANALYSIS_FID_AREA_MIN, ANALYSIS_FID_AREA_MAX,
@@ -322,6 +330,22 @@ class Settings:
             robust_v3_shoulder_relative_prominence_max=_float(
                 "ANALYSIS_ROBUST_V3_SHOULDER_RELATIVE_PROMINENCE_MAX",
                 defaults.robust_v3_shoulder_relative_prominence_max,
+            ),
+            robust_v3_tail_artifact_filter_enable=_bool(
+                "ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_FILTER_ENABLE",
+                defaults.robust_v3_tail_artifact_filter_enable,
+            ),
+            robust_v3_tail_artifact_gap_max_min=_float(
+                "ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_GAP_MAX_MIN",
+                defaults.robust_v3_tail_artifact_gap_max_min,
+            ),
+            robust_v3_tail_artifact_relative_prominence_max=_float(
+                "ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_RELATIVE_PROMINENCE_MAX",
+                defaults.robust_v3_tail_artifact_relative_prominence_max,
+            ),
+            robust_v3_tail_artifact_half_width_asymmetry_min=_float(
+                "ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_HALF_WIDTH_ASYMMETRY_MIN",
+                defaults.robust_v3_tail_artifact_half_width_asymmetry_min,
             ),
             report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
             structure_cache_dir=_path("ANALYSIS_STRUCTURE_CACHE_DIR", defaults.structure_cache_dir),

@@ -1308,6 +1308,10 @@ class AnalysisStationController:
                 shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
                 shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
                 shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
+                tail_artifact_filter_enable=self._settings.robust_v3_tail_artifact_filter_enable,
+                tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
+                tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
+                tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
@@ -1346,6 +1350,10 @@ class AnalysisStationController:
                 shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
                 shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
                 shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
+                tail_artifact_filter_enable=self._settings.robust_v3_tail_artifact_filter_enable,
+                tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
+                tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
+                tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)

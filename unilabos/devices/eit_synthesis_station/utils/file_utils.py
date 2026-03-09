@@ -20,6 +20,42 @@ import psutil
 
 logger = logging.getLogger("FileUtils")
 
+# Excel 进程名集合, 用于快速匹配
+_EXCEL_PROC_NAMES = {"excel.exe", "microsoft excel"}
+
+
+def _has_excel_process() -> bool:
+    """
+    功能:
+        快速检测系统中是否有 Excel 进程在运行.
+        仅查询进程名, 不查询文件句柄, 速度极快.
+    返回:
+        bool, True 表示存在至少一个 Excel 进程
+    """
+    for proc in psutil.process_iter(["name"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            if name in _EXCEL_PROC_NAMES:
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
+
+
+def _cleanup_lock_file(lock_file: Path) -> None:
+    """
+    功能:
+        清理 Office 残留的锁文件(~$filename.xlsx).
+    参数:
+        lock_file: 锁文件的 Path 对象
+    """
+    if lock_file.exists():
+        try:
+            lock_file.unlink()
+            logger.info("已删除残留锁文件: %s", lock_file.name)
+        except OSError as exc:
+            logger.warning("无法删除锁文件 %s: %s", lock_file.name, exc)
+
 
 def _try_close_excel_workbook(path: Path) -> bool:
     """
@@ -74,68 +110,70 @@ def release_file_lock(path: Union[str, Path]) -> bool:
         logger.warning("检测到 Excel 锁文件, 尝试通过 COM 关闭工作簿 | 文件: %s", path.name)
         if _try_close_excel_workbook(path):
             released = True
-            # COM 成功关闭工作簿后, 等待 Excel 释放文件句柄
-            time.sleep(0.5)
-            # 清理可能残留的锁文件
-            if lock_file.exists():
-                try:
-                    lock_file.unlink()
-                except OSError:
-                    pass  # 锁文件已被 Excel 自动删除则忽略
+            time.sleep(0.5)  # 等待 Excel 释放文件句柄
+            _cleanup_lock_file(lock_file)
             return released
-        # COM 失败, 继续走 psutil 流程
+        # COM 失败, 检查是否有 Excel 进程在运行
+        if not _has_excel_process():
+            # 没有 Excel 进程, 锁文件是残留的, 直接清理即可
+            logger.info("未检测到 Excel 进程, 锁文件为残留文件, 直接清理 | 文件: %s", lock_file.name)
+            _cleanup_lock_file(lock_file)
+            return True
 
-    # --- 策略 2: 通过 psutil 扫描持有文件句柄的进程 ---
-    for proc in psutil.process_iter(["pid", "name", "open_files"]):
+    # --- 策略 2: 仅扫描 Excel 进程的文件句柄(避免全量扫描所有进程) ---
+    scan_start = time.monotonic()
+    scan_timeout = 10.0  # 扫描超时上限(秒)
+
+    for proc in psutil.process_iter(["pid", "name"]):
+        # 超时保护, 防止扫描过程卡死
+        if time.monotonic() - scan_start > scan_timeout:
+            logger.warning("进程扫描超时(%.0f秒), 放弃扫描", scan_timeout)
+            break
+
         try:
-            open_files = proc.info.get("open_files") or []
+            proc_name = proc.info.get("name") or ""
+            proc_pid  = proc.info["pid"]
+
+            # 只对 Excel 进程查询 open_files, 跳过其他进程
+            if proc_name.lower() not in _EXCEL_PROC_NAMES:
+                continue
+
+            # 仅在匹配到 Excel 进程时才查询其文件句柄
+            try:
+                open_files = proc.open_files() or []
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                continue
             held_paths = {Path(f.path).resolve() for f in open_files}
 
             if path not in held_paths and lock_file not in held_paths:
                 continue
 
-            proc_name = proc.info["name"]
-            proc_pid  = proc.info["pid"]
+            # 先尝试 COM 精准关闭工作簿, 避免误关其他文件
+            logger.warning(
+                "检测到 Excel 占用文件, 尝试 COM 精准关闭 | 文件: %s | PID=%s",
+                path.name, proc_pid,
+            )
+            if _try_close_excel_workbook(path):
+                released = True
+                continue  # COM 成功, 不杀进程
 
-            # 对 Excel 进程: 先尝试 COM 精准关闭工作簿, 避免误关其他文件
-            if proc_name.lower() in ("excel.exe", "microsoft excel"):
-                logger.warning(
-                    "检测到 Excel 占用文件, 尝试 COM 精准关闭 | 文件: %s | PID=%s",
-                    path.name, proc_pid,
-                )
-                if _try_close_excel_workbook(path):
-                    released = True
-                    continue  # COM 成功, 不杀进程, 继续检查下一个进程
-                # COM 失败才杀进程
-                logger.warning("COM 失败, 回退终止 Excel 进程 | PID=%s", proc_pid)
-            else:
-                logger.warning(
-                    "检测到文件被进程占用, 正在终止 | 文件: %s | 进程: %s (PID=%s)",
-                    path.name, proc_name, proc_pid,
-                )
-
-            # 终止整个进程(Excel COM 失败兜底, 或非 Excel 进程)
+            # COM 失败才终止进程
+            logger.warning("COM 失败, 回退终止 Excel 进程 | PID=%s", proc_pid)
             try:
-                proc.terminate()        # 先发送温和的 SIGTERM
-                proc.wait(timeout=2)    # 最多等 2 秒
+                proc.terminate()
+                proc.wait(timeout=2)
             except psutil.TimeoutExpired:
-                proc.kill()             # 超时则强制 kill
+                proc.kill()
             except psutil.AccessDenied:
                 logger.warning("无权限终止进程 %s (PID=%s), 跳过", proc_name, proc_pid)
                 continue
             released = True
 
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            # 进程在遍历期间已退出或无权查看, 直接跳过
             continue
 
-    # 清理残留锁文件(进程退出后可能不会立即删除)
-    if lock_file.exists():
-        try:
-            lock_file.unlink()
-            logger.info("已删除残留锁文件: %s", lock_file.name)
-        except OSError as exc:
-            logger.warning("无法删除锁文件 %s: %s", lock_file.name, exc)
+    # 清理残留锁文件
+    _cleanup_lock_file(lock_file)
 
     return released
 

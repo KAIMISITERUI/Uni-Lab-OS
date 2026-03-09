@@ -1,11 +1,17 @@
+import json
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 from .email_channel import EmailChannel
 from .formatter import NoticeFormatter
 from .notification_settings import NotificationSettings
+
+# 快照存储目录
+_SNAPSHOTS_DIR = Path(__file__).resolve().parent.parent / "data" / "snapshots"
 
 
 class NotificationMonitor:
@@ -13,10 +19,16 @@ class NotificationMonitor:
     功能:
         后台守护线程, 周期性轮询 Notice API, 检测新的故障/告警通知并发送邮件.
         通过 threading.Event 控制优雅退出, 支持去重与速率限制.
+        已通知的 notice_id 持久化到磁盘, 避免重启后重复发送;
+        每次检测到的故障/告警快照保存到 data/snapshots/fault_notices.json.
     参数:
         controller: SynthesisStationController 实例, 用于调用 notice() 方法.
         settings: NotificationSettings, 通知配置.
     """
+
+    # 持久化文件名
+    _NOTIFIED_IDS_FILE = "notified_ids.json"
+    _FAULT_NOTICES_FILE = "fault_notices.json"
 
     def __init__(self, controller: Any, settings: NotificationSettings):
         self._controller = controller
@@ -30,8 +42,11 @@ class NotificationMonitor:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
-        # 去重: {notice_id: 首次处理的时间戳}
-        self._processed_ids: Dict[int, float] = {}
+        # 确保快照目录存在
+        _SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 去重: 从磁盘加载已通知的 notice_id 集合, 避免重复发送
+        self._notified_ids: Set[int] = self._load_notified_ids()
 
         # 速率限制: 记录每次发送通知的时间戳
         self._send_timestamps: List[float] = []
@@ -116,14 +131,14 @@ class NotificationMonitor:
             "running": self.is_running,
             "total_processed": self._total_processed,
             "last_poll_time": self._last_poll_time,
-            "processed_ids_count": len(self._processed_ids),
+            "notified_ids_count": len(self._notified_ids),
             "email_available": self._email_channel.is_available(),
         }
 
     def _poll_loop(self) -> None:
         """
         功能:
-            主轮询循环: 周期性获取通知 -> 过滤新通知 -> 发送邮件.
+            主轮询循环: 周期性获取通知 -> 保存快照 -> 过滤新通知 -> 发送邮件.
             使用 _stop_event.wait() 替代 time.sleep(), 确保可快速响应停止信号.
         参数:
             无.
@@ -139,13 +154,13 @@ class NotificationMonitor:
                 # 获取通知
                 notices = self._fetch_notices()
                 if notices:
-                    # 过滤出未处理的新通知
+                    # 保存故障快照到磁盘
+                    self._save_fault_snapshot(notices)
+
+                    # 过滤出未通知过的新通知
                     new_notices = self._filter_new(notices)
                     if new_notices:
                         self._send_email(new_notices)
-
-                # 定期清理过期的已处理记录
-                self._cleanup_processed_ids()
 
             except Exception as e:
                 # 捕获所有异常, 确保循环不中断
@@ -179,15 +194,14 @@ class NotificationMonitor:
     def _filter_new(self, notices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         功能:
-            过滤出未处理的新通知:
-            - 跳过已处理的 id (在冷却期内)
+            过滤出未通知过的新通知:
+            - 跳过已持久化记录的 id (已发送过邮件的不再重复发送)
             - 跳过状态为 FIXED(3) 的通知
         参数:
             notices: List[Dict], 从 Notice API 获取的原始通知列表.
         返回:
             List[Dict], 需要发送通知的新条目.
         """
-        now = time.time()
         new_notices = []
 
         for notice in notices:
@@ -200,13 +214,9 @@ class NotificationMonitor:
             if status == 3:
                 continue
 
-            # 检查去重冷却
-            last_time = self._processed_ids.get(notice_id)
-            if last_time is not None:
-                elapsed = now - last_time
-                if elapsed < self._settings.cooldown_s:
-                    # 仍在冷却期内, 跳过
-                    continue
+            # 跳过已通知过的 notice_id (持久化去重, 不再基于冷却时间)
+            if notice_id in self._notified_ids:
+                continue
 
             new_notices.append(notice)
 
@@ -215,7 +225,8 @@ class NotificationMonitor:
     def _send_email(self, notices: List[Dict[str, Any]]) -> None:
         """
         功能:
-            格式化通知内容并通过邮件渠道发送. 发送成功后记录已处理 id.
+            格式化通知内容并通过邮件渠道发送.
+            发送成功后将 notice_id 持久化到磁盘, 确保不再重复发送.
         参数:
             notices: List[Dict], 需要发送的通知列表.
         返回:
@@ -237,11 +248,12 @@ class NotificationMonitor:
 
         now = time.time()
         if success:
-            # 记录已处理的通知 id
+            # 将已通知的 id 加入集合并持久化到磁盘
             for notice in notices:
                 notice_id = notice.get("id")
                 if notice_id is not None:
-                    self._processed_ids[notice_id] = now
+                    self._notified_ids.add(notice_id)
+            self._save_notified_ids()
             self._total_processed += len(notices)
             self._send_timestamps.append(now)
             self._logger.info("已发送 %d 条异常通知邮件", len(notices))
@@ -265,24 +277,88 @@ class NotificationMonitor:
 
         return len(self._send_timestamps) < self._settings.max_notifications_per_hour
 
-    def _cleanup_processed_ids(self) -> None:
+    def _load_notified_ids(self) -> Set[int]:
         """
         功能:
-            清理超过 24 小时的已处理通知记录, 防止内存无限增长.
+            从磁盘加载已通知的 notice_id 集合.
+            文件不存在或解析失败时返回空集合.
+        参数:
+            无.
+        返回:
+            Set[int], 已通知的 notice_id 集合.
+        """
+        file_path = _SNAPSHOTS_DIR / self._NOTIFIED_IDS_FILE
+        if not file_path.exists():
+            return set()
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            ids = set(int(i) for i in data.get("notified_ids", []))
+            self._logger.info("从磁盘加载了 %d 条已通知记录", len(ids))
+            return ids
+        except Exception as e:
+            self._logger.warning("加载已通知记录失败, 将重新开始: %s", e)
+            return set()
+
+    def _save_notified_ids(self) -> None:
+        """
+        功能:
+            将已通知的 notice_id 集合持久化到磁盘, 确保重启后不重复发送.
         参数:
             无.
         返回:
             无.
         """
-        now = time.time()
-        expire_threshold = 86400.0  # 24 小时
+        file_path = _SNAPSHOTS_DIR / self._NOTIFIED_IDS_FILE
+        try:
+            data = {
+                "updated_at": datetime.now().isoformat(),
+                "notified_ids": sorted(self._notified_ids),
+            }
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self._logger.warning("持久化已通知记录失败: %s", e)
 
-        expired_ids = [
-            nid for nid, ts in self._processed_ids.items()
-            if now - ts > expire_threshold
-        ]
-        for nid in expired_ids:
-            del self._processed_ids[nid]
+    def _save_fault_snapshot(self, notices: List[Dict[str, Any]]) -> None:
+        """
+        功能:
+            将本轮获取到的故障/告警通知保存到 data/snapshots/fault_notices.json.
+            采用追加合并模式: 按 notice_id 去重, 保留最新状态.
+        参数:
+            notices: List[Dict], 从 Notice API 获取的通知列表.
+        返回:
+            无.
+        """
+        file_path = _SNAPSHOTS_DIR / self._FAULT_NOTICES_FILE
+        try:
+            # 读取已有快照
+            existing: Dict[str, Any] = {}
+            if file_path.exists():
+                with open(file_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
 
-        if expired_ids:
-            self._logger.debug("已清理 %d 条过期的通知处理记录", len(expired_ids))
+            # 按 notice_id 索引已有记录
+            records: Dict[int, Any] = {}
+            for item in existing.get("notices", []):
+                nid = item.get("id")
+                if nid is not None:
+                    records[nid] = item
+
+            # 合并本轮通知, 覆盖同 id 的旧记录
+            for notice in notices:
+                nid = notice.get("id")
+                if nid is not None:
+                    records[nid] = notice
+
+            # 按 id 排序后写回
+            snapshot = {
+                "updated_at": datetime.now().isoformat(),
+                "count": len(records),
+                "notices": sorted(records.values(), key=lambda x: x.get("id", 0)),
+            }
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False, indent=2)
+
+        except Exception as e:
+            self._logger.warning("保存故障快照失败: %s", e)
