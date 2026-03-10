@@ -1975,6 +1975,200 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info(f"已生成上料文件: {batch_in_path}, 共{len(batch_in_data)}行, 包含{sum(len(g['contents']) for g in position_groups.values())}个物资")
         logger.info(f"请检查文件并根据需要调整")
 
+        # 自动打印试剂名称标签
+        try:
+            self.print_reagent_labels()
+        except Exception as exc:
+            logger.warning("自动打印试剂标签失败(不影响上料文件生成): %s", exc)
+
+    # ---------- 4.5 标签打印 ----------
+
+    def _get_label_printer(self):
+        """
+        功能:
+            延迟创建并返回标签打印服务实例.
+        返回:
+            LabelPrintService 实例.
+        """
+        if not hasattr(self, "_label_printer") or self._label_printer is None:
+            from ..printer import LabelPrintService
+            config_path = MODULE_ROOT / "printer" / "25x10x2.yaml"
+            self._label_printer = LabelPrintService(str(config_path))
+        return self._label_printer
+
+    def print_reagent_labels(self) -> None:
+        """
+        功能:
+            从上料文件(batch_in_tray.xlsx)中提取试剂名称, 打印试剂标签.
+            只打印试剂(固体/液体), 不打印耗材.
+            通过判断content字段是否包含"|"来区分试剂和耗材.
+        """
+        batch_in_path = MODULE_ROOT / "sheet" / "batch_in_tray.xlsx"
+        if not batch_in_path.exists():
+            raise FileNotFoundError(f"未找到上料文件: {batch_in_path}")
+
+        wb = load_workbook(batch_in_path, read_only=True)
+        try:
+            # 定位 sheet
+            ws = None
+            for name in wb.sheetnames:
+                if "batch_in_tray" in name.lower():
+                    ws = wb[name]
+                    break
+            if ws is None:
+                ws = wb.active
+
+            # 解析表头, 找到 content 列
+            headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+            if "content" not in headers:
+                raise ValueError("上料文件缺少 content 列")
+            content_col_idx = headers.index("content")
+
+            # 提取试剂名称 (含"|"的条目为试剂行, 第二个字段为试剂名)
+            reagent_names = []
+            seen = set()
+            for row in ws.iter_rows(min_row=2):
+                cell_value = row[content_col_idx].value
+                if cell_value is None:
+                    continue
+                content_str = str(cell_value).strip()
+                # 多个坑位用";"分隔
+                for slot_entry in content_str.split(";"):
+                    slot_entry = slot_entry.strip()
+                    if "|" not in slot_entry:
+                        continue  # 耗材行, 跳过
+                    parts = slot_entry.split("|")
+                    if len(parts) >= 2:
+                        substance = parts[1].strip()
+                        if substance and substance not in seen:
+                            reagent_names.append(substance)
+                            seen.add(substance)
+        finally:
+            wb.close()
+
+        if not reagent_names:
+            logger.info("上料文件中没有试剂条目, 无需打印标签")
+            return
+
+        logger.info("从上料文件中提取到 %d 种试剂: %s", len(reagent_names), ", ".join(reagent_names))
+
+        # 打印标签
+        printer = self._get_label_printer()
+        try:
+            printer.connect()
+            printer.print_batch(reagent_names)
+        finally:
+            printer.disconnect()
+
+        logger.info("试剂标签打印完成")
+
+    def print_task_number_labels(self, task_id: int) -> None:
+        """
+        功能:
+            根据实验方案文件打印两组编号标签:
+            - 反应管标签: R{task_id}-1, R{task_id}-2, ..., R{task_id}-N
+            - 检测样品标签: S{task_id}-1, S{task_id}-2, ..., S{task_id}-M
+            N 由实验编号最大值决定, M 由闪滤实验编号决定(空=全部).
+        参数:
+            task_id: int, 任务ID.
+        """
+        # 1. 查找实验方案文件
+        plan_path = MODULE_ROOT / "data" / "tasks" / str(task_id) / f"{task_id}_experiment_plan.xlsx"
+        if not plan_path.exists():
+            raise FileNotFoundError(f"未找到实验方案文件: {plan_path}")
+
+        wb = load_workbook(plan_path, read_only=True)
+        try:
+            # 定位实验方案 sheet (第一个 sheet, 不用 wb.active 因为活动页可能是其他 sheet)
+            ws = wb.worksheets[0]
+
+            # 2. 读取实验编号 (列C, 从第2行开始)
+            experiment_numbers = []
+            for row in ws.iter_rows(min_row=2, min_col=3, max_col=3):
+                val = row[0].value
+                if val is not None:
+                    try:
+                        # 兼容 int/float/str 混合类型
+                        num = int(float(str(val)))
+                        experiment_numbers.append(num)
+                    except (ValueError, TypeError):
+                        pass
+
+            if not experiment_numbers:
+                raise ValueError(f"任务 {task_id} 的实验方案文件中未找到实验编号")
+
+            max_exp_num = max(experiment_numbers)
+            logger.info("任务 %d: 实验编号 1~%d", task_id, max_exp_num)
+
+            # 3. 读取闪滤实验编号 (行29, 列B)
+            flash_filter_cell = ws.cell(row=29, column=2).value
+            if flash_filter_cell is None or str(flash_filter_cell).strip() == "":
+                # 空值: 所有实验都需要闪滤 -> 样品编号 = 全部实验编号
+                sample_numbers = list(range(1, max_exp_num + 1))
+                logger.info("闪滤实验编号为空, 全部 %d 个实验需要样品标签", max_exp_num)
+            else:
+                # 解析闪滤编号 (支持 "1,3,5" 或 "1-6" 或混合 "1-3,5,7-9")
+                sample_numbers = self._parse_number_range(str(flash_filter_cell).strip())
+                logger.info("闪滤实验编号: %s -> 样品标签 %d 张", flash_filter_cell, len(sample_numbers))
+        finally:
+            wb.close()
+
+        # 4. 生成标签内容
+        reaction_labels = [f"R{task_id}-{i}" for i in range(1, max_exp_num + 1)]
+        sample_labels = [f"S{task_id}-{i}" for i in sample_numbers]
+
+        printer = self._get_label_printer()
+        try:
+            printer.connect()
+
+            # 5. 一次确认后连续打印两组标签
+            print(f"\n即将打印标签:")
+            print(f"  反应管: {len(reaction_labels)} 张 ({reaction_labels[0]} ~ {reaction_labels[-1]})")
+            print(f"  检测样品: {len(sample_labels)} 张 ({sample_labels[0]} ~ {sample_labels[-1]})")
+            input("请确认打印机就绪, 按回车开始打印...")
+
+            logger.info("正在打印反应管标签: %d 张", len(reaction_labels))
+            printer.print_batch(reaction_labels)
+            logger.info("反应管标签打印完成")
+
+            logger.info("正在打印检测样品标签: %d 张", len(sample_labels))
+            printer.print_batch(sample_labels)
+            logger.info("检测样品标签打印完成")
+        finally:
+            printer.disconnect()
+
+    @staticmethod
+    def _parse_number_range(range_str: str) -> List[int]:
+        """
+        功能:
+            解析数字范围字符串, 支持逗号分隔和连字符范围.
+            例: "1,3,5" -> [1,3,5], "1-6" -> [1,2,3,4,5,6], "1-3,5,7-9" -> [1,2,3,5,7,8,9]
+        参数:
+            range_str: str, 数字范围字符串.
+        返回:
+            List[int], 排序后的编号列表.
+        """
+        import re
+        numbers = set()
+        # 按逗号或中文逗号分隔
+        parts = re.split(r"[,，]", range_str)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # 检查是否包含范围连字符
+            range_match = re.match(r"(\d+)\s*[-~]\s*(\d+)", part)
+            if range_match:
+                start = int(range_match.group(1))
+                end = int(range_match.group(2))
+                numbers.update(range(start, end + 1))
+            else:
+                try:
+                    numbers.add(int(part))
+                except ValueError:
+                    pass
+        return sorted(numbers)
+
     # ---------- 5. 执行任务 ----------
     def device_init(self, device_id=None, *, poll_interval_s: float = 1.0, timeout_s: float = 600.0):
         return super().device_init(device_id, poll_interval_s=poll_interval_s, timeout_s=timeout_s)

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # ──────────────────────────── 常量 ────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.yaml")
+CONFIG_PATH = os.path.join(SCRIPT_DIR, "25x10x2.yaml")
 DLL_PATH = os.path.join(SCRIPT_DIR, "libs", "TSCLIB.dll")
 
 # 默认配置, 首次运行时写入config.yaml
@@ -81,7 +81,7 @@ def load_config(path):
     with open(path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    logger.info("已加载配置: %s", path)
+    logger.debug("已加载配置: %s", path)
     return config
 
 
@@ -114,7 +114,7 @@ def load_dll(dll_path):
         sys.exit(1)
 
     lib = ctypes.WinDLL(dll_path)
-    logger.info("已加载DLL: %s", dll_path)
+    logger.debug("已加载DLL: %s", dll_path)
 
     # 声明常用函数的参数类型, 确保ctypes正确传递参数
     wstr = ctypes.c_wchar_p
@@ -174,6 +174,7 @@ def calc_auto_layout(paper, font_cfg, text, dots_per_mm):
     功能:
         根据单个标签尺寸和文字内容, 自动计算字号和居中坐标.
         文字区域占标签面积的80%, 居中放置.
+        当文字过长导致字号过小时, 自动拆为多行.
 
     参数:
         paper: dict, 纸张配置
@@ -182,9 +183,9 @@ def calc_auto_layout(paper, font_cfg, text, dots_per_mm):
         dots_per_mm: float, 每毫米点数(由PPI计算得到)
 
     返回:
-        tuple(x, y, font_height), 单位dot, x/y是相对于单个标签左上角的偏移
+        list[tuple(x, y, font_height, line_text)], 每行的布局信息.
+        x/y 是相对于单个标签左上角的偏移(dot).
     """
-    # 使用单个标签宽度而非纸张总宽度
     label_w_mm = calc_label_width(paper)
     label_h_mm = paper["height"]
     label_w = label_w_mm * dots_per_mm
@@ -194,7 +195,58 @@ def calc_auto_layout(paper, font_cfg, text, dots_per_mm):
     usable_w = label_w * 0.8
     usable_h = label_h * 0.8
 
-    # 统计字符宽度系数: CJK字符宽度约等于字高, ASCII约为字高的0.5倍
+    # 尝试单行, 如果字号过小则拆多行
+    lines = [text]
+    for max_lines in range(1, 4):
+        if max_lines > 1:
+            lines = _split_text(text, max_lines)
+        # 每行可用高度 = 总可用高度 / 行数 (行间留 10% 间距)
+        line_h = usable_h / max_lines
+        # 计算所有行中最小的字号 (最长行决定)
+        font_height = int(line_h * 0.9)  # 行高的90%作为字号上限
+        for line in lines:
+            wf = _calc_width_factor(line)
+            font_by_width = int(usable_w / wf) if wf > 0 else font_height
+            font_height = min(font_height, font_by_width)
+
+        # 字号足够大 (>= 可用高度的30%), 或已到最大拆分行数, 则采用
+        if font_height >= usable_h * 0.3 or max_lines >= 3:
+            break
+
+    if font_height < 8:
+        font_height = 8
+
+    # 计算每行居中坐标
+    total_text_h = font_height * len(lines) + max(0, len(lines) - 1) * (font_height * 0.15)
+    # 整体垂直居中的起始y
+    y_start = int((label_h - total_text_h) / 2)
+    if y_start < 0:
+        y_start = 0
+
+    result = []
+    for i, line in enumerate(lines):
+        wf = _calc_width_factor(line)
+        text_w = font_height * wf
+        x = int((label_w - text_w) / 2)
+        if x < 0:
+            x = 0
+        y = y_start + int(i * font_height * 1.15)
+        result.append((x, y, font_height, line))
+
+    logger.debug("自动布局: 单标签%.1fx%.1fmm, %d行, 字号%d",
+                 label_w_mm, label_h_mm, len(lines), font_height)
+    return result
+
+
+def _calc_width_factor(text):
+    """
+    功能:
+        计算文字的宽度系数. CJK字符宽度约等于字高, ASCII约为字高的0.55倍.
+    参数:
+        text: str, 文字内容.
+    返回:
+        float, 宽度系数 (乘以字号即为文字像素宽度).
+    """
     cjk_count = 0
     ascii_count = 0
     for ch in text:
@@ -202,36 +254,62 @@ def calc_auto_layout(paper, font_cfg, text, dots_per_mm):
             cjk_count += 1
         else:
             ascii_count += 1
-    # 总宽度 = font_height * width_factor
-    width_factor = cjk_count * 1.0 + ascii_count * 0.55
+    factor = cjk_count * 1.0 + ascii_count * 0.55
+    return factor if factor > 0 else 1
 
-    if width_factor == 0:
-        width_factor = 1
 
-    # 字号受两个约束: 不超过可用宽度, 不超过可用高度
-    font_by_width = int(usable_w / width_factor)
-    font_by_height = int(usable_h)
-    font_height = min(font_by_width, font_by_height)
+def _split_text(text, max_lines):
+    """
+    功能:
+        将文字按自然断点拆分为指定行数, 尽量在空格/括号/逗号处断开.
+    参数:
+        text: str, 原始文字.
+        max_lines: int, 目标行数.
+    返回:
+        list[str], 拆分后的文字行列表.
+    """
+    if max_lines <= 1 or len(text) <= 1:
+        return [text]
 
-    # 限制最小字号
-    if font_height < 8:
-        font_height = 8
+    # 按宽度系数找分割点, 使每段宽度尽量均匀
+    total_wf = _calc_width_factor(text)
+    target_wf = total_wf / max_lines
 
-    # 计算居中坐标
-    text_w = font_height * width_factor
-    text_h = font_height
-    x = int((label_w - text_w) / 2)
-    y = int((label_h - text_h) / 2)
+    lines = []
+    remaining = text
+    for line_idx in range(max_lines - 1):
+        best_pos = -1
+        accum_wf = 0
+        # 遍历字符累加宽度, 在超过目标宽度附近找最佳断点
+        for i, ch in enumerate(remaining):
+            accum_wf += 1.0 if ord(ch) > 0x7F else 0.55
+            # 在目标宽度的 70%~130% 范围内寻找自然断点
+            if accum_wf >= target_wf * 0.7:
+                if ch in " ,，;；()（）/\\-":
+                    best_pos = i + 1  # 断点后面
+                elif i + 1 < len(remaining) and remaining[i + 1] in " ,，;；()（）/\\-":
+                    best_pos = i + 1
+            if accum_wf >= target_wf * 1.3:
+                break
 
-    # 防止坐标为负
-    if x < 0:
-        x = 0
-    if y < 0:
-        y = 0
+        # 没找到自然断点, 按宽度均分强制切
+        if best_pos <= 0:
+            accum_wf = 0
+            for i, ch in enumerate(remaining):
+                accum_wf += 1.0 if ord(ch) > 0x7F else 0.55
+                if accum_wf >= target_wf:
+                    best_pos = i + 1
+                    break
+            if best_pos <= 0:
+                best_pos = len(remaining) // 2
 
-    logger.info("自动布局: 单标签%.1fx%.1fmm(%dx%ddot), 字号%d, 居中偏移(%d,%d), 文字宽度%.0fdot",
-                label_w_mm, label_h_mm, int(label_w), int(label_h), font_height, x, y, text_w)
-    return x, y, font_height
+        lines.append(remaining[:best_pos].strip())
+        remaining = remaining[best_pos:].strip()
+
+    if remaining:
+        lines.append(remaining)
+
+    return [l for l in lines if l]
 
 
 def init_printer(lib, config):
@@ -249,12 +327,12 @@ def init_printer(lib, config):
     unit = paper["unit"]
 
     lib.openportW(port)
-    logger.info("已连接打印机, 端口: %s", port)
+    logger.debug("已连接打印机, 端口: %s", port)
 
     # SIZE使用纸张总宽度, 打印机传感器自动识别多列布局
     size_cmd = f"SIZE {paper['width']} {unit}, {paper['height']} {unit}"
     lib.sendcommandW(size_cmd)
-    logger.info("纸张尺寸: %s", size_cmd)
+    logger.debug("纸张尺寸: %s", size_cmd)
 
     # 设置上下间隙
     gap_cmd = f"GAP {paper['gap']} {unit}, {paper['gap_offset']} {unit}"
@@ -298,35 +376,36 @@ def print_text(lib, config, texts):
         if text == "":
             continue
 
-        # 每列独立计算字号和居中坐标(不同文字长度对应不同字号)
-        center_x, center_y, font_height = calc_auto_layout(paper, font, text, dots_per_mm)
+        # 每列独立计算字号和居中坐标, 支持自动换行
+        layout_lines = calc_auto_layout(paper, font, text, dots_per_mm)
 
         # 列起始x偏移(mm) = 左边距 + 列序号 * (标签宽度 + 列间距)
         col_origin_mm = margin + col * (label_width_mm + column_gap)
         col_origin_dot = int(col_origin_mm * dots_per_mm)
 
-        # 绝对x坐标 = 列起始偏移 + 标签内居中偏移
-        abs_x = col_origin_dot + center_x
-        abs_y = center_y  # y坐标不受列影响
+        for center_x, center_y, font_height, line_text in layout_lines:
+            # 绝对x坐标 = 列起始偏移 + 标签内居中偏移
+            abs_x = col_origin_dot + center_x
+            abs_y = center_y  # y坐标不受列影响
 
-        # UTF-16LE编码后追加终止符, 用create_string_buffer避免c_char_p截断\x00
-        raw = text.encode("utf-16-le") + b"\x00\x00"
-        content_buf = ctypes.create_string_buffer(raw)
+            # UTF-16LE编码后追加终止符, 用create_string_buffer避免c_char_p截断\x00
+            raw = line_text.encode("utf-16-le") + b"\x00\x00"
+            content_buf = ctypes.create_string_buffer(raw)
 
-        lib.windowsfontUnicode(
-            abs_x, abs_y, font_height,
-            int(font.get("rotation", 0)),
-            int(font.get("bold", 0)),
-            int(font.get("underline", 0)),
-            font_name,
-            ctypes.cast(content_buf, ctypes.c_void_p),
-        )
-        logger.info("列%d: 文字'%s', 绝对坐标(%d,%d), 列起始%.1fmm(%ddot)",
-                     col + 1, text, abs_x, abs_y, col_origin_mm, col_origin_dot)
+            lib.windowsfontUnicode(
+                abs_x, abs_y, font_height,
+                int(font.get("rotation", 0)),
+                int(font.get("bold", 0)),
+                int(font.get("underline", 0)),
+                font_name,
+                ctypes.cast(content_buf, ctypes.c_void_p),
+            )
+        logger.debug("列%d: 文字'%s' (%d行), 列起始%.1fmm(%ddot)",
+                     col + 1, text, len(layout_lines), col_origin_mm, col_origin_dot)
 
     # 所有列绘制完毕后统一打印
     lib.printlabelW("1", "1")
-    logger.info("已发送打印(%d列): %s", columns, " | ".join(texts))
+    logger.debug("已发送打印(%d列): %s", columns, " | ".join(texts))
 
 
 def close_printer(lib):
@@ -338,7 +417,7 @@ def close_printer(lib):
         lib: ctypes.WinDLL, TSC库实例
     """
     lib.closeport()
-    logger.info("打印机连接已关闭")
+    logger.debug("打印机连接已关闭")
 
 
 def main():

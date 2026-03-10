@@ -143,7 +143,7 @@ class Settings:
 
     # ---------- 峰过滤参数 ----------
     peak_rt_min: Optional[float] = 4.0  # 峰保留时间下限(min), 调大可忽略前段溶剂峰.
-    peak_rt_max: Optional[float] = 10.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
+    peak_rt_max: Optional[float] = 15.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
     tic_area_min: Optional[float] = 10000.0  # TIC 峰面积下限, 调大可过滤小面积峰.
     tic_area_max: Optional[float] = None  # TIC 峰面积上限, 设置后可过滤过载峰.
     fid_area_min: Optional[float] = 0.01  # FID 峰面积下限, 调大可过滤微小峰.
