@@ -106,7 +106,7 @@ class Settings:
     mspepsearch_timeout: float = 120.0  # MSPepSearch 超时秒数, 调大可降低复杂谱图超时失败.
 
     # ---------- 峰检测与积分参数 ----------
-    integration_mode: str = "robust_v3"  # 处理模式, 可选 robust_v3 / robust_v2 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "robust_v3"  # 处理模式, 可选 robust_v3 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
     peak_prominence: float = 20000.0  # TIC 最小峰显著性阈值, 小幅调高以抑制平基线弱假峰.
     peak_min_distance: int = 5  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
@@ -120,8 +120,8 @@ class Settings:
     als_p: float = 0.01  # ALS 非对称参数 p, 调整后影响正负残差惩罚.
     use_valley_boundary: bool = False  # 是否使用谷底边界法, 打开后边界更贴近局部谷底.
 
-    # ---------- robust_v2/v3 参数 ----------
-    baseline_method: str = "rolling_quantile"  # robust_v2/v3 基线方法, 修改后改变背景估计方式.
+    # ---------- robust_v3 参数 ----------
+    baseline_method: str = "rolling_quantile"  # robust_v3 基线方法, 修改后改变背景估计方式.
     baseline_quantile: float = 20.0  # rolling quantile 分位数, 调低会提升基线灵敏度.
     baseline_window_min: float = 0.9  # 基线窗口宽度(min), 调大可提升基线平稳性.
     boundary_sigma_factor: float = 3.0  # 边界 sigma 系数, 调大通常会扩展积分边界.
@@ -134,9 +134,15 @@ class Settings:
     robust_v3_shoulder_gap_max_min: float = 0.09  # 肩峰与强邻峰的最大间隔(min), 调大将扩大肩峰判定范围.
     robust_v3_shoulder_relative_prominence_max: float = 0.15  # 肩峰相对显著性上限, 调大将过滤更显著的弱邻峰.
     robust_v3_tail_artifact_filter_enable: bool = True  # robust_v3 是否启用拖尾假峰过滤, 关闭后仅保留肩峰过滤.
-    robust_v3_tail_artifact_gap_max_min: float = 0.12  # 拖尾假峰与前峰最大间隔(min), 调大将扩大拖尾合并范围.
-    robust_v3_tail_artifact_relative_prominence_max: float = 0.08  # 拖尾假峰相对显著性上限, 调大将合并更强的尾部小峰.
-    robust_v3_tail_artifact_half_width_asymmetry_min: float = 4.0  # 拖尾假峰右/左半高宽不对称下限, 调大将减少误合并.
+    robust_v3_tail_artifact_gap_max_min: float = 0.20  # 拖尾假峰与前峰最大间隔(min), 调大将扩大拖尾合并范围.
+    robust_v3_tail_artifact_relative_prominence_max: float = 0.15  # 拖尾假峰相对显著性上限, 调大将合并更强的尾部小峰.
+    robust_v3_tail_artifact_half_width_asymmetry_min: float = 2.0  # 拖尾假峰右/左半高宽不对称下限, 调大将减少误合并.
+    robust_v3_tail_monotonic_filter_enable: bool = True  # robust_v3 是否启用平滑信号单调下降拖尾过滤, 关闭后仅使用三条件拖尾过滤.
+    robust_v3_tail_monotonic_ratio_max: float = 0.25  # 单调下降拖尾判定时上升步占比上限, 调大会放松判定.
+    robust_v3_max_peak_width_min: float = 0.5  # robust_v3 峰最大边界宽度(min), 超过此值视为基线抬升假峰. 设0关闭.
+    robust_v3_leading_edge_filter_enable: bool = True  # robust_v3 是否启用前沿假峰过滤, 检测强峰上升沿上的假峰并丢弃.
+    robust_v3_leading_edge_relative_prominence_max: float = 0.25  # 前沿假峰相对后峰显著性上限, 调大将丢弃更强的前沿假峰.
+    robust_v3_leading_edge_monotonic_ratio_min: float = 0.65  # 前沿假峰判定时上升步占比下限, 调低会放松判定.
 
     # ---------- gcpy 参数 ----------
     gcpy_whittaker_lmbd: float = 10.0  # gcpy 模式 Whittaker 平滑参数, 调大可使信号更平滑.
@@ -168,6 +174,12 @@ class Settings:
 
     # ---------- 报告目录 ----------
     report_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent / "data")  # 报告输出根目录, 修改后改变报告与图像落盘位置.
+
+    # ---------- 实验归档目录 ----------
+    archive_dir: Path = field(
+        default_factory=lambda: Path(r"\\10.37.2.2\Autolab_Database\experiment_records")
+    )  # 实验归档输出根目录, 修改后改变归档数据落盘位置.
+    archive_copy_raw_data: bool = True  # 归档时是否复制 .D 原始数据目录, 打开后归档体积会显著增大.
 
     # ---------- 化学品库目录 ----------
     chemical_list_path: Path = field(  # 化学品清单路径, 修改后切换产率计算的物性来源.
@@ -216,6 +228,12 @@ class Settings:
             ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_GAP_MAX_MIN,
             ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_RELATIVE_PROMINENCE_MAX,
             ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_HALF_WIDTH_ASYMMETRY_MIN,
+            ANALYSIS_ROBUST_V3_TAIL_MONOTONIC_FILTER_ENABLE,
+            ANALYSIS_ROBUST_V3_TAIL_MONOTONIC_RATIO_MAX,
+            ANALYSIS_ROBUST_V3_MAX_PEAK_WIDTH_MIN,
+            ANALYSIS_ROBUST_V3_LEADING_EDGE_FILTER_ENABLE,
+            ANALYSIS_ROBUST_V3_LEADING_EDGE_RELATIVE_PROMINENCE_MAX,
+            ANALYSIS_ROBUST_V3_LEADING_EDGE_MONOTONIC_RATIO_MIN,
             ANALYSIS_PEAK_RT_MIN, ANALYSIS_PEAK_RT_MAX,
             ANALYSIS_TIC_AREA_MIN, ANALYSIS_TIC_AREA_MAX,
             ANALYSIS_FID_AREA_MIN, ANALYSIS_FID_AREA_MAX,
@@ -237,7 +255,8 @@ class Settings:
             ANALYSIS_SSHM_B_SS, ANALYSIS_IHSHM_HITS,
             ANALYSIS_IHSHM_MEMF, ANALYSIS_MSPEPSEARCH_TIMEOUT,
             ANALYSIS_NIST_STRUCTURE_SEED_MSP, ANALYSIS_NIST_STRUCTURE_SEED_MOL_DIR,
-            ANALYSIS_NIST_STRUCTURE_RUNTIME_CACHE_PATH, ANALYSIS_STRUCTURE_OFFLINE_ONLY.
+            ANALYSIS_NIST_STRUCTURE_RUNTIME_CACHE_PATH, ANALYSIS_STRUCTURE_OFFLINE_ONLY,
+            ANALYSIS_ARCHIVE_DIR, ANALYSIS_ARCHIVE_COPY_RAW_DATA.
         """
         defaults = Settings()
 
@@ -347,6 +366,30 @@ class Settings:
                 "ANALYSIS_ROBUST_V3_TAIL_ARTIFACT_HALF_WIDTH_ASYMMETRY_MIN",
                 defaults.robust_v3_tail_artifact_half_width_asymmetry_min,
             ),
+            robust_v3_tail_monotonic_filter_enable=_bool(
+                "ANALYSIS_ROBUST_V3_TAIL_MONOTONIC_FILTER_ENABLE",
+                defaults.robust_v3_tail_monotonic_filter_enable,
+            ),
+            robust_v3_tail_monotonic_ratio_max=_float(
+                "ANALYSIS_ROBUST_V3_TAIL_MONOTONIC_RATIO_MAX",
+                defaults.robust_v3_tail_monotonic_ratio_max,
+            ),
+            robust_v3_max_peak_width_min=_float(
+                "ANALYSIS_ROBUST_V3_MAX_PEAK_WIDTH_MIN",
+                defaults.robust_v3_max_peak_width_min,
+            ),
+            robust_v3_leading_edge_filter_enable=_bool(
+                "ANALYSIS_ROBUST_V3_LEADING_EDGE_FILTER_ENABLE",
+                defaults.robust_v3_leading_edge_filter_enable,
+            ),
+            robust_v3_leading_edge_relative_prominence_max=_float(
+                "ANALYSIS_ROBUST_V3_LEADING_EDGE_RELATIVE_PROMINENCE_MAX",
+                defaults.robust_v3_leading_edge_relative_prominence_max,
+            ),
+            robust_v3_leading_edge_monotonic_ratio_min=_float(
+                "ANALYSIS_ROBUST_V3_LEADING_EDGE_MONOTONIC_RATIO_MIN",
+                defaults.robust_v3_leading_edge_monotonic_ratio_min,
+            ),
             report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
             structure_cache_dir=_path("ANALYSIS_STRUCTURE_CACHE_DIR", defaults.structure_cache_dir),
             chemical_list_path=_path("ANALYSIS_CHEMICAL_LIST_PATH", defaults.chemical_list_path),
@@ -404,6 +447,8 @@ class Settings:
             structure_image_ppi=_int("ANALYSIS_STRUCTURE_IMAGE_PPI", defaults.structure_image_ppi),
             structure_image_size=_int("ANALYSIS_STRUCTURE_IMAGE_SIZE", defaults.structure_image_size),
             yield_rt_tolerance=_float("ANALYSIS_YIELD_RT_TOLERANCE", defaults.yield_rt_tolerance),
+            archive_dir=_path("ANALYSIS_ARCHIVE_DIR", defaults.archive_dir),
+            archive_copy_raw_data=_bool("ANALYSIS_ARCHIVE_COPY_RAW_DATA", defaults.archive_copy_raw_data),
         )
 
 

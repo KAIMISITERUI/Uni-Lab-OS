@@ -1,7 +1,8 @@
 """
 功能:
-    TSC标签打印机交互式打印脚本.
-    通过USB连接打印机, 用户输入文字后直接打印.
+    TSPL兼容标签打印机交互式打印脚本.
+    通过Windows打印机名称连接打印机, 用户输入文字后直接打印.
+    支持TSC, 佳博(Gainscha)等TSPL兼容打印机.
     纸张/字体/位置参数保存在config.yaml中.
 
 依赖:
@@ -14,6 +15,7 @@
 import ctypes
 import logging
 import os
+import subprocess
 import sys
 
 import yaml
@@ -34,7 +36,7 @@ DLL_PATH = os.path.join(SCRIPT_DIR, "libs", "TSCLIB.dll")
 # 默认配置, 首次运行时写入config.yaml
 DEFAULT_CONFIG = {
     "printer": {
-        "port": "USB",
+        "port": "Gprinter GP-1134T",  # Windows打印机名称
         "ppi": 300,
     },
     "paper": {
@@ -50,7 +52,7 @@ DEFAULT_CONFIG = {
     },
     "font": {
         "name": "微软雅黑",
-        "size": 24,
+        "size": 60,  # 字号上限(dot), 仅溢出时缩小
         "bold": 0,
         "underline": 0,
         "rotation": 0,
@@ -119,6 +121,7 @@ def load_dll(dll_path):
     # 声明常用函数的参数类型, 确保ctypes正确传递参数
     wstr = ctypes.c_wchar_p
     lib.openportW.argtypes = [wstr]
+    lib.openportW.restype = ctypes.c_int  # 0=失败, 非0=成功
     lib.closeport.argtypes = []
     lib.sendcommandW.argtypes = [wstr]
     lib.printlabelW.argtypes = [wstr, wstr]
@@ -130,6 +133,27 @@ def load_dll(dll_path):
     ]
     lib.windowsfontUnicode.restype = ctypes.c_int
     return lib
+
+
+def list_windows_printers():
+    """
+    功能:
+        列出系统中已安装的Windows打印机名称, 帮助用户查找正确的打印机端口名称.
+
+    返回:
+        list[str], 打印机名称列表. 获取失败时返回空列表.
+    """
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command",
+             "Get-Printer | Select-Object -ExpandProperty Name"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+    except Exception as e:
+        logger.warning("无法枚举系统打印机: %s", e)
+    return []
 
 
 def calc_label_width(paper):
@@ -172,18 +196,18 @@ def calc_dots_per_mm(config):
 def calc_auto_layout(paper, font_cfg, text, dots_per_mm):
     """
     功能:
-        根据单个标签尺寸和文字内容, 自动计算字号和居中坐标.
-        文字区域占标签面积的80%, 居中放置.
-        当文字过长导致字号过小时, 自动拆为多行.
+        根据标签尺寸和YAML字号上限计算布局.
+        字号由标签物理尺寸决定, 不随文字长度逐字变化.
+        仅当文字溢出一行时才尝试换行, 换行仍溢出才缩小字号.
 
     参数:
         paper: dict, 纸张配置
-        font_cfg: dict, 字体配置
+        font_cfg: dict, 字体配置 (font_cfg["size"]为字号上限, 单位dot)
         text: str, 要打印的文字
         dots_per_mm: float, 每毫米点数(由PPI计算得到)
 
     返回:
-        list[tuple(x, y, font_height, line_text)], 每行的布局信息.
+        list[tuple(x, y, font_height, line_text)], 每行布局信息.
         x/y 是相对于单个标签左上角的偏移(dot).
     """
     label_w_mm = calc_label_width(paper)
@@ -195,36 +219,57 @@ def calc_auto_layout(paper, font_cfg, text, dots_per_mm):
     usable_w = label_w * 0.8
     usable_h = label_h * 0.8
 
-    # 尝试单行, 如果字号过小则拆多行
-    lines = [text]
-    for max_lines in range(1, 4):
-        if max_lines > 1:
-            lines = _split_text(text, max_lines)
-        # 每行可用高度 = 总可用高度 / 行数 (行间留 10% 间距)
-        line_h = usable_h / max_lines
-        # 计算所有行中最小的字号 (最长行决定)
-        font_height = int(line_h * 0.9)  # 行高的90%作为字号上限
+    # YAML中的size字段作为字号上限(dot)
+    max_font = font_cfg.get("size", 60)
+    MIN_FONT = 8
+
+    font_height = None
+    final_lines = None
+
+    # 依次尝试1~3行, 优先保持max_font不缩小
+    for num_lines in range(1, 4):
+        # 该行数下的高度上限: 可用高度/行数 * 0.9 (留行间距)
+        h_cap = int(usable_h / num_lines * 0.9)
+        fh = min(max_font, h_cap)
+
+        if fh < MIN_FONT:
+            continue
+
+        # 拆分文字
+        lines = [text] if num_lines == 1 else _split_text(text, num_lines)
+
+        # 检查所有行在fh字号下是否都不超宽
+        all_fit = True
         for line in lines:
             wf = _calc_width_factor(line)
-            font_by_width = int(usable_w / wf) if wf > 0 else font_height
-            font_height = min(font_height, font_by_width)
+            if fh * wf > usable_w:
+                all_fit = False
+                break
 
-        # 字号足够大 (>= 可用高度的30%), 或已到最大拆分行数, 则采用
-        if font_height >= usable_h * 0.3 or max_lines >= 3:
+        if all_fit:
+            font_height = fh
+            final_lines = lines
             break
-
-    if font_height < 8:
-        font_height = 8
+    else:
+        # 3行仍溢出, 在3行基础上缩小字号直到适配
+        final_lines = _split_text(text, 3)
+        h_cap = int(usable_h / 3 * 0.9)
+        font_height = min(max_font, h_cap)
+        for line in final_lines:
+            wf = _calc_width_factor(line)
+            if wf > 0:
+                font_height = min(font_height, int(usable_w / wf))
+        if font_height < MIN_FONT:
+            font_height = MIN_FONT
 
     # 计算每行居中坐标
-    total_text_h = font_height * len(lines) + max(0, len(lines) - 1) * (font_height * 0.15)
-    # 整体垂直居中的起始y
+    total_text_h = font_height * len(final_lines) + max(0, len(final_lines) - 1) * int(font_height * 0.15)
     y_start = int((label_h - total_text_h) / 2)
     if y_start < 0:
         y_start = 0
 
     result = []
-    for i, line in enumerate(lines):
+    for i, line in enumerate(final_lines):
         wf = _calc_width_factor(line)
         text_w = font_height * wf
         x = int((label_w - text_w) / 2)
@@ -233,8 +278,8 @@ def calc_auto_layout(paper, font_cfg, text, dots_per_mm):
         y = y_start + int(i * font_height * 1.15)
         result.append((x, y, font_height, line))
 
-    logger.debug("自动布局: 单标签%.1fx%.1fmm, %d行, 字号%d",
-                 label_w_mm, label_h_mm, len(lines), font_height)
+    logger.debug("自动布局: 单标签%.1fx%.1fmm, %d行, 字号%d (上限%d)",
+                 label_w_mm, label_h_mm, len(final_lines), font_height, max_font)
     return result
 
 
@@ -326,7 +371,17 @@ def init_printer(lib, config):
     paper = config["paper"]
     unit = paper["unit"]
 
-    lib.openportW(port)
+    # 连接打印机并检查返回值
+    ret = lib.openportW(port)
+    if ret == 0:
+        available = list_windows_printers()
+        hint = ""
+        if available:
+            hint = f" 系统中可用的打印机: {', '.join(available)}"
+        raise RuntimeError(
+            f"无法连接打印机, 端口/名称: '{port}'.{hint}"
+            " 请检查配置中的打印机名称是否与系统中的名称一致"
+        )
     logger.debug("已连接打印机, 端口: %s", port)
 
     # SIZE使用纸张总宽度, 打印机传感器自动识别多列布局
@@ -365,6 +420,11 @@ def print_text(lib, config, texts):
     # 计算单个标签宽度(mm)
     label_width_mm = calc_label_width(paper)
 
+    # 读取位置偏移量 (用于物理打印机对齐微调, 单位mm, 转换为dot)
+    pos_cfg = config.get("position", {})
+    offset_x = int(float(pos_cfg.get("x", 0)) * dots_per_mm)
+    offset_y = int(float(pos_cfg.get("y", 0)) * dots_per_mm)
+
     # 清除打印缓冲区
     lib.sendcommandW("CLS")
 
@@ -384,9 +444,9 @@ def print_text(lib, config, texts):
         col_origin_dot = int(col_origin_mm * dots_per_mm)
 
         for center_x, center_y, font_height, line_text in layout_lines:
-            # 绝对x坐标 = 列起始偏移 + 标签内居中偏移
-            abs_x = col_origin_dot + center_x
-            abs_y = center_y  # y坐标不受列影响
+            # 绝对坐标 = 列起始偏移 + 标签内居中偏移 + 配置微调偏移
+            abs_x = col_origin_dot + center_x + offset_x
+            abs_y = center_y + offset_y
 
             # UTF-16LE编码后追加终止符, 用create_string_buffer避免c_char_p截断\x00
             raw = line_text.encode("utf-16-le") + b"\x00\x00"
@@ -406,6 +466,46 @@ def print_text(lib, config, texts):
     # 所有列绘制完毕后统一打印
     lib.printlabelW("1", "1")
     logger.debug("已发送打印(%d列): %s", columns, " | ".join(texts))
+
+
+def check_printer_ready(lib, config):
+    """
+    功能:
+        预检打印机连接. 启动时短暂打开并关闭一次打印端口, 用于确认配置可用,
+        同时避免长时间占用同一个打印会话导致作业延迟提交.
+
+    参数:
+        lib: ctypes.WinDLL, TSC库实例.
+        config: dict, 配置字典.
+    """
+    session_open = False
+    try:
+        init_printer(lib, config)
+        session_open = True
+    finally:
+        if session_open:
+            close_printer(lib)
+
+
+def execute_print_job(lib, config, texts):
+    """
+    功能:
+        执行一次完整打印作业. 每次打印都重新打开和关闭端口, 确保Windows打印队列
+        在单次作业结束后立即提交, 不会等到脚本退出时才真正出纸.
+
+    参数:
+        lib: ctypes.WinDLL, TSC库实例.
+        config: dict, 配置字典.
+        texts: list[str], 每列要打印的文字内容.
+    """
+    session_open = False
+    try:
+        init_printer(lib, config)
+        session_open = True
+        print_text(lib, config, texts)
+    finally:
+        if session_open:
+            close_printer(lib)
 
 
 def close_printer(lib):
@@ -432,9 +532,9 @@ def main():
     config = load_config(CONFIG_PATH)
     lib = load_dll(DLL_PATH)
 
-    # 连接并初始化打印机
+    # 启动时预检一次, 但不长期占用端口.
     try:
-        init_printer(lib, config)
+        check_printer_ready(lib, config)
     except Exception as e:
         logger.error("打印机初始化失败: %s", e)
         sys.exit(1)
@@ -481,7 +581,7 @@ def main():
                 continue
 
             try:
-                print_text(lib, config, texts)
+                execute_print_job(lib, config, texts)
                 print(f"已打印: {' | '.join(texts)}")
             except Exception as e:
                 logger.error("打印失败: %s", e)
@@ -491,7 +591,6 @@ def main():
         print("\n检测到中断信号")
 
     finally:
-        close_printer(lib)
         logger.info("=== 脚本已退出 ===")
 
 

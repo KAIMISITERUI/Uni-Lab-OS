@@ -20,12 +20,8 @@ from typing import List, Optional
 from .print_text import (
     load_config,
     load_dll,
-    calc_label_width,
-    calc_dots_per_mm,
-    calc_auto_layout,
-    init_printer,
-    print_text,
-    close_printer,
+    check_printer_ready,
+    execute_print_job,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,37 +56,34 @@ class LabelPrintService:
     def connect(self) -> bool:
         """
         功能:
-            加载DLL并连接打印机, 发送纸张初始化指令.
+            加载DLL并预检打印机可用性.
+            预检结束后立即关闭端口, 避免长期占用同一个打印会话.
         返回:
             bool, 连接成功返回True.
         """
         if self._connected:
             return True
         try:
-            self._lib = load_dll(self._dll_path)
-            init_printer(self._lib, self._config)
+            if self._lib is None:
+                self._lib = load_dll(self._dll_path)
+            check_printer_ready(self._lib, self._config)
             self._connected = True
-            logger.debug("标签打印服务已连接")
+            logger.debug("标签打印服务已就绪")
             return True
         except Exception as exc:
             logger.error("标签打印服务连接失败: %s", exc)
+            self._lib = None
             self._connected = False
             return False
 
     def disconnect(self) -> None:
         """
         功能:
-            关闭打印机连接.
+            释放打印服务资源.
         """
-        if self._lib is not None:
-            try:
-                close_printer(self._lib)
-                logger.debug("标签打印服务已断开")
-            except Exception as exc:
-                logger.warning("关闭打印机时异常: %s", exc)
-            finally:
-                self._lib = None
-                self._connected = False
+        self._lib = None
+        self._connected = False
+        logger.debug("标签打印服务已断开")
 
     @property
     def connected(self) -> bool:
@@ -120,7 +113,7 @@ class LabelPrintService:
                 return False
         try:
             for _ in range(copies):
-                print_text(self._lib, self._config, texts)
+                execute_print_job(self._lib, self._config, texts)
             return True
         except Exception as exc:
             logger.error("标签打印失败: %s", exc)

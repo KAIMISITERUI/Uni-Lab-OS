@@ -16,8 +16,10 @@ import json
 import logging
 import io
 import re
+import shutil
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1312,6 +1314,12 @@ class AnalysisStationController:
                 tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
                 tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
                 tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
+                tail_monotonic_filter_enable=self._settings.robust_v3_tail_monotonic_filter_enable,
+                tail_monotonic_ratio_max=self._settings.robust_v3_tail_monotonic_ratio_max,
+                max_peak_width_min=self._settings.robust_v3_max_peak_width_min,
+                leading_edge_filter_enable=self._settings.robust_v3_leading_edge_filter_enable,
+                leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
+                leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
@@ -1354,6 +1362,12 @@ class AnalysisStationController:
                 tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
                 tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
                 tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
+                tail_monotonic_filter_enable=self._settings.robust_v3_tail_monotonic_filter_enable,
+                tail_monotonic_ratio_max=self._settings.robust_v3_tail_monotonic_ratio_max,
+                max_peak_width_min=self._settings.robust_v3_max_peak_width_min,
+                leading_edge_filter_enable=self._settings.robust_v3_leading_edge_filter_enable,
+                leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
+                leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
             )
             result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
@@ -1466,7 +1480,7 @@ class AnalysisStationController:
 
             # 根据积分模式决定填充基线方式, 使绘图区域与实际积分一致
             mode = self._settings.integration_mode.strip().lower()
-            if mode == "gcpy" or mode == "robust_v2" or mode == "robust_v3":
+            if mode == "gcpy" or mode == "robust_v3":
                 fill_mode = "global"
             elif mode == "legacy" and self._settings.use_als_baseline is True:
                 fill_mode = "global"
@@ -1940,6 +1954,796 @@ class AnalysisStationController:
             self._logger.info("轮询被用户中断")
             return {"success": False, "return_info": "轮询被用户中断"}
 
+    # ------------------------------------------------------------------
+    # 实验数据归档
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _safe_copy(
+        src: Path, dest: Path, logger: logging.Logger
+    ) -> bool:
+        """
+        功能:
+            安全复制单个文件, 自动创建目标父目录.
+            失败时记录 warning 而非抛出异常, 保证归档流程不因单个文件中断.
+        参数:
+            src: 源文件路径.
+            dest: 目标文件路径.
+            logger: 日志记录器.
+        返回:
+            bool: 复制是否成功.
+        """
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            return True
+        except (OSError, shutil.Error) as exc:
+            logger.warning("复制文件失败: %s -> %s, 原因: %s", src, dest, exc)
+            return False
+
+    def _collect_experiment_plan(
+        self,
+        task_id: str,
+        syn_task_dir: Path,
+        dest_dir: Path,
+    ) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
+        """
+        功能:
+            从合成站任务目录复制实验方案 Excel 到归档目录的 experiment_plan/ 子目录.
+        参数:
+            task_id: 任务 ID.
+            syn_task_dir: 合成站任务目录路径.
+            dest_dir: 归档目标根目录 ({task_id}/).
+        返回:
+            Tuple[Dict, List]:
+                第一个值为成功复制的文件清单 {"experiment_plan": "relative/path"}.
+                第二个值为缺失文件记录列表.
+        """
+        copied: Dict[str, str] = {}
+        missing: List[Dict[str, str]] = []
+        plan_dir = dest_dir / "experiment_plan"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+
+        # 实验方案 Excel: 优先 {task_id}_experiment_plan.xlsx, 后备 {task_id}.xlsx
+        plan_name = f"{task_id}_experiment_plan.xlsx"
+        plan_src = syn_task_dir / plan_name
+        if not plan_src.exists():
+            plan_name = f"{task_id}.xlsx"
+            plan_src = syn_task_dir / plan_name
+        if plan_src.exists():
+            rel = f"experiment_plan/{plan_name}"
+            if self._safe_copy(plan_src, plan_dir / plan_name, self._logger):
+                copied["experiment_plan"] = rel
+        else:
+            missing.append({
+                "expected": f"{task_id}_experiment_plan.xlsx",
+                "reason": "合成站任务目录中未找到实验方案 Excel",
+            })
+
+        return copied, missing
+
+    def _detect_instruments(
+        self,
+        analysis_data_dir: Path,
+    ) -> List[str]:
+        """
+        功能:
+            检测分析站数据目录中存在哪些仪器的数据,
+            通过检查对应 CSV 文件是否存在来判断.
+        参数:
+            analysis_data_dir: 分析站本地数据目录 (data/{task_id}/).
+        返回:
+            List[str]: 有数据的仪器标识列表, 如 ["gc_ms", "uplc_qtof"].
+        """
+        instruments: List[str] = []
+        # 按 CSV 文件名判断仪器是否有数据
+        instrument_csv_map = {
+            "gc_ms": "gc_ms.csv",
+            "uplc_qtof": "uplc_qtof.csv",
+            "hplc": "hplc.csv",
+        }
+        for instrument, csv_name in instrument_csv_map.items():
+            if (analysis_data_dir / csv_name).exists():
+                instruments.append(instrument)
+                self._logger.info("检测到 %s 数据: %s", instrument, csv_name)
+
+        if not instruments:
+            # 若无 CSV, 通过 plots/ 目录推断是否有 GC-MS 数据
+            plots_dir = analysis_data_dir / "plots"
+            if plots_dir.exists() and list(plots_dir.glob("*_tic.png")):
+                instruments.append("gc_ms")
+                self._logger.info("通过 plots/ 目录推断存在 GC-MS 数据")
+
+        return instruments
+
+    def _collect_analysis_data(
+        self,
+        task_id: str,
+        analysis_data_dir: Path,
+        dest_dir: Path,
+        instruments: List[str],
+    ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+        """
+        功能:
+            按仪器收集分析数据到 analysis_data/{instrument}/ 子目录,
+            包括 CSV 清单, 积分报告, 色谱图, 质谱图和结构图.
+        参数:
+            task_id: 任务 ID.
+            analysis_data_dir: 分析站本地数据目录.
+            dest_dir: 归档目标根目录 ({task_id}/).
+            instruments: 有数据的仪器标识列表.
+        返回:
+            Tuple[Dict, List]:
+                第一个值为按仪器组织的归档信息, 如 {"gc_ms": {"csv": ..., "samples": [...], ...}}.
+                第二个值为缺失文件记录列表.
+        """
+        result: Dict[str, Any] = {}
+        missing: List[Dict[str, str]] = []
+
+        for instrument in instruments:
+            inst_dir = dest_dir / "analysis_data" / instrument
+            inst_dir.mkdir(parents=True, exist_ok=True)
+            inst_info: Dict[str, Any] = {}
+
+            if instrument == "gc_ms":
+                inst_info, inst_missing = self._collect_gc_ms_analysis(
+                    task_id, analysis_data_dir, inst_dir
+                )
+                missing.extend(inst_missing)
+            elif instrument == "uplc_qtof":
+                inst_info, inst_missing = self._collect_uplc_qtof_analysis(
+                    task_id, analysis_data_dir, inst_dir
+                )
+                missing.extend(inst_missing)
+            elif instrument == "hplc":
+                inst_info, inst_missing = self._collect_hplc_analysis(
+                    task_id, analysis_data_dir, inst_dir
+                )
+                missing.extend(inst_missing)
+
+            result[instrument] = inst_info
+
+        return result, missing
+
+    def _collect_gc_ms_analysis(
+        self,
+        task_id: str,
+        analysis_data_dir: Path,
+        inst_dir: Path,
+    ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+        """
+        功能:
+            收集 GC-MS 仪器的分析数据: CSV 清单, 积分报告, 色谱图, 质谱图, 结构图.
+        参数:
+            task_id: 任务 ID.
+            analysis_data_dir: 分析站本地数据目录.
+            inst_dir: 目标仪器子目录 (analysis_data/gc_ms/).
+        返回:
+            Tuple[Dict, List]:
+                第一个值为 GC-MS 归档信息字典.
+                第二个值为缺失文件记录列表.
+        """
+        info: Dict[str, Any] = {}
+        missing: List[Dict[str, str]] = []
+
+        # gc_ms.csv
+        csv_src = analysis_data_dir / "gc_ms.csv"
+        if csv_src.exists():
+            if self._safe_copy(csv_src, inst_dir / "gc_ms.csv", self._logger):
+                info["csv"] = "analysis_data/gc_ms/gc_ms.csv"
+        else:
+            missing.append({"expected": "gc_ms.csv", "reason": "GC-MS 样品清单缺失"})
+
+        # 积分报告
+        report_name = f"{task_id}_integration_report.xlsx"
+        report_src = analysis_data_dir / report_name
+        if report_src.exists():
+            if self._safe_copy(report_src, inst_dir / report_name, self._logger):
+                info["integration_report"] = f"analysis_data/gc_ms/{report_name}"
+        else:
+            missing.append({"expected": report_name, "reason": "GC-MS 积分报告缺失"})
+
+        # 解析样品列表
+        sample_names: List[str] = []
+        if csv_src.exists():
+            with csv_src.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                sample_names = [row["SampleName"] for row in reader]
+        if not sample_names:
+            # 从 plots/ 目录推断
+            plots_dir = analysis_data_dir / "plots"
+            if plots_dir.exists():
+                for png in sorted(plots_dir.glob("*_tic.png"), key=_natural_sort_key):
+                    name = png.stem.replace("_tic", "")
+                    if name not in sample_names:
+                        sample_names.append(name)
+        info["sample_names"] = sample_names
+
+        # 色谱图
+        chrom_dir = inst_dir / "chromatograms"
+        chrom_dir.mkdir(parents=True, exist_ok=True)
+        tic_count = 0
+        fid_count = 0
+        for sample_name in sample_names:
+            # TIC
+            tic_name = f"{sample_name}_tic.png"
+            tic_src = analysis_data_dir / "plots" / tic_name
+            if tic_src.exists():
+                if self._safe_copy(tic_src, chrom_dir / tic_name, self._logger):
+                    tic_count += 1
+            else:
+                missing.append({
+                    "expected": tic_name,
+                    "reason": f"样品 {sample_name} 的 TIC 色谱图缺失",
+                })
+            # FID
+            fid_name = f"{sample_name}_fid.png"
+            fid_src = analysis_data_dir / "plots" / fid_name
+            if fid_src.exists():
+                if self._safe_copy(fid_src, chrom_dir / fid_name, self._logger):
+                    fid_count += 1
+            else:
+                missing.append({
+                    "expected": fid_name,
+                    "reason": f"样品 {sample_name} 的 FID 色谱图缺失",
+                })
+        info["tic_count"] = tic_count
+        info["fid_count"] = fid_count
+
+        # 质谱图
+        ms_dir = inst_dir / "ms_spectra"
+        ms_dir.mkdir(parents=True, exist_ok=True)
+        ms_count = 0
+        ms_plots_dir = analysis_data_dir / "ms_plots"
+        if ms_plots_dir.exists():
+            for sample_name in sample_names:
+                ms_pattern = f"{sample_name}_peak*_ms.png"
+                for ms_src in sorted(ms_plots_dir.glob(ms_pattern), key=_natural_sort_key):
+                    if self._safe_copy(ms_src, ms_dir / ms_src.name, self._logger):
+                        ms_count += 1
+        info["ms_count"] = ms_count
+
+        # 结构图
+        struct_dir = inst_dir / "structures"
+        struct_dir.mkdir(parents=True, exist_ok=True)
+        struct_count = 0
+        src_struct_dir = analysis_data_dir / "structures"
+        if src_struct_dir.exists():
+            for struct_src in sorted(src_struct_dir.glob("*.png")):
+                if self._safe_copy(struct_src, struct_dir / struct_src.name, self._logger):
+                    struct_count += 1
+        info["struct_count"] = struct_count
+
+        return info, missing
+
+    def _collect_uplc_qtof_analysis(
+        self,
+        task_id: str,
+        analysis_data_dir: Path,
+        inst_dir: Path,
+    ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+        """
+        功能:
+            收集 UPLC-QTOF 仪器的分析数据.
+            当前仅收集 CSV 清单, 图片相关功能预留.
+        参数:
+            task_id: 任务 ID.
+            analysis_data_dir: 分析站本地数据目录.
+            inst_dir: 目标仪器子目录 (analysis_data/uplc_qtof/).
+        返回:
+            Tuple[Dict, List]:
+                第一个值为 UPLC-QTOF 归档信息字典.
+                第二个值为缺失文件记录列表.
+        """
+        info: Dict[str, Any] = {}
+        missing: List[Dict[str, str]] = []
+
+        # uplc_qtof.csv
+        csv_src = analysis_data_dir / "uplc_qtof.csv"
+        if csv_src.exists():
+            if self._safe_copy(csv_src, inst_dir / "uplc_qtof.csv", self._logger):
+                info["csv"] = "analysis_data/uplc_qtof/uplc_qtof.csv"
+        else:
+            missing.append({"expected": "uplc_qtof.csv", "reason": "UPLC-QTOF 样品清单缺失"})
+
+        # 解析样品列表
+        sample_names: List[str] = []
+        if csv_src.exists():
+            with csv_src.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                sample_names = [row["SampleName"] for row in reader]
+        info["sample_names"] = sample_names
+
+        # 预留: 色谱图, 质谱图, 结构图子目录
+        for sub in ("chromatograms", "ms_spectra", "structures"):
+            (inst_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        return info, missing
+
+    def _collect_hplc_analysis(
+        self,
+        task_id: str,
+        analysis_data_dir: Path,
+        inst_dir: Path,
+    ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+        """
+        功能:
+            收集 HPLC 仪器的分析数据.
+            当前仅收集 CSV 清单, 图片相关功能预留.
+        参数:
+            task_id: 任务 ID.
+            analysis_data_dir: 分析站本地数据目录.
+            inst_dir: 目标仪器子目录 (analysis_data/hplc/).
+        返回:
+            Tuple[Dict, List]:
+                第一个值为 HPLC 归档信息字典.
+                第二个值为缺失文件记录列表.
+        """
+        info: Dict[str, Any] = {}
+        missing: List[Dict[str, str]] = []
+
+        # hplc.csv
+        csv_src = analysis_data_dir / "hplc.csv"
+        if csv_src.exists():
+            if self._safe_copy(csv_src, inst_dir / "hplc.csv", self._logger):
+                info["csv"] = "analysis_data/hplc/hplc.csv"
+        else:
+            missing.append({"expected": "hplc.csv", "reason": "HPLC 样品清单缺失"})
+
+        # 解析样品列表
+        sample_names: List[str] = []
+        if csv_src.exists():
+            with csv_src.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                sample_names = [row["SampleName"] for row in reader]
+        info["sample_names"] = sample_names
+
+        return info, missing
+
+    def _collect_results(
+        self,
+        task_id: str,
+        syn_task_dir: Path,
+        analysis_data_dir: Path,
+        dest_dir: Path,
+    ) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
+        """
+        功能:
+            收集结果报告到 results/ 子目录,
+            包括任务报告 (合成站) 和产率报告 (分析站).
+        参数:
+            task_id: 任务 ID.
+            syn_task_dir: 合成站任务目录路径.
+            analysis_data_dir: 分析站本地数据目录.
+            dest_dir: 归档目标根目录 ({task_id}/).
+        返回:
+            Tuple[Dict, List]:
+                第一个值为成功复制的文件清单.
+                第二个值为缺失文件记录列表.
+        """
+        copied: Dict[str, str] = {}
+        missing: List[Dict[str, str]] = []
+        results_dir = dest_dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        # 任务报告 (来自合成站)
+        report_name = f"{task_id}_task_report.xlsx"
+        report_src = syn_task_dir / report_name
+        if report_src.exists():
+            if self._safe_copy(report_src, results_dir / report_name, self._logger):
+                copied["task_report"] = f"results/{report_name}"
+        else:
+            missing.append({
+                "expected": report_name,
+                "reason": "合成站任务目录中未找到任务报告",
+            })
+
+        # 产率报告 (来自分析站)
+        yield_name = f"{task_id}_yield_report.xlsx"
+        yield_src = analysis_data_dir / yield_name
+        if yield_src.exists():
+            if self._safe_copy(yield_src, results_dir / yield_name, self._logger):
+                copied["yield_report"] = f"results/{yield_name}"
+        else:
+            missing.append({
+                "expected": yield_name,
+                "reason": "分析站数据目录中未找到产率报告",
+            })
+
+        return copied, missing
+
+    def _collect_raw_data(
+        self,
+        task_id: str,
+        dest_dir: Path,
+        instrument_samples: Dict[str, List[str]],
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        """
+        功能:
+            从各仪器数据目录复制 .D 原始数据到 raw_data/{instrument}/ 子目录.
+        参数:
+            task_id: 任务 ID.
+            dest_dir: 归档目标根目录 ({task_id}/).
+            instrument_samples: 按仪器分组的样品名列表,
+                如 {"gc_ms": ["771-1", "771-2"], "uplc_qtof": ["771-3"]}.
+        返回:
+            Tuple[List, List]:
+                第一个值为成功复制的原始数据记录列表.
+                第二个值为缺失文件记录列表.
+        """
+        copied: List[Dict[str, str]] = []
+        missing: List[Dict[str, str]] = []
+
+        # 仪器标识 -> 仪器数据目录的映射
+        instrument_data_dirs = {
+            "gc_ms": self._settings.gc_ms_data_dir,
+            "uplc_qtof": self._settings.uplc_qtof_data_dir,
+            "hplc": self._settings.hplc_data_dir,
+        }
+
+        for instrument, sample_names in instrument_samples.items():
+            data_dir = instrument_data_dirs.get(instrument)
+            if data_dir is None:
+                self._logger.warning("未知仪器类型: %s, 跳过原始数据收集", instrument)
+                continue
+
+            raw_dir = dest_dir / "raw_data" / instrument
+            raw_dir.mkdir(parents=True, exist_ok=True)
+
+            for sample_name in sample_names:
+                d_dir_name = f"{sample_name}.D"
+                d_src = data_dir / d_dir_name
+                d_dest = raw_dir / d_dir_name
+                if d_src.exists() and d_src.is_dir():
+                    try:
+                        if d_dest.exists():
+                            shutil.rmtree(d_dest)
+                        shutil.copytree(d_src, d_dest)
+                        copied.append({
+                            "instrument": instrument,
+                            "sample_name": sample_name,
+                            "path": f"raw_data/{instrument}/{d_dir_name}",
+                        })
+                        self._logger.info("已复制原始数据: %s/%s", instrument, d_dir_name)
+                    except (OSError, shutil.Error) as exc:
+                        self._logger.warning(
+                            "复制原始数据失败: %s -> %s, 原因: %s", d_src, d_dest, exc
+                        )
+                        missing.append({
+                            "expected": d_dir_name,
+                            "reason": f"{instrument} 原始数据复制失败: {exc}",
+                        })
+                else:
+                    missing.append({
+                        "expected": d_dir_name,
+                        "reason": f"{instrument} 仪器目录 {data_dir} 中未找到",
+                    })
+
+        return copied, missing
+
+    def _build_raw_data_references(
+        self,
+        instrument_samples: Dict[str, List[str]],
+    ) -> Dict[str, List[Dict[str, str]]]:
+        """
+        功能:
+            构建各仪器原始数据路径引用, 记录各样品 .D 目录的原始位置.
+            不论是否复制原始数据, 均记录以便溯源.
+        参数:
+            instrument_samples: 按仪器分组的样品名列表.
+        返回:
+            Dict[str, List]: 按仪器分组的引用列表.
+        """
+        instrument_data_dirs = {
+            "gc_ms": self._settings.gc_ms_data_dir,
+            "uplc_qtof": self._settings.uplc_qtof_data_dir,
+            "hplc": self._settings.hplc_data_dir,
+        }
+
+        refs: Dict[str, List[Dict[str, str]]] = {}
+        for instrument, sample_names in instrument_samples.items():
+            data_dir = instrument_data_dirs.get(instrument)
+            if data_dir is None:
+                continue
+            inst_refs: List[Dict[str, str]] = []
+            for sample_name in sample_names:
+                d_dir_name = f"{sample_name}.D"
+                inst_refs.append({
+                    "sample_name": sample_name,
+                    "d_dir": str(data_dir / d_dir_name),
+                })
+            refs[instrument] = inst_refs
+
+        return refs
+
+    def _write_archive_summary_txt(
+        self,
+        task_id: str,
+        dest_dir: Path,
+        experiment_plan: Dict[str, str],
+        analysis_info: Dict[str, Any],
+        results_files: Dict[str, str],
+        raw_refs: Dict[str, List[Dict[str, str]]],
+        missing_files: List[Dict[str, str]],
+        raw_copied: Optional[List[Dict[str, str]]] = None,
+    ) -> Path:
+        """
+        功能:
+            在任务归档目录内生成 archive_summary.txt,
+            按四大类 (实验计划/分析数据/结果报告/原始数据) 汇总.
+        参数:
+            task_id: 任务 ID.
+            dest_dir: 归档目标目录 ({task_id}/).
+            experiment_plan: 实验计划已归档文件清单.
+            analysis_info: 按仪器组织的分析数据信息.
+            results_files: 结果报告已归档文件清单.
+            raw_refs: 按仪器分组的原始数据引用.
+            missing_files: 缺失文件记录列表.
+            raw_copied: 已复制的原始数据记录列表, None 表示未执行复制.
+        返回:
+            Path: 生成的 TXT 文件路径.
+        """
+        txt_path = dest_dir / "archive_summary.txt"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        instrument_labels = {
+            "gc_ms": "GC-MS",
+            "uplc_qtof": "UPLC-QTOF",
+            "hplc": "HPLC",
+        }
+
+        lines: List[str] = []
+        lines.append(f"实验数据归档清单 - 任务 {task_id}")
+        lines.append(f"归档时间: {now_str}")
+        lines.append(f"归档目录: {dest_dir}")
+        lines.append("")
+
+        # 一. 实验计划
+        lines.append("=" * 40)
+        lines.append("实验计划")
+        lines.append("=" * 40)
+        if "experiment_plan" in experiment_plan:
+            lines.append(f"[实验方案] {experiment_plan['experiment_plan']}")
+        else:
+            lines.append("(无)")
+        lines.append("")
+
+        # 二. 分析数据
+        lines.append("=" * 40)
+        lines.append("分析数据")
+        lines.append("=" * 40)
+        if analysis_info:
+            for instrument, inst_data in analysis_info.items():
+                label = instrument_labels.get(instrument, instrument)
+                lines.append(f"--- {label} ---")
+                if "csv" in inst_data:
+                    lines.append(f"[样品清单] {inst_data['csv']}")
+                if "integration_report" in inst_data:
+                    lines.append(f"[积分报告] {inst_data['integration_report']}")
+                tic_count = inst_data.get("tic_count", 0)
+                fid_count = inst_data.get("fid_count", 0)
+                ms_count = inst_data.get("ms_count", 0)
+                struct_count = inst_data.get("struct_count", 0)
+                if tic_count > 0:
+                    lines.append(
+                        f"[TIC色谱图] analysis_data/{instrument}/chromatograms/ "
+                        f"... 共 {tic_count} 个"
+                    )
+                if fid_count > 0:
+                    lines.append(
+                        f"[FID色谱图] analysis_data/{instrument}/chromatograms/ "
+                        f"... 共 {fid_count} 个"
+                    )
+                if ms_count > 0:
+                    lines.append(
+                        f"[质谱图] analysis_data/{instrument}/ms_spectra/ "
+                        f"... 共 {ms_count} 个"
+                    )
+                if struct_count > 0:
+                    lines.append(
+                        f"[结构图] analysis_data/{instrument}/structures/ "
+                        f"... 共 {struct_count} 个"
+                    )
+                # 仅有 CSV 无图片数据的仪器, 显示样品数
+                sample_count = len(inst_data.get("sample_names", []))
+                if sample_count > 0 and tic_count == 0 and ms_count == 0:
+                    lines.append(f"[样品数] {sample_count} 个")
+                lines.append("")
+        else:
+            lines.append("(无)")
+            lines.append("")
+
+        # 三. 结果报告
+        lines.append("=" * 40)
+        lines.append("结果报告")
+        lines.append("=" * 40)
+        if "task_report" in results_files:
+            lines.append(f"[任务报告] {results_files['task_report']}")
+        if "yield_report" in results_files:
+            lines.append(f"[产率报告] {results_files['yield_report']}")
+        if not results_files:
+            lines.append("(无)")
+        lines.append("")
+
+        # 四. 原始数据
+        lines.append("=" * 40)
+        lines.append("原始数据")
+        lines.append("=" * 40)
+        has_raw_info = False
+        # 已复制的原始数据
+        if raw_copied is not None and len(raw_copied) > 0:
+            # 按仪器分组统计
+            inst_counts: Dict[str, int] = {}
+            for r in raw_copied:
+                inst = r["instrument"]
+                inst_counts[inst] = inst_counts.get(inst, 0) + 1
+            for inst, count in inst_counts.items():
+                label = instrument_labels.get(inst, inst)
+                lines.append(
+                    f"[{label}] raw_data/{inst}/ ... 共 {count} 个 .D 目录 (已复制)"
+                )
+            has_raw_info = True
+        # 原始数据引用
+        if raw_refs:
+            for instrument, inst_refs in raw_refs.items():
+                label = instrument_labels.get(instrument, instrument)
+                if inst_refs:
+                    first_ref = inst_refs[0]["d_dir"]
+                    lines.append(f"[{label}] {first_ref} ... 共 {len(inst_refs)} 个")
+            has_raw_info = True
+        if not has_raw_info:
+            lines.append("(无)")
+        lines.append("")
+
+        # 缺失文件
+        lines.append("=" * 40)
+        lines.append("缺失文件")
+        lines.append("=" * 40)
+        if missing_files:
+            for item in missing_files:
+                lines.append(f"  {item['expected']} - {item['reason']}")
+        else:
+            lines.append("(无)")
+        lines.append("")
+
+        txt_path.parent.mkdir(parents=True, exist_ok=True)
+        txt_path.write_text("\n".join(lines), encoding="utf-8")
+        self._logger.info("归档清单已写入: %s", txt_path)
+        return txt_path
+
+    def aggregate_task_data(
+        self,
+        task_id: Optional[str] = None,
+        archive_dir: Optional[Path] = None,
+        copy_raw_data: Optional[bool] = None,
+    ) -> Dict:
+        """
+        功能:
+            将指定任务的全部实验数据从合成站和分析站汇聚到统一归档目录.
+            按四大类组织: 实验计划, 分析数据 (按仪器划分), 结果报告, 原始数据.
+        参数:
+            task_id: 任务 ID 字符串, None 表示自动选取最新任务.
+            archive_dir: 归档输出根目录, None 则使用 settings.archive_dir.
+            copy_raw_data: 是否将 .D 原始数据目录复制到归档,
+                None 则使用 settings.archive_copy_raw_data.
+        返回:
+            Dict: {"success": bool, "return_info": str, "archive_path": str}.
+        """
+        try:
+            # 1. 定位任务目录
+            syn_task_dir, resolved_id = self._find_task_dir(task_id)
+            self._logger.info("开始归档任务 %s ...", resolved_id)
+
+            # 2. 确定源目录
+            analysis_data_dir = self._settings.data_dir / resolved_id
+
+            # 3. 确定归档目标目录
+            target_archive_dir = archive_dir if archive_dir is not None else self._settings.archive_dir
+            dest_dir = target_archive_dir / resolved_id
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            self._logger.info("归档目标目录: %s", dest_dir)
+
+            all_missing: List[Dict[str, str]] = []
+
+            # 4. 验证源目录
+            if not syn_task_dir.exists():
+                self._logger.warning("合成站任务目录不存在: %s", syn_task_dir)
+            if not analysis_data_dir.exists():
+                self._logger.warning("分析站数据目录不存在: %s", analysis_data_dir)
+
+            # 5. 检测有数据的仪器
+            instruments: List[str] = []
+            if analysis_data_dir.exists():
+                instruments = self._detect_instruments(analysis_data_dir)
+            self._logger.info("检测到仪器: %s", instruments)
+
+            # 6. 收集实验计划
+            experiment_plan: Dict[str, str] = {}
+            if syn_task_dir.exists():
+                experiment_plan, plan_missing = self._collect_experiment_plan(
+                    resolved_id, syn_task_dir, dest_dir
+                )
+                all_missing.extend(plan_missing)
+
+            # 7. 收集分析数据 (按仪器划分)
+            analysis_info: Dict[str, Any] = {}
+            if analysis_data_dir.exists() and instruments:
+                analysis_info, ana_missing = self._collect_analysis_data(
+                    resolved_id, analysis_data_dir, dest_dir, instruments
+                )
+                all_missing.extend(ana_missing)
+
+            # 8. 收集结果报告
+            results_files: Dict[str, str] = {}
+            if syn_task_dir.exists() or analysis_data_dir.exists():
+                results_files, res_missing = self._collect_results(
+                    resolved_id, syn_task_dir, analysis_data_dir, dest_dir
+                )
+                all_missing.extend(res_missing)
+
+            # 9. 构建按仪器分组的样品名映射
+            instrument_samples: Dict[str, List[str]] = {}
+            for instrument, inst_data in analysis_info.items():
+                sample_names = inst_data.get("sample_names", [])
+                if sample_names:
+                    instrument_samples[instrument] = sample_names
+
+            # 10. 解析是否复制原始数据: 参数优先, 否则取配置
+            should_copy_raw = copy_raw_data if copy_raw_data is not None else self._settings.archive_copy_raw_data
+
+            # 11. 可选复制原始数据
+            raw_copied: Optional[List[Dict[str, str]]] = None
+            if should_copy_raw is True and instrument_samples:
+                raw_copied, raw_missing = self._collect_raw_data(
+                    resolved_id, dest_dir, instrument_samples
+                )
+                all_missing.extend(raw_missing)
+
+            # 12. 构建原始数据引用
+            raw_refs = self._build_raw_data_references(instrument_samples)
+
+            # 13. 写入归档清单 TXT (位于 {task_id}/ 目录内)
+            txt_path = self._write_archive_summary_txt(
+                task_id=resolved_id,
+                dest_dir=dest_dir,
+                experiment_plan=experiment_plan,
+                analysis_info=analysis_info,
+                results_files=results_files,
+                raw_refs=raw_refs,
+                missing_files=all_missing,
+                raw_copied=raw_copied,
+            )
+
+            # 14. 统计归档文件数量
+            file_count = len(experiment_plan) + len(results_files)
+            for inst_data in analysis_info.values():
+                file_count += (1 if "csv" in inst_data else 0)
+                file_count += (1 if "integration_report" in inst_data else 0)
+                file_count += inst_data.get("tic_count", 0)
+                file_count += inst_data.get("fid_count", 0)
+                file_count += inst_data.get("ms_count", 0)
+                file_count += inst_data.get("struct_count", 0)
+            if raw_copied is not None:
+                file_count += len(raw_copied)
+
+            info = (
+                f"任务 {resolved_id} 归档完成: "
+                f"已归档 {file_count} 项, "
+                f"缺失 {len(all_missing)} 项. "
+                f"归档目录: {dest_dir}, "
+                f"清单文件: {txt_path}"
+            )
+            self._logger.info(info)
+            return {
+                "success": True,
+                "return_info": info,
+                "archive_path": str(dest_dir),
+            }
+
+        except Exception as exc:
+            self._logger.error("归档失败: %s", exc, exc_info=True)
+            return {"success": False, "return_info": f"归档失败: {exc}"}
+
 
 # ------------------------------------------------------------------
 # 交互式测试入口
@@ -1965,7 +2769,7 @@ def main() -> None:
     功能:
         交互式菜单, 用于手动测试 run_analysis / process_gc_ms_results /
         poll_analysis_run / get_status / get_methods / calculate_yields /
-        submit_by_csv_path.
+        submit_by_csv_path / aggregate_task_data.
         用户可选择功能并输入 task_id, 输入 q 退出.
     参数:
         无.
@@ -1987,6 +2791,7 @@ def main() -> None:
         "  5. get_methods           - 获取当前Project的方法列表\n"
         "  6. calculate_yields      - 产率计算\n"
         "  7. submit_by_csv_path    - 选择仪器并按CSV路径直接提交任务\n"
+        "  8. aggregate_task_data   - 实验数据归档汇总\n"
         "  0. 退出\n"
         "================================"
     )
@@ -1999,8 +2804,8 @@ def main() -> None:
             print("已退出测试.")
             break
 
-        if choice not in ("1", "2", "3", "4", "5", "6", "7"):
-            print("无效选择, 请输入 0/1/2/3/4/5/6/7.")
+        if choice not in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            print("无效选择, 请输入 0/1/2/3/4/5/6/7/8.")
             continue
 
         # 选项 4/5 直接操作设备驱动, 不需要 task_id
@@ -2090,6 +2895,25 @@ def main() -> None:
         elif choice == "6":
             print(f"\n>>> 调用 calculate_yields(task_id={task_id!r})")
             result = controller.calculate_yields(task_id=task_id)
+            _print_result(result)
+
+        elif choice == "8":
+            default_copy = controller._settings.archive_copy_raw_data
+            hint = "Y/n" if default_copy is True else "y/N"
+            copy_raw_input = input(
+                f"是否复制原始数据(.D目录)? ({hint}, 留空使用配置默认值): "
+            ).strip().lower()
+            if copy_raw_input == "":
+                copy_raw: Optional[bool] = None  # 使用配置默认值
+            else:
+                copy_raw = copy_raw_input in ("y", "yes")
+            print(
+                f"\n>>> 调用 aggregate_task_data("
+                f"task_id={task_id!r}, copy_raw_data={copy_raw})"
+            )
+            result = controller.aggregate_task_data(
+                task_id=task_id, copy_raw_data=copy_raw
+            )
             _print_result(result)
 
 

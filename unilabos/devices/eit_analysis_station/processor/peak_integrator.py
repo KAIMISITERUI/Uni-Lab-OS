@@ -86,6 +86,12 @@ class PeakIntegrator:
         tail_artifact_gap_max_min: 判定拖尾假峰与前峰的最大间隔(min).
         tail_artifact_relative_prominence_max: 判定拖尾假峰的相对显著性上限.
         tail_artifact_half_width_asymmetry_min: 判定拖尾假峰的右左半高宽比下限.
+        tail_monotonic_filter_enable: 是否启用平滑信号单调下降拖尾过滤.
+        tail_monotonic_ratio_max: 平滑信号从前峰到当前峰的上升步占比上限, 低于此值判定为单调下降拖尾.
+        leading_edge_filter_enable: 是否启用前沿假峰过滤, 检测强峰上升沿上的假峰并丢弃.
+        leading_edge_relative_prominence_max: 判定前沿假峰的相对后峰显著性上限.
+        leading_edge_monotonic_ratio_min: 平滑信号从当前峰到后峰的上升步占比下限, 高于此值判定为前沿假峰.
+        max_peak_width_min: 峰最大边界宽度(min), 超出判定为基线抬升假峰, 设0关闭.
     返回:
         无.
     """
@@ -117,6 +123,12 @@ class PeakIntegrator:
         tail_artifact_gap_max_min: float = 0.12,
         tail_artifact_relative_prominence_max: float = 0.08,
         tail_artifact_half_width_asymmetry_min: float = 4.0,
+        tail_monotonic_filter_enable: bool = True,
+        tail_monotonic_ratio_max: float = 0.25,
+        leading_edge_filter_enable: bool = False,
+        leading_edge_relative_prominence_max: float = 0.25,
+        leading_edge_monotonic_ratio_min: float = 0.65,
+        max_peak_width_min: float = 0.5,
         gcpy_whittaker_lmbd: float = 10.0,
     ):
         self._smoothing_window = self._ensure_odd(max(3, int(smoothing_window)))
@@ -148,6 +160,18 @@ class PeakIntegrator:
         self._tail_artifact_gap_max_min = float(tail_artifact_gap_max_min)
         self._tail_artifact_relative_prominence_max = float(tail_artifact_relative_prominence_max)
         self._tail_artifact_half_width_asymmetry_min = float(tail_artifact_half_width_asymmetry_min)
+
+        # 拖尾单调下降过滤参数
+        self._tail_monotonic_filter_enable = bool(tail_monotonic_filter_enable)
+        self._tail_monotonic_ratio_max = float(tail_monotonic_ratio_max)
+
+        # 前沿假峰过滤参数
+        self._leading_edge_filter_enable = bool(leading_edge_filter_enable)
+        self._leading_edge_relative_prominence_max = float(leading_edge_relative_prominence_max)
+        self._leading_edge_monotonic_ratio_min = float(leading_edge_monotonic_ratio_min)
+
+        # 基线抬升超宽假峰过滤参数
+        self._max_peak_width_min = float(max_peak_width_min)
 
         # gcpy 参数
         self._gcpy_whittaker_lmbd = float(gcpy_whittaker_lmbd)
@@ -723,6 +747,7 @@ class PeakIntegrator:
         times: np.ndarray,
         corrected_signal: np.ndarray,
         peak_indices: np.ndarray,
+        smoothed_signal: np.ndarray,
     ) -> Tuple[np.ndarray, List[Optional[int]]]:
         """
         功能:
@@ -731,13 +756,16 @@ class PeakIntegrator:
             times: 时间数组(min).
             corrected_signal: 基线校正后的检测信号.
             peak_indices: 原始峰索引数组.
+            smoothed_signal: SG平滑后未扣基线的原始信号, 用于单调下降判定.
         返回:
             Tuple[np.ndarray, List[Optional[int]]]:
                 keep_mask: True 表示保留该峰, False 表示并入前峰.
                 merge_targets: 记录每个峰并入的目标峰编号, 未并入时为 None.
         """
         merge_targets: List[Optional[int]] = [None] * len(peak_indices)
-        if self._shoulder_filter_enable is False and self._tail_artifact_filter_enable is False:
+        if (self._shoulder_filter_enable is False
+                and self._tail_artifact_filter_enable is False
+                and self._tail_monotonic_filter_enable is False):
             return np.ones(len(peak_indices), dtype=bool), merge_targets
 
         if len(peak_indices) <= 1:
@@ -801,6 +829,33 @@ class PeakIntegrator:
                             )
                             continue
 
+            # --- 单调下降拖尾检测: 在平滑信号(未扣基线)上判断前峰到当前峰是否近似单调递减 ---
+            if self._tail_monotonic_filter_enable is True:
+                # 仅当候选峰 prominence 显著低于前峰时检查, 避免误伤真实相邻峰
+                if prominence_ratio <= 0.25:
+                    prev_peak_idx = int(peak_indices[merge_target_no])
+                    curr_peak_idx = int(peak_idx)
+                    # 至少 3 个数据点才有统计意义
+                    if curr_peak_idx > prev_peak_idx + 2:
+                        segment = smoothed_signal[prev_peak_idx:curr_peak_idx + 1]
+                        diffs = np.diff(segment)
+                        total_steps = len(diffs)
+                        if total_steps > 0:
+                            rising_ratio = float(np.sum(diffs > 0)) / total_steps
+                            if rising_ratio <= self._tail_monotonic_ratio_max:
+                                keep_mask[peak_no] = False
+                                merge_targets[peak_no] = merge_target_no
+                                logger.info(
+                                    "RT=%.3f 的峰判定为前峰单调下降拖尾假峰, 并入 RT=%.3f 的前峰. "
+                                    "上升步占比=%.4f (阈值=%.4f), prominence比值=%.4f",
+                                    current_rt,
+                                    previous_rt,
+                                    rising_ratio,
+                                    self._tail_monotonic_ratio_max,
+                                    prominence_ratio,
+                                )
+                                continue
+
             if self._tail_artifact_filter_enable is False:
                 continue
 
@@ -831,6 +886,104 @@ class PeakIntegrator:
             continue
 
         return keep_mask, merge_targets
+
+    def _filter_leading_edge_artifact_peak_indices(
+        self,
+        times: np.ndarray,
+        corrected_signal: np.ndarray,
+        peak_indices: np.ndarray,
+        smoothed_signal: np.ndarray,
+        existing_keep_mask: np.ndarray,
+    ) -> np.ndarray:
+        """
+        功能:
+            在 robust_v3 中识别强峰上升沿上的前沿假峰并标记丢弃.
+            与 _filter_adjacent_artifact_peak_indices 互补: 后者向后看(拖尾),
+            本方法向前看(前沿). 前沿假峰是基线干扰, 直接丢弃不合并面积.
+        参数:
+            times: 时间数组(min).
+            corrected_signal: 基线校正后的检测信号.
+            peak_indices: 原始峰索引数组.
+            smoothed_signal: SG平滑后未扣基线的原始信号, 用于单调上升判定.
+            existing_keep_mask: 前一轮(向后过滤)输出的保留掩码.
+        返回:
+            np.ndarray: 更新后的 keep_mask, False 表示丢弃该峰.
+        """
+        keep_mask = np.copy(existing_keep_mask)
+
+        if self._leading_edge_filter_enable is False:
+            return keep_mask
+
+        if len(peak_indices) <= 1:
+            return keep_mask
+
+        dt = self._median_dt(times)
+        if dt <= 0:
+            logger.warning("时间轴步长无效, 跳过前沿假峰过滤.")
+            return keep_mask
+
+        prominences = peak_prominences(corrected_signal, peak_indices)[0]
+
+        # 逆序遍历: 保证级联丢弃时后面的峰先被处理
+        for peak_no in range(len(peak_indices) - 2, -1, -1):
+            if not keep_mask[peak_no]:
+                continue
+
+            current_prominence = float(prominences[peak_no])
+            if not np.isfinite(current_prominence):
+                continue
+
+            # 查找下一个保留的峰
+            next_peak_no = peak_no + 1
+            while next_peak_no < len(peak_indices) and not keep_mask[next_peak_no]:
+                next_peak_no += 1
+
+            if next_peak_no >= len(peak_indices):
+                continue
+
+            next_prominence = float(prominences[next_peak_no])
+            # 后峰必须更强
+            if next_prominence <= current_prominence:
+                continue
+
+            prominence_ratio = self._safe_ratio(current_prominence, next_prominence)
+            if prominence_ratio > self._leading_edge_relative_prominence_max:
+                continue
+
+            curr_peak_idx = int(peak_indices[peak_no])
+            next_peak_idx = int(peak_indices[next_peak_no])
+            # 至少 4 个数据点, 保证中点后仍有足够统计量
+            if next_peak_idx <= curr_peak_idx + 3:
+                continue
+
+            # 取两峰中点到后峰的平滑信号, 判断上升趋势.
+            # 避免从当前峰顶开始(峰顶后必然先下降), 中点更能反映整体走势.
+            midpoint_idx = (curr_peak_idx + next_peak_idx) // 2
+            segment = smoothed_signal[midpoint_idx:next_peak_idx + 1]
+            diffs = np.diff(segment)
+            total_steps = len(diffs)
+            if total_steps <= 0:
+                continue
+
+            rising_ratio = float(np.sum(diffs > 0)) / total_steps
+            if rising_ratio < self._leading_edge_monotonic_ratio_min:
+                continue
+
+            # 判定为前沿假峰, 直接丢弃
+            keep_mask[peak_no] = False
+            current_rt = float(times[curr_peak_idx])
+            next_rt = float(times[next_peak_idx])
+            logger.info(
+                "RT=%.3f 的峰判定为后峰前沿假峰, 已丢弃. 后峰RT=%.3f, "
+                "上升步占比=%.4f (阈值=%.4f), prominence比值=%.4f",
+                current_rt,
+                next_rt,
+                rising_ratio,
+                self._leading_edge_monotonic_ratio_min,
+                prominence_ratio,
+            )
+
+        return keep_mask
 
     def _integrate_legacy(self, times: np.ndarray, intensities: np.ndarray) -> List[PeakResult]:
         """
@@ -974,9 +1127,23 @@ class PeakIntegrator:
                 times,
                 corrected_signal,
                 peak_indices,
+                smoothed_signal,
             )
             if not np.any(keep_mask):
                 logger.info("%s 模式后置假峰合并后未检测到峰.", mode_name)
+                return []
+
+        # 前沿假峰过滤: 检测强峰上升沿上的假峰并丢弃
+        if apply_shoulder_filter is True and self._leading_edge_filter_enable is True:
+            keep_mask = self._filter_leading_edge_artifact_peak_indices(
+                times,
+                corrected_signal,
+                peak_indices,
+                smoothed_signal,
+                keep_mask,
+            )
+            if not np.any(keep_mask):
+                logger.info("%s 模式前沿假峰过滤后未检测到峰.", mode_name)
                 return []
 
         merged_right_boundary_map = {}
@@ -1011,6 +1178,19 @@ class PeakIntegrator:
 
             left_idx = max(0, left_idx)
             right_idx = min(len(times) - 1, right_idx)
+
+            # 超宽峰过滤: 边界宽度超过阈值视为基线抬升假峰
+            if self._max_peak_width_min > 0:
+                peak_width_check = float(times[right_idx] - times[left_idx])
+                if peak_width_check > self._max_peak_width_min:
+                    logger.info(
+                        "RT=%.3f 的峰因边界宽度 %.4f min > %.4f min 被过滤.",
+                        float(times[int(peak_idx)]),
+                        peak_width_check,
+                        self._max_peak_width_min,
+                    )
+                    continue
+
             if right_idx <= left_idx:
                 logger.warning("RT=%.3f 的边界非法, 已跳过.", float(times[int(peak_idx)]))
                 continue
