@@ -262,7 +262,6 @@ def _menu_quick_workflow(manager):
                 ("上传任务到工站", lambda: _update_task_id(manager.create_task_by_file(task_tpl, chem_db))),
                 ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
                 ("AGV上料", lambda: manager.batch_in_tray_with_agv_transfer()),
-                ("二次物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
                 ("启动任务", lambda: manager.start_task()),
                 ("等待任务完成", lambda: manager.wait_task_with_ops()),
                 ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
@@ -279,7 +278,6 @@ def _menu_quick_workflow(manager):
                 ("上传任务到工站", lambda: _update_task_id(manager.create_task_by_file(task_tpl, chem_db))),
                 ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
                 ("手动上料", lambda: manager.batch_in_tray_by_file(template_in)),
-                ("二次物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
                 ("启动任务", lambda: manager.start_task()),
                 ("等待任务完成", lambda: manager.wait_task_with_ops()),
                 ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
@@ -304,7 +302,6 @@ def _menu_quick_workflow(manager):
             chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
             steps = [
                 ("AGV上料", lambda: manager.batch_in_tray_with_agv_transfer()),
-                ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
                 ("启动任务", lambda: manager.start_task()),
                 ("等待任务完成", lambda: manager.wait_task_with_ops()),
                 ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
@@ -436,6 +433,7 @@ def _menu_chemical_library(manager):
         ("2", "从CSV导入化学品"),
         ("3", "化学品库去重"),
         ("4", "化学品库数据校验"),
+        ("5", "在线查询并添加化学品"),
         ("0", "返回上级菜单"),
     ]
 
@@ -458,6 +456,22 @@ def _menu_chemical_library(manager):
             path = _input_file_path("化学品库文件路径", DEFAULT_CHEM_DB)
             result = _safe_run(manager.check_chemical_library_by_file, path)
             _print_result(result)
+            _pause()
+        elif choice == "5":
+            query = input("请输入 CAS 号或化合物中英文名称: ").strip()
+            if query:
+                result = _safe_run(
+                    manager.lookup_and_append_chemical, query, str(DEFAULT_CHEM_DB),
+                )
+                if result is not None:
+                    print("\n已成功添加化合物:")
+                    for k, v in result.items():
+                        if v is not None and str(v).strip():
+                            print(f"  {k}: {v}")
+                else:
+                    print("未查询到化合物信息或该化合物已存在, 请检查后重试")
+            else:
+                print("输入不能为空")
             _pause()
         else:
             print("无效选择, 请重新输入")

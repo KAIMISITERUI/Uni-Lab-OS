@@ -1204,7 +1204,6 @@ class SynthesisStationController:
             "cas_number",
             "chemical_id",
             "substance_english_name",
-            "substance_chinese_name",
             "molecular_weight",
             "density (g/mL)",
             "physical_state",
@@ -1217,6 +1216,9 @@ class SynthesisStationController:
         warnings: List[str] = []
 
         missing_headers = [col for col in required_headers if col not in normalized_headers]
+        has_chinese_name_header = "substance_chinese_name" in normalized_headers or "substance" in normalized_headers
+        if has_chinese_name_header is False:
+            missing_headers.append("substance/substance_chinese_name")
         if len(missing_headers) > 0:
             warnings.append(f"表头缺少字段: {', '.join(missing_headers)}")
 
@@ -1233,7 +1235,7 @@ class SynthesisStationController:
 
         for idx, row in enumerate(rows, start=2):
             english_name = str(row.get("substance_english_name") or "").strip()
-            chinese_name = str(row.get("substance_chinese_name") or "").strip()
+            chinese_name = str(row.get("substance_chinese_name") or row.get("substance") or "").strip()
             cas_number = str(row.get("cas_number") or "").strip()
             chemical_id = str(row.get("chemical_id") or "").strip()
             molecular_weight = str(row.get("molecular_weight") or "").strip()
@@ -1281,7 +1283,7 @@ class SynthesisStationController:
         if len(duplicated_english) > 0:
             errors.append(f"substance_english_name 出现重复: {', '.join(duplicated_english)}")
         if len(duplicated_chinese) > 0:
-            errors.append(f"substance_chinese_name 出现重复: {', '.join(duplicated_chinese)}")
+            errors.append(f"substance/substance_chinese_name 出现重复: {', '.join(duplicated_chinese)}")
         if len(missing_name_rows) > 0:
             warnings.append(f"至少填写中文名或英文名: {', '.join(missing_name_rows)}")
         if len(invalid_state_rows) > 0:
@@ -3834,7 +3836,7 @@ class SynthesisStationController:
                     molecular_weight=mw,
                     density=density,
                     physical_form=physical_form,
-                    substance=str(chem_info.get("substance_chinese_name", "")),
+                    substance=str(chem_info.get("substance_chinese_name") or chem_info.get("substance") or ""),
                 )
             elif "liquid" in state:
                 # neat 液体: volume = mmol × MW / (1000 × density)
