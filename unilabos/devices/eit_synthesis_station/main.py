@@ -463,12 +463,7 @@ def _menu_chemical_library(manager):
                 result = _safe_run(
                     manager.lookup_and_append_chemical, query, str(DEFAULT_CHEM_DB),
                 )
-                if result is not None:
-                    print("\n已成功添加化合物:")
-                    for k, v in result.items():
-                        if v is not None and str(v).strip():
-                            print(f"  {k}: {v}")
-                else:
+                if result is None:
                     print("未查询到化合物信息或该化合物已存在, 请检查后重试")
             else:
                 print("输入不能为空")

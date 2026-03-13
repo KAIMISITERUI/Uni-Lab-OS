@@ -13,6 +13,7 @@ import copy
 import html as html_lib
 import json
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -58,7 +59,7 @@ BLOCK_KEYWORDS = [
     "verify",
 ]
 DEFAULT_TIMEOUT = 15.0
-DEFAULT_CACHE_TTL_S = 24 * 60 * 60
+DEFAULT_CACHE_TTL_S = 7 * 24 * 60 * 60  # 7 天, 中文名等基本信息几乎不变
 DEFAULT_MIN_INTERVAL_S = 2.0
 MAX_RETRIES = 3
 
@@ -80,13 +81,47 @@ BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
 }
+
+# UA 轮换池, 降低重试时的指纹一致性
+_USER_AGENT_POOL = [
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) "
+        "Gecko/20100101 Firefox/124.0"
+    ),
+]
 
 SECTION_KEYWORDS = {
     "基本信息": [
@@ -259,7 +294,13 @@ def fetch_chemicalbook_by_cas(
     if need_network is True:
         _apply_cas_rate_limit(normalized_cas)
 
-    for page_type in PAGE_TYPES:
+    for idx, page_type in enumerate(PAGE_TYPES):
+        # CN 页和 EN 页之间加入随机延迟, 降低连续请求特征
+        if idx > 0 and need_network is True:
+            delay = random.uniform(1.5, 3.5)
+            logger.debug("ChemicalBook 页面间等待 %.2f 秒", delay)
+            time.sleep(delay)
+
         page_result = _fetch_page_with_cache(
             session=session,
             cas=normalized_cas,
@@ -494,6 +535,7 @@ def _fetch_page_with_cache(
         page_type=page_type,
         url=url,
         timeout=timeout,
+        cas=cas,
     )
 
     if page_result.blocked is True:
@@ -521,20 +563,34 @@ def _fetch_page_from_network(
     page_type: str,
     url: str,
     timeout: float,
+    cas: str = "",
 ) -> PageFetchResult:
     """
     功能:
-        使用 requests 进行网络抓取, 包含重试与编码处理.
+        使用 requests 进行网络抓取, 包含重试, UA 轮换, 503 专项退避与 Referer 链.
     参数:
         session: requests.Session, 已配置会话.
         page_type: str, 页面类型.
         url: str, 页面 URL.
         timeout: float, 超时秒数.
+        cas: str, CAS 号, 用于构建 Referer 链.
     返回:
         PageFetchResult, 页面抓取结果.
     """
     last_error_message = ""
+    last_status_code = None
+
     for attempt in range(MAX_RETRIES):
+        # 每次重试轮换 User-Agent, 降低指纹一致性
+        session.headers["User-Agent"] = random.choice(_USER_AGENT_POOL)
+
+        # 设置 Referer 链, 模拟自然浏览行为
+        if page_type == "cn":
+            session.headers["Referer"] = "https://www.chemicalbook.com/"
+        elif cas != "":
+            # EN 页通常从 CN 页跳转
+            session.headers["Referer"] = CHEMICALBOOK_CN_URL.format(cas=cas)
+
         try:
             response = session.get(url, timeout=timeout)
             html = _decode_response_text(response)
@@ -555,6 +611,7 @@ def _fetch_page_from_network(
                 logger.info("ChemicalBook 页面不存在, page=%s, url=%s", page_type, url)
                 return result
 
+            last_status_code = response.status_code
             last_error_message = f"HTTP {response.status_code}"
             logger.warning(
                 "ChemicalBook 请求失败, page=%s, status=%s, attempt=%s, url=%s",
@@ -573,7 +630,12 @@ def _fetch_page_from_network(
             )
 
         if attempt + 1 < MAX_RETRIES:
-            wait_seconds = 2 ** attempt
+            if last_status_code == 503:
+                # 503 通常意味着限速, 需要更长等待
+                wait_seconds = (5 * (attempt + 1)) + random.uniform(1.0, 3.0)
+            else:
+                wait_seconds = (2 ** attempt) + random.uniform(0.5, 1.5)
+            logger.debug("ChemicalBook 重试等待 %.2f 秒, attempt=%d", wait_seconds, attempt + 1)
             time.sleep(wait_seconds)
 
     return PageFetchResult(
@@ -619,11 +681,21 @@ def _fetch_page_with_playwright(
 
     try:
         logger.info("使用 playwright 重试 ChemicalBook 页面, page=%s, url=%s", page_type, url)
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            page = browser.new_page(user_agent=BROWSER_HEADERS["User-Agent"])
-            page.goto(url, wait_until="domcontentloaded", timeout=int(timeout * 1000))
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            # 创建完整浏览器上下文, 模拟真实用户环境
+            context = browser.new_context(
+                user_agent=random.choice(_USER_AGENT_POOL),
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+            )
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=int(timeout * 1000))
+            # 模拟人类浏览: 页面加载后短暂等待
+            page.wait_for_timeout(random.randint(1000, 2000))
             html = page.content()
+            context.close()
             browser.close()
     except Exception as exc:  # pragma: no cover - 依赖外部浏览器
         return PageFetchResult(

@@ -81,31 +81,6 @@ def get_measurement_value(normalized: Optional[Dict[str, Any]], field_name: str)
         return None
 
 
-def needs_legacy_chemicalbook_fallback(record: Optional[Dict[str, Any]]) -> bool:
-    """
-    功能:
-        判断新 ChemicalBook 抓取结果是否需要旧实现兜底.
-        仅关注当前入库链路依赖的中文名, 密度, 熔点三个核心字段.
-    参数:
-        record: Optional[Dict[str, Any]], fetch_chemicalbook_by_cas 返回结果.
-    返回:
-        bool, True 表示至少一个核心字段缺失, 需要旧实现回填.
-    """
-    if isinstance(record, dict) is False:
-        return True
-
-    normalized = record.get("normalized")
-    cn_name = ""
-    if isinstance(normalized, dict) is True:
-        cn_name = str(normalized.get("cn_name") or "").strip()
-
-    density_value = get_measurement_value(normalized, "density")
-    melting_point_value = get_measurement_value(normalized, "melting_point")
-    if cn_name == "" or density_value is None or melting_point_value is None:
-        return True
-    return False
-
-
 def infer_physical_state(
     existing_state: Optional[str],
     melting_point: Optional[float],
@@ -164,7 +139,6 @@ def build_append_row_data(
     query: str,
     lookup_info: Optional[Any],
     chemicalbook_record: Optional[Dict[str, Any]],
-    legacy_chemicalbook_info: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     功能:
@@ -174,7 +148,6 @@ def build_append_row_data(
         query: str, 用户输入的 CAS 或名称.
         lookup_info: Optional[Any], lookup_chemical 返回对象.
         chemicalbook_record: Optional[Dict[str, Any]], fetch_chemicalbook_by_cas 返回结果.
-        legacy_chemicalbook_info: Optional[Any], 旧 _query_chemicalbook 返回对象, 仅作兜底.
     返回:
         Dict[str, Any], 追加入库所需字段映射.
     """
@@ -190,11 +163,6 @@ def build_append_row_data(
     lookup_melting_point = getattr(lookup_info, "melting_point", None)
     lookup_state = getattr(lookup_info, "physical_state", None)
 
-    legacy_cn_name = getattr(legacy_chemicalbook_info, "substance", None)
-    legacy_en_name = getattr(legacy_chemicalbook_info, "substance_english_name", None)
-    legacy_density = getattr(legacy_chemicalbook_info, "density", None)
-    legacy_melting_point = getattr(legacy_chemicalbook_info, "melting_point", None)
-
     chemicalbook_cas = ""
     if isinstance(chemicalbook_record, dict) is True:
         chemicalbook_cas = str(chemicalbook_record.get("cas") or "").strip()
@@ -203,12 +171,10 @@ def build_append_row_data(
     substance_english_name = _first_non_empty(
         lookup_en_name,
         normalized.get("en_name"),
-        legacy_en_name,
     )
     substance_chinese_name = _first_non_empty(
         lookup_cn_name,
         normalized.get("cn_name"),
-        legacy_cn_name,
     )
     molecular_weight = _first_non_none(
         lookup_molecular_weight,
@@ -217,12 +183,10 @@ def build_append_row_data(
     density_value = _first_non_none(
         lookup_density,
         get_measurement_value(normalized, "density"),
-        legacy_density,
     )
     melting_point_value = _first_non_none(
         lookup_melting_point,
         get_measurement_value(normalized, "melting_point"),
-        legacy_melting_point,
     )
     boiling_point_value = get_measurement_value(normalized, "boiling_point")
     physical_state = infer_physical_state(

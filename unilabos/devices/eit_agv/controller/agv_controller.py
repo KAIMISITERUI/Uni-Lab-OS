@@ -20,6 +20,7 @@ from ..config.agv_config import (
     TASK_STATUS_MAP,
 )
 from ..config.arm_config import ENABLE_GRIP_DETECTION
+from ..data.shelf_manager import ShelfManager
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class AGVController:
         self.arm = ArmDriver(ip, port, timeout)
         self.position_manager = PositionManager()
         self.current_station = None  # 当前所在工站
+        self.shelf_manager = ShelfManager()  # 货架物料状态管理器
 
         logger.info("AGV控制器初始化完成")
 
@@ -2284,6 +2286,121 @@ class AGVController:
                 "failed_at": f"异常: {str(e)}"
             }
 
+    def transfer_analysis_to_shelf(
+        self,
+        source_trays=None,
+        material_type="FLASH_FILTER_OUTER_BOTTLE_TRAY",
+        poll_interval=30.0,
+        poll_timeout=7200.0,
+        block=True,
+    ):
+        """
+        功能:
+            从分析站取走完成检测的样品, 放置到货架空位上.
+            先轮询智达进样设备状态, 等待其变为 Idle 后执行转运.
+            转运和货架状态更新完成后, 让 AGV 返回充电站待命.
+        参数:
+            source_trays: 源托盘列表, 默认 ["analysis_station_tray_1-2"]
+            material_type: 物料类型标识, 默认 "FLASH_FILTER_OUTER_BOTTLE_TRAY"
+            poll_interval: 状态轮询间隔(秒), 默认 30
+            poll_timeout: 轮询超时(秒), 默认 7200(2小时)
+            block: 是否阻塞执行
+        返回:
+            bool, True 表示转运和回充都成功, False 表示任一步失败
+        """
+        if source_trays is None:
+            source_trays = ["analysis_station_tray_1-2"]
+
+        logger.info("开始分析站→货架样品转运, 源托盘: %s", source_trays)
+
+        # 步骤1: 轮询智达设备状态, 等待变为 Idle
+        logger.info("步骤1: 轮询智达进样设备状态, 等待变为 Idle ...")
+        from unilabos.devices.eit_analysis_station.driver.zhida_driver import ZhidaClient
+
+        client = ZhidaClient()
+        try:
+            client.connect()
+            logger.info("已连接到智达进样设备")
+        except Exception as e:
+            logger.error("连接智达进样设备失败: %s", e)
+            return False
+
+        try:
+            elapsed = 0.0
+            while elapsed < poll_timeout:
+                status = client.get_status()
+                logger.info("智达设备当前状态: %s (已等待 %.0f 秒)", status, elapsed)
+
+                if status == "Idle":
+                    logger.info("智达设备已空闲, 准备执行转运")
+                    break
+                elif status in ("Offline", "Error"):
+                    logger.error("智达设备异常状态: %s, 终止转运", status)
+                    return False
+                else:
+                    # Busy / RunSample 等状态, 继续等待
+                    time.sleep(poll_interval)
+                    elapsed += poll_interval
+            else:
+                logger.error("轮询超时(%.0f秒), 设备未变为 Idle, 终止转运", poll_timeout)
+                return False
+        finally:
+            client.close()
+
+        # 步骤2: 查找货架空闲槽位
+        logger.info("步骤2: 查找货架空闲槽位, 需要 %d 个", len(source_trays))
+        empty_slots = self.shelf_manager.find_empty_slots(len(source_trays))
+
+        if len(empty_slots) < len(source_trays):
+            logger.error(
+                "货架空闲槽位不足: 需要 %d 个, 仅有 %d 个",
+                len(source_trays), len(empty_slots),
+            )
+            return False
+
+        logger.info("已找到空闲槽位: %s", empty_slots)
+
+        # 步骤3: 构建并执行转运任务
+        logger.info("步骤3: 执行批量物料转运")
+        transfer_tasks = []
+        for src, tgt in zip(source_trays, empty_slots):
+            transfer_tasks.append({
+                "source_tray": src,
+                "target_tray": tgt,
+                "material_type": material_type,
+            })
+            logger.info("转运任务: %s -> %s", src, tgt)
+
+        result = self.batch_transfer_materials(transfer_tasks, block=block)
+        if not result:
+            logger.error("批量物料转运失败")
+            return False
+
+        # 步骤4: 更新货架状态记录
+        logger.info("步骤4: 更新货架物料状态")
+        for src, tgt in zip(source_trays, empty_slots):
+            self.shelf_manager.place_material(
+                slot_name=tgt,
+                material_type=material_type,
+                source=src,
+                description="分析完成样品(自动转运)",
+            )
+
+        # 货架状态已经与实际转运结果一致, 回充失败时不回滚状态.
+        logger.info("步骤5: 返回充电站")
+        try:
+            charge_result = self.go_to_charging_station(block=block)
+        except Exception as exc:
+            logger.error("分析站→货架样品转运完成, 但返回充电站异常: %s", exc)
+            return False
+
+        if charge_result is None:
+            logger.error("分析站→货架样品转运完成, 但返回充电站失败")
+            return False
+
+        logger.info("分析站→货架样品转运完成, AGV 已返回充电站")
+        return True
+
     def _get_station_from_tray(self, tray_name):
         """
         功能:
@@ -2890,10 +3007,12 @@ def main():
         print("27. 自动充电检查(单次)")
         print("28. 启动自动充电循环")
         print("29. 批量物料转运循环测试")
+        print("30. 分析站→货架样品转运")
+        print("31. 查看/管理货架状态")
         print("0. 退出程序")
         print("=" * 60)
 
-        choice = input("请输入选项 (0-29): ").strip()
+        choice = input("请输入选项 (0-31): ").strip()
 
         if choice == "1":
             # 连接机械臂
@@ -4297,6 +4416,127 @@ def main():
 
             except Exception as e:
                 print(f"错误: {e}")
+
+        elif choice == "30":
+            # 分析站→货架样品转运
+            print("\n--- 分析站→货架样品转运 ---")
+            print("说明: 轮询智达进样设备状态, 等待空闲后将样品从分析站转运到货架空位")
+
+            try:
+                # 显示当前货架状态
+                controller.shelf_manager.print_status()
+
+                # 询问源托盘
+                print("\n默认源托盘: analysis_station_tray_1-2")
+                source_input = input(
+                    "请输入源托盘(多个用逗号分隔, 直接回车使用默认): "
+                ).strip()
+
+                if source_input == "":
+                    source_trays = ["analysis_station_tray_1-2"]
+                else:
+                    source_trays = [s.strip() for s in source_input.split(",") if s.strip() != ""]
+
+                print(f"源托盘: {source_trays}")
+
+                # 询问轮询间隔
+                interval_input = input("请输入轮询间隔秒数 (默认30): ").strip()
+                try:
+                    poll_interval = float(interval_input) if interval_input != "" else 30.0
+                except ValueError:
+                    print("无效数值, 使用默认30秒")
+                    poll_interval = 30.0
+
+                # 确认执行
+                print(f"\n将执行以下操作:")
+                print(f"  源托盘: {source_trays}")
+                print(f"  轮询间隔: {poll_interval} 秒")
+                confirm = input("确认执行? (y/n): ").strip().lower()
+
+                if confirm != "y":
+                    print("已取消")
+                    continue
+
+                # 执行转运
+                print("\n开始执行分析站→货架样品转运...")
+                result = controller.transfer_analysis_to_shelf(
+                    source_trays=source_trays,
+                    poll_interval=poll_interval,
+                )
+
+                if result:
+                    print("\n分析站→货架样品转运成功!")
+                    controller.shelf_manager.print_status()
+                else:
+                    print("\n分析站→货架样品转运失败, 请查看日志获取详细信息")
+
+            except Exception as e:
+                print(f"错误: {e}")
+
+        elif choice == "31":
+            # 查看/管理货架状态
+            print("\n--- 查看/管理货架状态 ---")
+
+            while True:
+                print("\n  1. 查看当前状态")
+                print("  2. 手动清除槽位")
+                print("  3. 重置全部槽位")
+                print("  0. 返回上级菜单")
+
+                sub_choice = input("请选择操作: ").strip()
+
+                if sub_choice == "0":
+                    break
+                elif sub_choice == "1":
+                    controller.shelf_manager.print_status()
+                elif sub_choice == "2":
+                    # 列出有物料的槽位
+                    controller.shelf_manager.print_status()
+                    status = controller.shelf_manager.get_all_status()
+                    occupied = [
+                        name for name in status["slots"]
+                        if status["slots"][name] is not None
+                    ]
+
+                    if len(occupied) == 0:
+                        print("所有槽位均为空, 无需清除")
+                        continue
+
+                    print("\n有物料的槽位:")
+                    for idx, name in enumerate(occupied, 1):
+                        info = status["slots"][name]
+                        print(f"  {idx}. {name} - {info.get('material_type', '未知')}")
+
+                    slot_input = input(
+                        f"请选择要清除的槽位 (1-{len(occupied)}): "
+                    ).strip()
+
+                    if not slot_input.isdigit():
+                        print("无效输入")
+                        continue
+
+                    slot_idx = int(slot_input) - 1
+                    if slot_idx < 0 or slot_idx >= len(occupied):
+                        print(f"请输入1到{len(occupied)}之间的数字")
+                        continue
+
+                    slot_name = occupied[slot_idx]
+                    confirm = input(f"确认清除槽位 {slot_name}? (y/n): ").strip().lower()
+                    if confirm == "y":
+                        result = controller.shelf_manager.remove_material(slot_name)
+                        print(f"清除结果: {'成功' if result else '失败'}")
+                    else:
+                        print("已取消")
+
+                elif sub_choice == "3":
+                    confirm = input("确认重置全部槽位? 此操作不可恢复 (y/n): ").strip().lower()
+                    if confirm == "y":
+                        controller.shelf_manager.reset_all()
+                        print("已重置全部槽位")
+                    else:
+                        print("已取消")
+                else:
+                    print("无效选择")
 
         elif choice == "0":
             # 退出程序

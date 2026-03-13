@@ -2792,6 +2792,7 @@ def main() -> None:
         "  6. calculate_yields      - 产率计算\n"
         "  7. submit_by_csv_path    - 选择仪器并按CSV路径直接提交任务\n"
         "  8. aggregate_task_data   - 实验数据归档汇总\n"
+        "  9. transfer_to_shelf   - 分析完成样品→货架转运(等待空闲后自动执行)\n"
         "  0. 退出\n"
         "================================"
     )
@@ -2804,8 +2805,8 @@ def main() -> None:
             print("已退出测试.")
             break
 
-        if choice not in ("1", "2", "3", "4", "5", "6", "7", "8"):
-            print("无效选择, 请输入 0/1/2/3/4/5/6/7/8.")
+        if choice not in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            print("无效选择, 请输入 0/1/2/3/4/5/6/7/8/9.")
             continue
 
         # 选项 4/5 直接操作设备驱动, 不需要 task_id
@@ -2915,6 +2916,63 @@ def main() -> None:
                 task_id=task_id, copy_raw_data=copy_raw
             )
             _print_result(result)
+
+        elif choice == "9":
+            # 分析完成样品→货架转运
+            print("\n>>> 分析完成样品→货架转运")
+            print("说明: 轮询智达进样设备状态, 等待空闲后将样品从分析站转运到货架空位\n")
+
+            try:
+                from unilabos.devices.eit_agv.controller.agv_controller import AGVController
+
+                agv = AGVController(timeout=180000)
+
+                # 显示当前货架状态
+                agv.shelf_manager.print_status()
+
+                # 询问源托盘
+                print("默认源托盘: analysis_station_tray_1-2")
+                source_input = input(
+                    "请输入源托盘(多个用逗号分隔, 直接回车使用默认): "
+                ).strip()
+
+                if source_input == "":
+                    source_trays = ["analysis_station_tray_1-2"]
+                else:
+                    source_trays = [
+                        s.strip() for s in source_input.split(",") if s.strip() != ""
+                    ]
+
+                # 询问轮询间隔
+                interval_input = input("请输入轮询间隔秒数 (留空默认30): ").strip()
+                try:
+                    interval = float(interval_input) if interval_input else 30.0
+                except ValueError:
+                    print("无效数值, 使用默认30秒.")
+                    interval = 30.0
+
+                print(f"\n源托盘: {source_trays}")
+                print(f"轮询间隔: {interval} 秒")
+
+                # 执行转运
+                print("\n开始执行分析站→货架样品转运...")
+                success = agv.transfer_analysis_to_shelf(
+                    source_trays=source_trays,
+                    poll_interval=interval,
+                )
+
+                _print_result({
+                    "success": success,
+                    "source_trays": source_trays,
+                    "poll_interval": interval,
+                })
+
+                if success:
+                    agv.shelf_manager.print_status()
+
+            except Exception as exc:
+                logger.error("分析站→货架转运失败: %s", exc)
+                print(f"\n  操作失败: {exc}\n")
 
 
 if __name__ == "__main__":

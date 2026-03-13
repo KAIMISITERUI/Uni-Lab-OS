@@ -33,7 +33,6 @@ from ..utils.chemical_append_utils import (
     build_duplicate_check_specs,
     collect_missing_append_headers,
     get_excel_write_value,
-    needs_legacy_chemicalbook_fallback,
     save_chemicalbook_record,
 )
 
@@ -372,7 +371,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             Optional[Dict[str, Any]], 成功返回稳定结果字典, 包含 row_data, row_index,
             chemicalbook_status, chemicalbook_record_path. 查询失败或重复时返回 None.
         """
-        from ..utils.chemical_lookup import _query_chemicalbook, is_cas_number, lookup_chemical
+        from ..utils.chemical_lookup import is_cas_number, lookup_chemical
         from ..utils.chemicalbook_scraper import fetch_chemicalbook_by_cas
 
         normalized_query = str(query or "").strip()
@@ -380,7 +379,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             logger.warning("化学品追加失败, 查询参数为空")
             return None
 
-        # 先获取多源核心字段, 保证新抓取器退化时仍可稳定入库.
+        # 先获取多源核心字段 (PubChem + Common Chemistry)
         info = lookup_chemical(normalized_query)
 
         resolved_cas = ""
@@ -406,14 +405,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                     logger.warning("ChemicalBook sidecar 保存失败: CAS=%s, err=%s", resolved_cas, exc)
                     chemicalbook_record_path = ""
 
-        legacy_chemicalbook_info = None
-        if resolved_cas != "" and needs_legacy_chemicalbook_fallback(chemicalbook_record) is True:
-            try:
-                legacy_chemicalbook_info = _query_chemicalbook(resolved_cas)
-            except Exception as exc:
-                logger.warning("旧 ChemicalBook 兜底查询异常: CAS=%s, err=%s", resolved_cas, exc)
-
-        if info is None and chemicalbook_record is None and legacy_chemicalbook_info is None:
+        if info is None and chemicalbook_record is None:
             logger.warning("在线查询未找到化合物: %s", normalized_query)
             return None
 
@@ -421,7 +413,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             query=resolved_cas,
             lookup_info=info,
             chemicalbook_record=chemicalbook_record,
-            legacy_chemicalbook_info=legacy_chemicalbook_info,
         )
         has_any_core_value = any([
             str(row_data.get("cas_number") or "").strip() != "",

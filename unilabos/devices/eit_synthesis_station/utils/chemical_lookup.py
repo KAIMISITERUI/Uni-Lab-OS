@@ -3,9 +3,9 @@
 化合物在线查询模块
 
 功能:
-    根据 CAS 号或中英文名称, 从多个在线数据源查询化合物信息,
-    包括 CAS 号, 英文名, 中文名, 分子量, 密度, 熔点和物态.
-    数据源优先级: PubChem > Common Chemistry > ChemicalBook.
+    根据 CAS 号或中英文名称, 从 PubChem 和 Common Chemistry 查询化合物信息,
+    包括 CAS 号, 英文名, 分子量, 密度, 熔点和物态.
+    中文名由外部 chemicalbook_scraper 模块独立获取.
 """
 
 import re
@@ -62,20 +62,28 @@ _PUBCHEM_VIEW_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view"
 # Common Chemistry API 基地址
 _COMMON_CHEM_BASE = "https://commonchemistry.cas.org/api"
 
-# ChemicalBook URL 模板
-_CHEMBOOK_CN_URL = "https://www.chemicalbook.com/CAS_{cas}.htm"
-_CHEMBOOK_EN_URL = "https://www.chemicalbook.com/CASEN_{cas}.htm"
-
-# 通用浏览器请求头, 用于绕过反爬
+# 通用浏览器请求头, 含 Client Hints 和 Sec-Fetch 头以绕过反爬
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
 }
 
 # 密度解析正则
@@ -104,26 +112,6 @@ _MP_RANGE_RE = re.compile(
 
 # 密度过滤关键词 (出现则跳过该条目)
 _DENSITY_SKIP_KEYWORDS = ["enthalpy", "latent heat"]
-
-# ChemicalBook 中文页属性正则 (HTML 中提取)
-_CB_CN_NAME_RE = re.compile(
-    r"中文名称\s*(?:</[^>]+>)?\s*(?:<[^>]+>)*\s*([^<]+)",
-    re.IGNORECASE,
-)
-# 英文页属性正则 (方括号标记, HTML 中 [density&nbsp;] 格式)
-# 匹配 [density&nbsp;] 或 [density] 后跟 <br> 再跟属性值
-_CB_EN_DENSITY_RE = re.compile(
-    r"\[density\s*(?:&nbsp;)*\s*\].*?<br\s*/?>.*?<br\s*/?>\s*([^<]+)",
-    re.IGNORECASE | re.DOTALL,
-)
-_CB_EN_MP_RE = re.compile(
-    r"\[Melting\s+point\s*(?:&nbsp;)*\s*\].*?<br\s*/?>.*?<br\s*/?>\s*([^<]+)",
-    re.IGNORECASE | re.DOTALL,
-)
-_CB_EN_NAME_RE = re.compile(
-    r"\[Name\s*(?:&nbsp;)*\s*\].*?<br\s*/?>.*?<br\s*/?>\s*([^<]+)",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 # ===================== 工具函数 =====================
@@ -573,240 +561,34 @@ def _query_common_chemistry(query: str, timeout: float = 10.0) -> Optional[Chemi
         return ChemicalInfo(cas_number=cas_rn)
 
 
-# ===================== ChemicalBook 查询 =====================
-
-def _fetch_chemicalbook_page(url: str, timeout: float = 10.0) -> Optional[str]:
-    """
-    功能:
-        获取 ChemicalBook 页面 HTML 内容.
-        先用 requests + 浏览器请求头尝试, 失败则尝试 playwright.
-    参数:
-        url: str, 目标页面 URL.
-        timeout: float, requests 超时秒数.
-    返回:
-        Optional[str], 页面 HTML 文本, 获取失败返回 None.
-    """
-    # 策略 1: requests + 浏览器请求头
-    try:
-        resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=timeout)
-        if resp.status_code == 200:
-            resp.encoding = resp.apparent_encoding
-            return resp.text
-        logger.debug("ChemicalBook requests 请求失败: status=%s, url=%s", resp.status_code, url)
-    except requests.RequestException as exc:
-        logger.debug("ChemicalBook requests 异常: %s", exc)
-
-    # 策略 2: playwright 无头浏览器 (按需动态导入)
-    try:
-        from playwright.sync_api import sync_playwright
-        logger.info("requests 获取 ChemicalBook 失败, 尝试 playwright: %s", url)
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            html = page.content()
-            browser.close()
-            if html:
-                return html
-    except ImportError:
-        logger.warning(
-            "playwright 未安装, 无法通过无头浏览器获取 ChemicalBook 中文页. "
-            "如需中文名功能, 请运行: pip install playwright && playwright install chromium"
-        )
-    except Exception as exc:
-        logger.warning("playwright 获取 ChemicalBook 页面失败: %s", exc)
-
-    return None
-
-
-def _parse_chemicalbook_cn_name(html: str) -> Optional[str]:
-    """
-    功能:
-        从 ChemicalBook 中文页 HTML 中提取化合物中文名称.
-    参数:
-        html: str, 页面 HTML 文本.
-    返回:
-        Optional[str], 中文名称, 未提取到返回 None.
-    """
-    # 多种可能的 HTML 结构
-    patterns = [
-        # 模式1: <td>中文名称</td><td>xxx</td>
-        re.compile(r"中文名称\s*</\s*td>\s*<td[^>]*>\s*([^<]+)", re.IGNORECASE),
-        # 模式2: 中文名称：xxx 或 中文名称:xxx
-        re.compile(r"中文名称\s*[：:]\s*([^\n<]+)", re.IGNORECASE),
-        # 模式3: <span>中文名称</span> ... <span>xxx</span>
-        re.compile(r"中文名称\s*</\s*span>\s*(?:</[^>]+>\s*)*<[^>]+>\s*([^<]+)", re.IGNORECASE),
-        # 模式4: <span>中文名称</span> xxx
-        re.compile(r"中文名称\s*</\s*span>\s*([^<\n]+)", re.IGNORECASE),
-        # 模式4: 中文名: xxx
-        re.compile(r"中文名\s*[：:]\s*([^\n<]+)", re.IGNORECASE),
-    ]
-    for pattern in patterns:
-        match = pattern.search(html)
-        if match is not None:
-            name = match.group(1).strip()
-            # 确认包含中文字符
-            if re.search(r"[\u4e00-\u9fff]", name):
-                return name
-    return None
-
-
-def _parse_chemicalbook_en_density(html: str) -> Optional[float]:
-    """
-    功能:
-        从 ChemicalBook 英文页 HTML 中提取密度值.
-    参数:
-        html: str, 英文页 HTML 文本.
-    返回:
-        Optional[float], 密度值 (g/mL), 未提取到返回 None.
-    """
-    match = _CB_EN_DENSITY_RE.search(html)
-    if match is None:
-        return None
-    text = match.group(1).strip()
-
-    # 先匹配带单位的值 (如 "0.789 g/mL at 20 °C")
-    unit_match = _DENSITY_WITH_UNIT_RE.search(text)
-    if unit_match is not None:
-        return round(float(unit_match.group(1)), 4)
-
-    # 再匹配开头的浮点数
-    leading_match = _DENSITY_LEADING_FLOAT_RE.match(text)
-    if leading_match is not None:
-        val = float(leading_match.group(1))
-        if 0.3 <= val <= 25.0:
-            return round(val, 4)
-
-    return None
-
-
-def _parse_chemicalbook_en_melting_point(html: str) -> Optional[float]:
-    """
-    功能:
-        从 ChemicalBook 英文页 HTML 中提取熔点值.
-    参数:
-        html: str, 英文页 HTML 文本.
-    返回:
-        Optional[float], 熔点值 (celsius), 未提取到返回 None.
-    """
-    match = _CB_EN_MP_RE.search(html)
-    if match is None:
-        return None
-    text = match.group(1).strip()
-
-    # 先匹配范围 + °C (如 "134-136°C")
-    range_c = re.search(r"(-?\d+\.?\d*)\s*[～~–\-]\s*(-?\d+\.?\d*)\s*°?\s*C", text, re.IGNORECASE)
-    if range_c is not None:
-        low = float(range_c.group(1))
-        high = float(range_c.group(2))
-        return round((low + high) / 2, 2)
-
-    # 匹配单个 °C 值 (如 "-114°C")
-    c_match = re.search(r"(-?\d+\.?\d*)\s*°?\s*C", text, re.IGNORECASE)
-    if c_match is not None:
-        return float(c_match.group(1))
-
-    # 匹配 °F 值并转换
-    f_match = re.search(r"(-?\d+\.?\d*)\s*°?\s*F", text, re.IGNORECASE)
-    if f_match is not None:
-        return _fahrenheit_to_celsius(float(f_match.group(1)))
-
-    return None
-
-
-def _query_chemicalbook(cas: str, timeout: float = 10.0) -> Optional[ChemicalInfo]:
-    """
-    功能:
-        通过 ChemicalBook 查询化合物信息.
-        中文页获取中文名, 英文页获取密度和熔点.
-    参数:
-        cas: str, CAS 号 (如 "64-17-5").
-        timeout: float, requests 超时秒数.
-    返回:
-        Optional[ChemicalInfo], 查询到的化合物信息.
-    """
-    if not cas:
-        return None
-
-    logger.info("开始 ChemicalBook 查询: CAS=%s", cas)
-    info = ChemicalInfo()
-
-    # 获取中文页 (提取中文名)
-    cn_url = _CHEMBOOK_CN_URL.format(cas=cas)
-    cn_html = _fetch_chemicalbook_page(cn_url, timeout)
-    if cn_html is not None:
-        info.substance = _parse_chemicalbook_cn_name(cn_html)
-        if info.substance is not None:
-            logger.info("ChemicalBook 中文名: %s", info.substance)
-        else:
-            logger.debug("ChemicalBook 中文页未能提取中文名")
-    else:
-        logger.debug("ChemicalBook 中文页获取失败")
-
-    # 获取英文页 (提取密度和熔点)
-    en_url = _CHEMBOOK_EN_URL.format(cas=cas)
-    en_html = _fetch_chemicalbook_page(en_url, timeout)
-    if en_html is not None:
-        info.density = _parse_chemicalbook_en_density(en_html)
-        info.melting_point = _parse_chemicalbook_en_melting_point(en_html)
-
-        # 尝试从英文页提取英文名
-        name_match = _CB_EN_NAME_RE.search(en_html)
-        if name_match is not None:
-            en_name = name_match.group(1).strip().split("\n")[0].strip()
-            if en_name:
-                info.substance_english_name = en_name
-
-        logger.info(
-            "ChemicalBook 英文页: 密度=%s, 熔点=%s",
-            info.density, info.melting_point,
-        )
-    else:
-        logger.debug("ChemicalBook 英文页获取失败")
-
-    # 判断是否获取到任何有效数据
-    has_data = any([
-        info.substance, info.density, info.melting_point, info.substance_english_name,
-    ])
-    return info if has_data else None
-
 
 # ===================== 合并与物态判断 =====================
 
 def _merge_results(
     pubchem: Optional[ChemicalInfo],
     common_chem: Optional[ChemicalInfo],
-    chemicalbook: Optional[ChemicalInfo],
 ) -> ChemicalInfo:
     """
     功能:
-        按优先级合并多个数据源的查询结果.
-        通用规则: 每个字段取第一个非 None 值.
-        特殊规则: 中文名(substance) 优先取 ChemicalBook 结果.
+        按优先级合并 PubChem 和 Common Chemistry 查询结果.
+        每个字段取第一个非 None 值.
     参数:
         pubchem: Optional[ChemicalInfo], PubChem 查询结果.
         common_chem: Optional[ChemicalInfo], Common Chemistry 查询结果.
-        chemicalbook: Optional[ChemicalInfo], ChemicalBook 查询结果.
     返回:
         ChemicalInfo, 合并后的结果.
     """
     merged = ChemicalInfo()
 
-    # 中文名优先取 ChemicalBook (唯一可靠中文源)
-    if chemicalbook is not None and chemicalbook.substance is not None:
-        merged.substance = chemicalbook.substance
-
-    # 其余字段按 [common_chem, pubchem, chemicalbook] 的顺序 (CAS 号以 CAS 官方为准)
-    # cas_number: Common Chemistry > PubChem > ChemicalBook
-    sources_for_cas = [common_chem, pubchem, chemicalbook]
-    # substance_english_name: PubChem > Common Chemistry > ChemicalBook
-    sources_for_en_name = [pubchem, common_chem, chemicalbook]
+    # cas_number: Common Chemistry > PubChem (CAS 号以 CAS 官方为准)
+    sources_for_cas = [common_chem, pubchem]
+    # substance_english_name: PubChem > Common Chemistry
+    sources_for_en_name = [pubchem, common_chem]
     # molecular_weight: PubChem > Common Chemistry
     sources_for_mw = [pubchem, common_chem]
-    # density: PubChem > ChemicalBook
-    sources_for_density = [pubchem, chemicalbook]
-    # melting_point: PubChem > ChemicalBook
-    sources_for_mp = [pubchem, chemicalbook]
+    # density / melting_point: 仅 PubChem 提供
+    sources_for_density = [pubchem]
+    sources_for_mp = [pubchem]
 
     for src in sources_for_cas:
         if src is not None and src.cas_number is not None and merged.cas_number is None:
@@ -852,8 +634,9 @@ def _determine_physical_state(melting_point: Optional[float]) -> str:
 def lookup_chemical(query: str) -> Optional[ChemicalInfo]:
     """
     功能:
-        对外统一入口. 根据输入判断 CAS 号或名称, 依次查询多个数据源,
-        按优先级合并结果并推断物态.
+        对外统一入口. 根据输入判断 CAS 号或名称, 依次查询 PubChem 和
+        Common Chemistry, 按优先级合并结果并推断物态.
+        ChemicalBook 中文名/密度/熔点由外部 chemicalbook_scraper 单独处理.
     参数:
         query: str, CAS 号或化合物中英文名称.
     返回:
@@ -870,7 +653,6 @@ def lookup_chemical(query: str) -> Optional[ChemicalInfo]:
     # 查询各数据源 (各自独立, 互不影响)
     pubchem_result = None
     common_chem_result = None
-    chemicalbook_result = None
 
     # 源 1: PubChem
     try:
@@ -884,41 +666,20 @@ def lookup_chemical(query: str) -> Optional[ChemicalInfo]:
     except Exception as exc:
         logger.warning("Common Chemistry 查询意外异常: %s", exc)
 
-    # 确定用于 ChemicalBook 查询的 CAS 号
-    cas_for_chembook = None
-    if is_cas:
-        cas_for_chembook = query
-    else:
-        # 从其他源的结果中获取 CAS 号
-        if common_chem_result is not None and common_chem_result.cas_number is not None:
-            cas_for_chembook = common_chem_result.cas_number
-        elif pubchem_result is not None and pubchem_result.cas_number is not None:
-            cas_for_chembook = pubchem_result.cas_number
-
-    # 源 3: ChemicalBook (需要 CAS 号)
-    if cas_for_chembook is not None:
-        try:
-            chemicalbook_result = _query_chemicalbook(cas_for_chembook)
-        except Exception as exc:
-            logger.warning("ChemicalBook 查询意外异常: %s", exc)
-    else:
-        logger.info("未获取到 CAS 号, 跳过 ChemicalBook 查询")
-
     # 检查是否所有源都失败
-    if pubchem_result is None and common_chem_result is None and chemicalbook_result is None:
+    if pubchem_result is None and common_chem_result is None:
         logger.warning("所有数据源均未查询到化合物: %s", query)
         return None
 
     # 合并结果
-    merged = _merge_results(pubchem_result, common_chem_result, chemicalbook_result)
+    merged = _merge_results(pubchem_result, common_chem_result)
 
     # 推断物态
     merged.physical_state = _determine_physical_state(merged.melting_point)
 
     logger.info(
-        "化合物查询完成: CAS=%s, 英文名=%s, 中文名=%s, MW=%s, "
-        "密度=%s, 熔点=%s, 物态=%s",
-        merged.cas_number, merged.substance_english_name, merged.substance,
+        "化合物查询完成: CAS=%s, 英文名=%s, MW=%s, 密度=%s, 熔点=%s, 物态=%s",
+        merged.cas_number, merged.substance_english_name,
         merged.molecular_weight, merged.density, merged.melting_point,
         merged.physical_state,
     )
