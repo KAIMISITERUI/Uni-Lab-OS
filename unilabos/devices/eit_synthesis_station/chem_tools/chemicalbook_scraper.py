@@ -23,6 +23,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from . import storage
+
 try:
     from bs4 import BeautifulSoup
     from bs4.element import Tag
@@ -65,9 +67,6 @@ MAX_RETRIES = 3
 
 CHEMICALBOOK_CN_URL = "https://www.chemicalbook.com/CAS_{cas}.htm"
 CHEMICALBOOK_EN_URL = "https://www.chemicalbook.com/CASEN_{cas}.htm"
-MODULE_ROOT = Path(__file__).resolve().parent.parent
-CACHE_ROOT = MODULE_ROOT / "data" / "chemicalbook_cache"
-RAW_HTML_ROOT = MODULE_ROOT / "data" / "chemicalbook_raw"
 
 DEFAULT_SECTIONS = (
     "基本信息",
@@ -274,6 +273,7 @@ def fetch_chemicalbook_by_cas(
     返回:
         Dict[str, Any], 包含抓取状态, 标准化字段, 原始 sections 与调试信息.
     """
+    storage.ensure_chemicalbook_data_layout()
     record = _build_empty_record(cas=cas)
     normalized_cas = str(cas).strip()
     record["cas"] = normalized_cas
@@ -508,10 +508,10 @@ def _apply_cas_rate_limit(cas: str) -> None:
 
 
 def _fetch_page_with_cache(
-    session: requests.Session,
     cas: str,
     page_type: str,
     timeout: float,
+    session: Optional[requests.Session] = None,
 ) -> PageFetchResult:
     """
     功能:
@@ -524,12 +524,49 @@ def _fetch_page_with_cache(
     返回:
         PageFetchResult, 页面抓取结果.
     """
+    storage.ensure_chemicalbook_data_layout()
     cached_result = _load_cached_page(cas=cas, page_type=page_type)
     if cached_result is not None:
         logger.info("ChemicalBook 命中缓存, CAS=%s, page=%s", cas, page_type)
         return cached_result
 
+    if session is None:
+        session = _build_session()
+
     url = _build_page_url(cas=cas, page_type=page_type)
+    page_result = _fetch_page_with_playwright_direct(
+        session=session,
+        page_type=page_type,
+        url=url,
+        timeout=timeout,
+        cas=cas,
+    )
+
+    if page_result.html is not None:
+        _save_cached_page(cas=cas, page_type=page_type, result=page_result)
+    return page_result
+
+
+def _fetch_page_with_playwright_direct(
+    session: requests.Session,
+    page_type: str,
+    url: str,
+    timeout: float,
+    cas: str = "",
+) -> PageFetchResult:
+    """
+    功能:
+        在缓存缺失时执行页面抓取.
+        先尝试 requests, 若疑似触发反爬再切换到 playwright.
+    参数:
+        session: requests.Session, 已配置会话.
+        page_type: str, 页面类型.
+        url: str, 页面 URL.
+        timeout: float, 超时秒数.
+        cas: str, CAS 号, 用于补充请求头.
+    返回:
+        PageFetchResult, 页面抓取结果.
+    """
     page_result = _fetch_page_from_network(
         session=session,
         page_type=page_type,
@@ -551,10 +588,8 @@ def _fetch_page_with_cache(
             timeout=timeout,
         )
         if playwright_result.html is not None and playwright_result.blocked is False:
-            page_result = playwright_result
+            return playwright_result
 
-    if page_result.html is not None:
-        _save_cached_page(cas=cas, page_type=page_type, result=page_result)
     return page_result
 
 
@@ -746,9 +781,10 @@ def _cache_file_paths(cas: str, page_type: str) -> Tuple[Path, Path]:
     返回:
         Tuple[Path, Path], (html_path, meta_path).
     """
+    storage.ensure_chemicalbook_data_layout()
     safe_cas = cas.replace("/", "_")
-    html_path = CACHE_ROOT / f"{safe_cas}_{page_type}.html"
-    meta_path = CACHE_ROOT / f"{safe_cas}_{page_type}.json"
+    html_path = storage.CHEMICALBOOK_CACHE_ROOT / f"{safe_cas}_{page_type}.html"
+    meta_path = storage.CHEMICALBOOK_CACHE_ROOT / f"{safe_cas}_{page_type}.json"
     return html_path, meta_path
 
 
@@ -800,7 +836,8 @@ def _save_cached_page(cas: str, page_type: str, result: PageFetchResult) -> None
     返回:
         None.
     """
-    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    storage.ensure_chemicalbook_data_layout()
+    storage.CHEMICALBOOK_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
     html_path, meta_path = _cache_file_paths(cas=cas, page_type=page_type)
     metadata = {
         "url": result.url,
@@ -829,8 +866,9 @@ def _save_raw_html(cas: str, page_type: str, html: str) -> Path:
     返回:
         Path, 保存后的文件路径.
     """
-    RAW_HTML_ROOT.mkdir(parents=True, exist_ok=True)
-    raw_path = RAW_HTML_ROOT / f"{cas}_{page_type}.html"
+    storage.ensure_chemicalbook_data_layout()
+    storage.CHEMICALBOOK_RAW_ROOT.mkdir(parents=True, exist_ok=True)
+    raw_path = storage.CHEMICALBOOK_RAW_ROOT / f"{cas}_{page_type}.html"
     raw_path.write_text(html, encoding="utf-8")
     return raw_path
 

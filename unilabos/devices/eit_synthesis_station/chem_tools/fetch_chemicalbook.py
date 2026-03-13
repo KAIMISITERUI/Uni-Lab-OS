@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config.setting import configure_logging
-from ..utils.chemicalbook_scraper import fetch_chemicalbook_by_cas
+from .chemicalbook_scraper import fetch_chemicalbook_by_cas
 
 
 logger = logging.getLogger("FetchChemicalBookCLI")

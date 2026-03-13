@@ -15,11 +15,10 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from . import storage
+
 
 logger = logging.getLogger("ChemicalAppendUtils")
-
-MODULE_ROOT = Path(__file__).resolve().parent.parent
-CHEMICALBOOK_RECORD_ROOT = MODULE_ROOT / "data" / "chemicalbook_records"
 
 
 def _first_non_empty(*values: Any) -> str:
@@ -139,6 +138,7 @@ def build_append_row_data(
     query: str,
     lookup_info: Optional[Any],
     chemicalbook_record: Optional[Dict[str, Any]],
+    legacy_chemicalbook_info: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     功能:
@@ -151,9 +151,72 @@ def build_append_row_data(
     返回:
         Dict[str, Any], 追加入库所需字段映射.
     """
+    return _build_append_row_data(
+        query=query,
+        lookup_info=lookup_info,
+        chemicalbook_record=chemicalbook_record,
+        legacy_chemicalbook_info=legacy_chemicalbook_info,
+        allow_query_as_cas_fallback=True,
+    )
+
+
+def build_append_row_data_for_smiles(
+    lookup_info: Optional[Any],
+    chemicalbook_record: Optional[Dict[str, Any]],
+    legacy_chemicalbook_info: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    功能:
+        为 SMILES 在线查询流程构建 Excel 追加行字段.
+        与通用构造逻辑的区别是: 不允许将原始查询文本回填到 cas_number.
+    参数:
+        lookup_info: Optional[Any], lookup_chemical_by_smiles 返回对象.
+        chemicalbook_record: Optional[Dict[str, Any]], fetch_chemicalbook_by_cas 返回结果.
+    返回:
+        Dict[str, Any], 追加入库所需字段映射.
+    """
+    return _build_append_row_data(
+        query="",
+        lookup_info=lookup_info,
+        chemicalbook_record=chemicalbook_record,
+        legacy_chemicalbook_info=legacy_chemicalbook_info,
+        allow_query_as_cas_fallback=False,
+    )
+
+
+def _build_append_row_data(
+    query: str,
+    lookup_info: Optional[Any],
+    chemicalbook_record: Optional[Dict[str, Any]],
+    legacy_chemicalbook_info: Optional[Any],
+    allow_query_as_cas_fallback: bool,
+) -> Dict[str, Any]:
+    """
+    功能:
+        合并多源查询结果并生成 Excel 追加行字段.
+        可按调用场景决定是否允许将原始查询值作为 CAS 兜底写入.
+    参数:
+        query: str, 原始查询文本.
+        lookup_info: Optional[Any], 查询结果对象.
+        chemicalbook_record: Optional[Dict[str, Any]], ChemicalBook 结构化结果.
+        allow_query_as_cas_fallback: bool, 是否允许用 query 回填 cas_number.
+    返回:
+        Dict[str, Any], 追加入库所需字段映射.
+    """
     normalized = {}
     if isinstance(chemicalbook_record, dict) is True and isinstance(chemicalbook_record.get("normalized"), dict) is True:
         normalized = chemicalbook_record["normalized"]
+
+    use_legacy_fallback = needs_legacy_chemicalbook_fallback(chemicalbook_record)
+    legacy_cn_name = None
+    legacy_en_name = None
+    legacy_density = None
+    legacy_melting_point = None
+    if use_legacy_fallback is True and legacy_chemicalbook_info is not None:
+        legacy_cn_name = getattr(legacy_chemicalbook_info, "substance", None)
+        legacy_en_name = getattr(legacy_chemicalbook_info, "substance_english_name", None)
+        legacy_density = getattr(legacy_chemicalbook_info, "density", None)
+        legacy_melting_point = getattr(legacy_chemicalbook_info, "melting_point", None)
 
     lookup_cas = getattr(lookup_info, "cas_number", None)
     lookup_en_name = getattr(lookup_info, "substance_english_name", None)
@@ -167,14 +230,19 @@ def build_append_row_data(
     if isinstance(chemicalbook_record, dict) is True:
         chemicalbook_cas = str(chemicalbook_record.get("cas") or "").strip()
 
-    cas_number = _first_non_empty(lookup_cas, chemicalbook_cas, query)
+    cas_values = [lookup_cas, chemicalbook_cas]
+    if allow_query_as_cas_fallback is True:
+        cas_values.append(query)
+    cas_number = _first_non_empty(*cas_values)
     substance_english_name = _first_non_empty(
         lookup_en_name,
         normalized.get("en_name"),
+        legacy_en_name,
     )
     substance_chinese_name = _first_non_empty(
         lookup_cn_name,
         normalized.get("cn_name"),
+        legacy_cn_name,
     )
     molecular_weight = _first_non_none(
         lookup_molecular_weight,
@@ -183,10 +251,12 @@ def build_append_row_data(
     density_value = _first_non_none(
         lookup_density,
         get_measurement_value(normalized, "density"),
+        legacy_density,
     )
     melting_point_value = _first_non_none(
         lookup_melting_point,
         get_measurement_value(normalized, "melting_point"),
+        legacy_melting_point,
     )
     boiling_point_value = get_measurement_value(normalized, "boiling_point")
     physical_state = infer_physical_state(
@@ -194,7 +264,8 @@ def build_append_row_data(
         melting_point=melting_point_value,
         boiling_point=boiling_point_value,
     )
-    other_name = join_aliases(normalized.get("aliases"))
+    # 主表保持精简, 别名不直接回填到 other_name.
+    other_name = ""
 
     return {
         "cas_number": cas_number,
@@ -212,6 +283,34 @@ def build_append_row_data(
         "physical_form": "neat",
         "active_content(mol/L or wt%)": "",
     }
+
+
+def needs_legacy_chemicalbook_fallback(record: Optional[Dict[str, Any]]) -> bool:
+    """
+    功能:
+        判断当前 ChemicalBook 结构化结果是否缺少追加主表所需的核心字段.
+        当前仅检查中文名, 密度和熔点, 缺任一项即认为需要旧兜底结果.
+    参数:
+        record: Optional[Dict[str, Any]], ChemicalBook 结构化结果.
+    返回:
+        bool, True 表示需要旧 ChemicalBook 兜底.
+    """
+    if isinstance(record, dict) is False:
+        return True
+
+    normalized = record.get("normalized")
+    if isinstance(normalized, dict) is False:
+        return True
+
+    cn_name = str(normalized.get("cn_name") or "").strip()
+    density_value = get_measurement_value(normalized, "density")
+    melting_point_value = get_measurement_value(normalized, "melting_point")
+
+    return any([
+        cn_name == "",
+        density_value is None,
+        melting_point_value is None,
+    ])
 
 
 def collect_missing_append_headers(header_map: Dict[str, int]) -> List[str]:
@@ -313,7 +412,9 @@ def save_chemicalbook_record(
     if cas_number == "":
         return ""
 
-    target_root = output_root or CHEMICALBOOK_RECORD_ROOT
+    if output_root is None:
+        storage.ensure_chemicalbook_data_layout()
+    target_root = output_root or storage.CHEMICALBOOK_RECORD_ROOT
     target_root.mkdir(parents=True, exist_ok=True)
     output_path = target_root / f"{cas_number}.json"
     output_path.write_text(

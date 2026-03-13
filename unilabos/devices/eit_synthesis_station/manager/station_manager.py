@@ -28,8 +28,9 @@ from .synchronizer import EITSynthesisWorkstation
 
 from ..driver.exceptions import ValidationError,ApiError
 from ..utils.file_utils import safe_excel_write, safe_workbook_save
-from ..utils.chemical_append_utils import (
+from ..chem_tools.chemical_append_utils import (
     build_append_row_data,
+    build_append_row_data_for_smiles,
     build_duplicate_check_specs,
     collect_missing_append_headers,
     get_excel_write_value,
@@ -356,6 +357,186 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         
         logger.info(f"化学品对齐完成并回写文件: {path}")
 
+    @staticmethod
+    def _has_any_append_core_value(row_data: Dict[str, Any]) -> bool:
+        """
+        功能:
+            判断追加行是否至少包含一个可用于识别化合物的核心字段.
+        参数:
+            row_data: Dict[str, Any], 准备写入 Excel 的行数据.
+        返回:
+            bool, True 表示至少包含 CAS, 英文名, 中文名中的一个.
+        """
+        return any([
+            str(row_data.get("cas_number") or "").strip() != "",
+            str(row_data.get("substance_english_name") or "").strip() != "",
+            str(row_data.get("substance") or "").strip() != "",
+        ])
+
+    def _resolve_append_excel_path(self, excel_path: Optional[str]) -> Path:
+        """
+        功能:
+            解析化学品追加流程使用的目标 Excel 路径.
+        参数:
+            excel_path: Optional[str], 用户指定路径, None 时使用默认库文件.
+        返回:
+            Path, 已解析的 Excel 路径.
+        异常:
+            FileNotFoundError: 目标文件不存在时抛出.
+        """
+        path = Path(excel_path) if excel_path is not None else MODULE_ROOT / "sheet" / "chemical_list.xlsx"
+        if path.exists() is False:
+            raise FileNotFoundError(f"化学品库文件不存在: {path}")
+        return path
+
+    @staticmethod
+    def _build_append_header_map(worksheet: Any) -> Dict[str, int]:
+        """
+        功能:
+            从化学品库工作表首行构建表头到列号的映射.
+        参数:
+            worksheet: Any, openpyxl 工作表对象.
+        返回:
+            Dict[str, int], 表头名称到列号的映射.
+        """
+        header_map: Dict[str, int] = {}
+        for col_idx in range(1, worksheet.max_column + 1):
+            header_val = worksheet.cell(row=1, column=col_idx).value
+            if header_val is None:
+                continue
+            header_map[str(header_val).strip()] = col_idx
+        return header_map
+
+    @staticmethod
+    def _find_duplicate_append_row(
+        worksheet: Any,
+        header_map: Dict[str, int],
+        row_data: Dict[str, Any],
+    ) -> Optional[Tuple[str, str, str, int]]:
+        """
+        功能:
+            按约定优先级在 Excel 中查找重复化合物.
+        参数:
+            worksheet: Any, openpyxl 工作表对象.
+            header_map: Dict[str, int], 表头名称到列号映射.
+            row_data: Dict[str, Any], 准备写入的行数据.
+        返回:
+            Optional[Tuple[str, str, str, int]], 命中时返回
+            (字段标签, 目标值, 表头名, 行号), 否则返回 None.
+        """
+        duplicate_specs = build_duplicate_check_specs(row_data)
+        for candidate_columns, target_value, label_text in duplicate_specs:
+            matched_column_name = None
+            matched_column_index = None
+            for candidate_column in candidate_columns:
+                if candidate_column in header_map:
+                    matched_column_name = candidate_column
+                    matched_column_index = header_map[candidate_column]
+                    break
+
+            if matched_column_index is None:
+                continue
+
+            for row_idx in range(2, worksheet.max_row + 1):
+                existing_value = str(worksheet.cell(row=row_idx, column=matched_column_index).value or "").strip()
+                if existing_value == target_value:
+                    return label_text, target_value, str(matched_column_name), row_idx
+        return None
+
+    def _append_chemical_row_to_excel(
+        self,
+        row_data: Dict[str, Any],
+        excel_path: Optional[str] = None,
+    ) -> Optional[int]:
+        """
+        功能:
+            将单条化学品行数据追加到 Excel 末尾, 并执行重复检查.
+        参数:
+            row_data: Dict[str, Any], 准备写入的行数据.
+            excel_path: Optional[str], 目标 Excel 文件路径.
+        返回:
+            Optional[int], 成功时返回新行行号, 命中重复时返回 None.
+        """
+        path = self._resolve_append_excel_path(excel_path)
+
+        wb = load_workbook(path)
+        try:
+            ws = wb.active
+            header_map = self._build_append_header_map(ws)
+
+            missing_headers = collect_missing_append_headers(header_map)
+            if len(missing_headers) > 0:
+                logger.warning("化学品追加时发现缺失表头: %s", ", ".join(missing_headers))
+
+            duplicate_result = self._find_duplicate_append_row(ws, header_map, row_data)
+            if duplicate_result is not None:
+                label_text, target_value, column_name, row_idx = duplicate_result
+                logger.warning(
+                    "化合物已存在, %s=%s, 表头=%s, 行号=%d, 跳过添加",
+                    label_text,
+                    target_value,
+                    column_name,
+                    row_idx,
+                )
+                return None
+
+            # 仅写入有值字段, 并设置与已有数据行一致的字体和对齐格式.
+            data_font = Font(name="微软雅黑")
+            data_alignment = Alignment(horizontal="center", vertical="center")
+
+            new_row = ws.max_row + 1
+            for column_name, column_index in header_map.items():
+                value = get_excel_write_value(row_data, column_name)
+                if value is None:
+                    continue
+                if isinstance(value, str) is True and value == "":
+                    continue
+                cell = ws.cell(row=new_row, column=column_index, value=value)
+                cell.font = data_font
+                cell.alignment = data_alignment
+
+            safe_workbook_save(wb, path)
+            return new_row
+        finally:
+            wb.close()
+
+    def _fetch_chemicalbook_append_artifacts(
+        self,
+        resolved_cas: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str, str]:
+        """
+        功能:
+            根据已解析的 CAS 获取 ChemicalBook 结构化结果及 sidecar 路径.
+        参数:
+            resolved_cas: str, 已解析出的 CAS 号.
+        返回:
+            Tuple[Optional[Dict[str, Any]], str, str], 依次为
+            chemicalbook_record, chemicalbook_status, chemicalbook_record_path.
+        """
+        from ..chem_tools.chemicalbook_scraper import fetch_chemicalbook_by_cas
+
+        normalized_cas = str(resolved_cas or "").strip()
+        if normalized_cas == "":
+            return None, "", ""
+
+        chemicalbook_record = None
+        chemicalbook_status = ""
+        chemicalbook_record_path = ""
+        try:
+            chemicalbook_record = fetch_chemicalbook_by_cas(normalized_cas)
+            chemicalbook_status = str(chemicalbook_record.get("status") or "")
+        except Exception as exc:
+            logger.warning("ChemicalBook 结构化抓取异常: CAS=%s, err=%s", normalized_cas, exc)
+
+        if chemicalbook_record is not None:
+            try:
+                chemicalbook_record_path = save_chemicalbook_record(chemicalbook_record)
+            except OSError as exc:
+                logger.warning("ChemicalBook sidecar 保存失败: CAS=%s, err=%s", normalized_cas, exc)
+                chemicalbook_record_path = ""
+
+        return chemicalbook_record, chemicalbook_status, chemicalbook_record_path
+
     def lookup_and_append_chemical(
         self, query: str, excel_path: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -371,8 +552,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             Optional[Dict[str, Any]], 成功返回稳定结果字典, 包含 row_data, row_index,
             chemicalbook_status, chemicalbook_record_path. 查询失败或重复时返回 None.
         """
-        from ..utils.chemical_lookup import is_cas_number, lookup_chemical
-        from ..utils.chemicalbook_scraper import fetch_chemicalbook_by_cas
+        from ..chem_tools.chemical_lookup import is_cas_number, lookup_chemical
 
         normalized_query = str(query or "").strip()
         if normalized_query == "":
@@ -388,22 +568,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         elif is_cas_number(normalized_query) is True:
             resolved_cas = normalized_query
 
-        chemicalbook_record = None
-        chemicalbook_status = ""
-        chemicalbook_record_path = ""
-        if resolved_cas != "":
-            try:
-                chemicalbook_record = fetch_chemicalbook_by_cas(resolved_cas)
-                chemicalbook_status = str(chemicalbook_record.get("status") or "")
-            except Exception as exc:
-                logger.warning("ChemicalBook 结构化抓取异常: CAS=%s, err=%s", resolved_cas, exc)
-
-            if chemicalbook_record is not None:
-                try:
-                    chemicalbook_record_path = save_chemicalbook_record(chemicalbook_record)
-                except OSError as exc:
-                    logger.warning("ChemicalBook sidecar 保存失败: CAS=%s, err=%s", resolved_cas, exc)
-                    chemicalbook_record_path = ""
+        chemicalbook_record, chemicalbook_status, chemicalbook_record_path = self._fetch_chemicalbook_append_artifacts(
+            resolved_cas,
+        )
 
         if info is None and chemicalbook_record is None:
             logger.warning("在线查询未找到化合物: %s", normalized_query)
@@ -414,77 +581,75 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             lookup_info=info,
             chemicalbook_record=chemicalbook_record,
         )
-        has_any_core_value = any([
-            str(row_data.get("cas_number") or "").strip() != "",
-            str(row_data.get("substance_english_name") or "").strip() != "",
-            str(row_data.get("substance") or "").strip() != "",
-        ])
-        if has_any_core_value is False:
+        if self._has_any_append_core_value(row_data) is False:
             logger.warning("化学品追加失败, 未获取到可用核心字段: %s", normalized_query)
             return None
 
-        # 确定目标 Excel 文件路径
-        path = Path(excel_path) if excel_path is not None else MODULE_ROOT / "sheet" / "chemical_list.xlsx"
-        if not path.exists():
-            raise FileNotFoundError(f"化学品库文件不存在: {path}")
-
-        # 使用 openpyxl 打开, 保留原有格式.
-        wb = load_workbook(path)
-        try:
-            ws = wb.active
-
-            # 读取表头行, 建立 {列名: 列号} 映射.
-            header_map = {}
-            for col_idx in range(1, ws.max_column + 1):
-                header_val = ws.cell(row=1, column=col_idx).value
-                if header_val is not None:
-                    header_map[str(header_val).strip()] = col_idx
-
-            missing_headers = collect_missing_append_headers(header_map)
-            if len(missing_headers) > 0:
-                logger.warning("化学品追加时发现缺失表头: %s", ", ".join(missing_headers))
-
-            duplicate_specs = build_duplicate_check_specs(row_data)
-            for candidate_columns, target_value, label_text in duplicate_specs:
-                matched_column_name = None
-                matched_column_index = None
-                for candidate_column in candidate_columns:
-                    if candidate_column in header_map:
-                        matched_column_name = candidate_column
-                        matched_column_index = header_map[candidate_column]
-                        break
-
-                if matched_column_index is None:
-                    continue
-
-                for row_idx in range(2, ws.max_row + 1):
-                    existing_value = str(ws.cell(row=row_idx, column=matched_column_index).value or "").strip()
-                    if existing_value == target_value:
-                        logger.warning(
-                            "化合物已存在, %s=%s, 表头=%s, 行号=%d, 跳过添加",
-                            label_text,
-                            target_value,
-                            matched_column_name,
-                            row_idx,
-                        )
-                        return None
-
-            # 在末尾追加新行. 无法自动推断的字段保持空值, 不强行写入.
-            new_row = ws.max_row + 1
-            for column_name, column_index in header_map.items():
-                value = get_excel_write_value(row_data, column_name)
-                if value is None:
-                    continue
-                if isinstance(value, str) is True and value == "":
-                    continue
-                ws.cell(row=new_row, column=column_index, value=value)
-
-            safe_workbook_save(wb, path)
-        finally:
-            wb.close()
+        new_row = self._append_chemical_row_to_excel(row_data=row_data, excel_path=excel_path)
+        if new_row is None:
+            return None
 
         logger.info(
             "已追加化合物到 Excel: CAS=%s, 英文名=%s, 行号=%d",
+            row_data.get("cas_number"),
+            row_data.get("substance_english_name"),
+            new_row,
+        )
+
+        return {
+            "row_data": row_data,
+            "row_index": new_row,
+            "chemicalbook_status": chemicalbook_status,
+            "chemicalbook_record_path": chemicalbook_record_path,
+        }
+
+    def lookup_and_append_chemical_by_smiles(
+        self, smiles: str, excel_path: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        功能:
+            根据单个完整 SMILES 在线查询化合物信息, 并追加到化学品库 Excel 文件末尾.
+            查询顺序固定为 PubChem 结构查询, 拿到 CAS 后再补 Common Chemistry
+            与 ChemicalBook.
+        参数:
+            smiles: str, 单个完整 SMILES 结构式.
+            excel_path: Optional[str], 目标 Excel 文件路径, 默认为 sheet/chemical_list.xlsx.
+        返回:
+            Optional[Dict[str, Any]], 成功返回稳定结果字典, 包含 row_data, row_index,
+            chemicalbook_status, chemicalbook_record_path. 查询失败或重复时返回 None.
+        """
+        from ..chem_tools.chemical_lookup import lookup_chemical_by_smiles
+
+        normalized_smiles = str(smiles or "").strip()
+        if normalized_smiles == "":
+            logger.warning("SMILES 化学品追加失败, 查询参数为空")
+            return None
+
+        info = lookup_chemical_by_smiles(normalized_smiles)
+        if info is None:
+            logger.warning("SMILES 在线查询未找到化合物: %s", normalized_smiles)
+            return None
+
+        resolved_cas = str(info.cas_number or "").strip()
+        chemicalbook_record, chemicalbook_status, chemicalbook_record_path = self._fetch_chemicalbook_append_artifacts(
+            resolved_cas,
+        )
+
+        row_data = build_append_row_data_for_smiles(
+            lookup_info=info,
+            chemicalbook_record=chemicalbook_record,
+        )
+        if self._has_any_append_core_value(row_data) is False:
+            logger.warning("SMILES 化学品追加失败, 未获取到可用核心字段: %s", normalized_smiles)
+            return None
+
+        new_row = self._append_chemical_row_to_excel(row_data=row_data, excel_path=excel_path)
+        if new_row is None:
+            return None
+
+        logger.info(
+            "已通过 SMILES 追加化合物到 Excel: SMILES=%s, CAS=%s, 英文名=%s, 行号=%d",
+            normalized_smiles,
             row_data.get("cas_number"),
             row_data.get("substance_english_name"),
             new_row,

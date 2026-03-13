@@ -13,8 +13,12 @@ import logging
 import json
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import requests
+
+from . import chemicalbook_scraper
+from .chemical_append_utils import get_measurement_value
 
 logger = logging.getLogger("ChemicalLookup")
 
@@ -174,6 +178,44 @@ def _pubchem_get_cid(query: str, timeout: float = 15.0) -> Optional[int]:
             return cids[0]
     except (requests.RequestException, json.JSONDecodeError, ValueError) as exc:
         logger.warning("PubChem CID 查询异常: %s", exc)
+    return None
+
+
+def _pubchem_get_cid_by_smiles(smiles: str, timeout: float = 15.0) -> Optional[int]:
+    """
+    功能:
+        通过 SMILES 查询 PubChem 获取化合物 CID.
+        SMILES 作为 URL 路径参数时需强制编码特殊字符, 以兼容立体化学斜杠等符号.
+    参数:
+        smiles: str, 单个完整 SMILES 结构式.
+        timeout: float, 请求超时秒数.
+    返回:
+        Optional[int], 化合物 CID, 查询失败或返回无效 CID 时返回 None.
+    """
+    normalized_smiles = str(smiles or "").strip()
+    if normalized_smiles == "":
+        return None
+
+    encoded_smiles = quote(normalized_smiles, safe="")
+    url = f"{_PUBCHEM_BASE}/compound/smiles/{encoded_smiles}/cids/JSON"
+    try:
+        resp = requests.get(url, timeout=timeout)
+        if resp.status_code != 200:
+            logger.debug("PubChem SMILES CID 查询失败: status=%s, smiles=%s", resp.status_code, normalized_smiles)
+            return None
+
+        data = resp.json()
+        cids = data.get("IdentifierList", {}).get("CID", [])
+        if len(cids) == 0:
+            return None
+
+        cid = cids[0]
+        if isinstance(cid, int) is True and cid > 0:
+            return cid
+
+        logger.info("PubChem SMILES 查询返回无效 CID: smiles=%s, cid=%s", normalized_smiles, cid)
+    except (requests.RequestException, json.JSONDecodeError, ValueError) as exc:
+        logger.warning("PubChem SMILES CID 查询异常: %s", exc)
     return None
 
 
@@ -469,27 +511,49 @@ def _query_pubchem(query: str, timeout: float = 15.0) -> Optional[ChemicalInfo]:
         logger.info("PubChem 未找到化合物: %s", query)
         return None
 
+    return _query_pubchem_by_cid(cid=cid, timeout=timeout)
+
+
+def _query_pubchem_by_cid(cid: int, timeout: float = 15.0) -> Optional[ChemicalInfo]:
+    """
+    功能:
+        根据已解析的 PubChem CID 获取完整化合物信息.
+        依次获取属性, 同义词(含 CAS), 实验数据(密度/熔点).
+    参数:
+        cid: int, PubChem CID.
+        timeout: float, 单次请求超时秒数.
+    返回:
+        Optional[ChemicalInfo], 查询成功返回填充后的对象, 失败返回 None.
+    """
+    if isinstance(cid, int) is False or cid <= 0:
+        logger.warning("PubChem CID 无效, 无法继续查询: %s", cid)
+        return None
+
     logger.debug("PubChem 找到 CID=%s, 开始获取详细信息", cid)
     info = ChemicalInfo()
 
-    # 获取基础属性 (IUPAC名, 分子量)
+    # 先取基础属性, 便于后续入库字段复用.
     iupac, mw = _pubchem_get_properties(cid, timeout)
     info.substance_english_name = iupac
     info.molecular_weight = mw
 
-    # 获取同义词 (提取 CAS 号)
+    # PubChem 同义词里常含 CAS, 后续可用于补 Common Chemistry 与 ChemicalBook.
     synonyms = _pubchem_get_synonyms(cid, timeout)
     info.cas_number = _extract_cas_from_synonyms(synonyms)
 
-    # 获取实验密度和熔点
+    # 实验物性沿用现有 PUG-View 解析逻辑.
     density, mp = _pubchem_get_experimental(cid, timeout)
     info.density = density
     info.melting_point = mp
 
     logger.info(
-        "PubChem 查询完成: CAS=%s, 名称=%s, MW=%s, 密度=%s, 熔点=%s",
-        info.cas_number, info.substance_english_name,
-        info.molecular_weight, info.density, info.melting_point,
+        "PubChem 查询完成: CID=%s, CAS=%s, 名称=%s, MW=%s, 密度=%s, 熔点=%s",
+        cid,
+        info.cas_number,
+        info.substance_english_name,
+        info.molecular_weight,
+        info.density,
+        info.melting_point,
     )
     return info
 
@@ -613,6 +677,40 @@ def _merge_results(
     return merged
 
 
+def _merge_chemicalbook_result(
+    merged: ChemicalInfo,
+    chemicalbook: Optional[ChemicalInfo],
+) -> ChemicalInfo:
+    """
+    功能:
+        将 ChemicalBook 结果按补缺优先原则并入已有查询结果.
+        ChemicalBook 主要补中文名和缺失物性, 不覆盖已存在的 PubChem 核心字段.
+    参数:
+        merged: ChemicalInfo, 已合并的主结果.
+        chemicalbook: Optional[ChemicalInfo], ChemicalBook 适配结果.
+    返回:
+        ChemicalInfo, 合并后的结果对象.
+    """
+    if chemicalbook is None:
+        return merged
+
+    if merged.cas_number is None and chemicalbook.cas_number is not None:
+        merged.cas_number = chemicalbook.cas_number
+    if merged.substance is None and chemicalbook.substance is not None:
+        merged.substance = chemicalbook.substance
+    if merged.substance_english_name is None and chemicalbook.substance_english_name is not None:
+        merged.substance_english_name = chemicalbook.substance_english_name
+    if merged.molecular_weight is None and chemicalbook.molecular_weight is not None:
+        merged.molecular_weight = chemicalbook.molecular_weight
+    if merged.density is None and chemicalbook.density is not None:
+        merged.density = chemicalbook.density
+    if merged.melting_point is None and chemicalbook.melting_point is not None:
+        merged.melting_point = chemicalbook.melting_point
+    if merged.physical_state is None and chemicalbook.physical_state is not None:
+        merged.physical_state = chemicalbook.physical_state
+    return merged
+
+
 def _determine_physical_state(melting_point: Optional[float]) -> str:
     """
     功能:
@@ -627,6 +725,39 @@ def _determine_physical_state(melting_point: Optional[float]) -> str:
     if melting_point > 25.0:
         return "solid"
     return "liquid"
+
+
+def _query_chemicalbook(cas: str) -> Optional[ChemicalInfo]:
+    """
+    功能:
+        根据 CAS 调用 ChemicalBook 抓取器, 并转换为 ChemicalInfo 对象.
+    参数:
+        cas: str, CAS 号.
+    返回:
+        Optional[ChemicalInfo], 适配后的 ChemicalBook 结果, 失败时返回 None.
+    """
+    normalized_cas = str(cas or "").strip()
+    if normalized_cas == "":
+        return None
+
+    record = chemicalbook_scraper.fetch_chemicalbook_by_cas(normalized_cas)
+    if isinstance(record, dict) is False:
+        return None
+
+    normalized = record.get("normalized")
+    if isinstance(normalized, dict) is False:
+        return None
+
+    chemical_info = ChemicalInfo(
+        cas_number=str(record.get("cas") or normalized_cas).strip() or normalized_cas,
+        substance_english_name=str(normalized.get("en_name") or "").strip() or None,
+        substance=str(normalized.get("cn_name") or "").strip() or None,
+        molecular_weight=normalized.get("molecular_weight"),
+        density=get_measurement_value(normalized, "density"),
+        melting_point=get_measurement_value(normalized, "melting_point"),
+    )
+    chemical_info.physical_state = _determine_physical_state(chemical_info.melting_point)
+    return chemical_info
 
 
 # ===================== 对外统一入口 =====================
@@ -681,6 +812,150 @@ def lookup_chemical(query: str) -> Optional[ChemicalInfo]:
         "化合物查询完成: CAS=%s, 英文名=%s, MW=%s, 密度=%s, 熔点=%s, 物态=%s",
         merged.cas_number, merged.substance_english_name,
         merged.molecular_weight, merged.density, merged.melting_point,
+        merged.physical_state,
+    )
+    return merged
+
+
+def lookup_chemical_bundle(query: str) -> Dict[str, Optional[object]]:
+    """
+    功能:
+        执行多源化学查询并返回核心结果与 ChemicalBook 上下文.
+        返回值用于上层决定是否保存 sidecar 或继续补充其他字段.
+    参数:
+        query: str, CAS 号或化合物中英文名称.
+    返回:
+        Dict[str, Optional[object]], 包含 info, resolved_cas, chemicalbook_record, chemicalbook_status.
+    """
+    normalized_query = str(query or "").strip()
+    if normalized_query == "":
+        logger.warning("化合物 bundle 查询参数为空")
+        return {
+            "info": None,
+            "resolved_cas": "",
+            "chemicalbook_record": None,
+            "chemicalbook_status": "",
+        }
+
+    pubchem_result = None
+    common_chem_result = None
+    try:
+        pubchem_result = _query_pubchem(normalized_query)
+    except Exception as exc:
+        logger.warning("bundle PubChem 查询异常: %s", exc)
+
+    try:
+        common_chem_result = _query_common_chemistry(normalized_query)
+    except Exception as exc:
+        logger.warning("bundle Common Chemistry 查询异常: %s", exc)
+
+    merged = None
+    if pubchem_result is not None or common_chem_result is not None:
+        merged = _merge_results(pubchem_result, common_chem_result)
+
+    resolved_cas = ""
+    if merged is not None and str(merged.cas_number or "").strip() != "":
+        resolved_cas = str(merged.cas_number).strip()
+    elif is_cas_number(normalized_query) is True:
+        resolved_cas = normalized_query
+
+    chemicalbook_record = None
+    chemicalbook_status = ""
+    chemicalbook_info = None
+    if resolved_cas != "":
+        try:
+            chemicalbook_record = chemicalbook_scraper.fetch_chemicalbook_by_cas(resolved_cas)
+            if isinstance(chemicalbook_record, dict) is True:
+                chemicalbook_status = str(chemicalbook_record.get("status") or "")
+                normalized = chemicalbook_record.get("normalized")
+                if isinstance(normalized, dict) is True:
+                    chemicalbook_info = ChemicalInfo(
+                        cas_number=str(chemicalbook_record.get("cas") or resolved_cas).strip() or resolved_cas,
+                        substance_english_name=str(normalized.get("en_name") or "").strip() or None,
+                        substance=str(normalized.get("cn_name") or "").strip() or None,
+                        molecular_weight=normalized.get("molecular_weight"),
+                        density=get_measurement_value(normalized, "density"),
+                        melting_point=get_measurement_value(normalized, "melting_point"),
+                    )
+        except Exception as exc:
+            logger.warning("bundle ChemicalBook 查询异常: %s", exc)
+
+    if chemicalbook_info is not None:
+        chemicalbook_info.physical_state = _determine_physical_state(chemicalbook_info.melting_point)
+
+    if merged is None:
+        merged = chemicalbook_info
+    elif chemicalbook_info is not None:
+        merged = _merge_chemicalbook_result(merged, chemicalbook_info)
+
+    if merged is not None:
+        merged.physical_state = _determine_physical_state(merged.melting_point)
+
+    return {
+        "info": merged,
+        "resolved_cas": resolved_cas,
+        "chemicalbook_record": chemicalbook_record,
+        "chemicalbook_status": chemicalbook_status,
+    }
+
+
+def lookup_chemical_by_smiles(smiles: str) -> Optional[ChemicalInfo]:
+    """
+    功能:
+        根据单个完整 SMILES 查询化合物信息.
+        先通过 PubChem 结构查询获取 CID 与核心属性, 再在拿到 CAS 后补 Common Chemistry.
+        ChemicalBook 中文名/密度/熔点仍由外部 chemicalbook_scraper 单独处理.
+    参数:
+        smiles: str, 单个完整 SMILES 结构式.
+    返回:
+        Optional[ChemicalInfo], 合并后的化合物信息, 查询失败时返回 None.
+    """
+    normalized_smiles = str(smiles or "").strip()
+    if normalized_smiles == "":
+        logger.warning("SMILES 查询字符串为空")
+        return None
+
+    logger.info("开始 SMILES 化合物查询: smiles=%s", normalized_smiles)
+
+    try:
+        cid = _pubchem_get_cid_by_smiles(normalized_smiles)
+    except Exception as exc:
+        logger.warning("PubChem SMILES CID 查询意外异常: %s", exc)
+        return None
+
+    if cid is None:
+        logger.warning("PubChem 未找到 SMILES 对应化合物: %s", normalized_smiles)
+        return None
+
+    pubchem_result = None
+    try:
+        pubchem_result = _query_pubchem_by_cid(cid=cid)
+    except Exception as exc:
+        logger.warning("PubChem SMILES 详细查询意外异常: %s", exc)
+
+    if pubchem_result is None:
+        logger.warning("SMILES 查询失败, 未获取到 PubChem 详情: %s", normalized_smiles)
+        return None
+
+    common_chem_result = None
+    resolved_cas = str(pubchem_result.cas_number or "").strip()
+    if resolved_cas != "":
+        try:
+            common_chem_result = _query_common_chemistry(resolved_cas)
+        except Exception as exc:
+            logger.warning("SMILES 查询补 Common Chemistry 异常: %s", exc)
+
+    merged = _merge_results(pubchem_result, common_chem_result)
+    merged.physical_state = _determine_physical_state(merged.melting_point)
+
+    logger.info(
+        "SMILES 化合物查询完成: SMILES=%s, CAS=%s, 英文名=%s, MW=%s, 密度=%s, 熔点=%s, 物态=%s",
+        normalized_smiles,
+        merged.cas_number,
+        merged.substance_english_name,
+        merged.molecular_weight,
+        merged.density,
+        merged.melting_point,
         merged.physical_state,
     )
     return merged

@@ -167,6 +167,35 @@ def _print_result(result):
         print(result)
 
 
+def _print_chemical_append_summary(result, *, source_label="查询"):
+    """
+    功能:
+        以精简摘要输出化学品追加成功结果, 避免直接打印完整结果字典.
+    参数:
+        result: dict | None, 化学品追加结果.
+        source_label: str, 成功来源标识, 例如 在线查询 或 SMILES 查询.
+    返回:
+        None
+    """
+    if isinstance(result, dict) is False:
+        return
+
+    row_data = result.get("row_data") or {}
+    if isinstance(row_data, dict) is False:
+        row_data = {}
+
+    cas_number = str(row_data.get("cas_number") or "").strip()
+    display_name = str(
+        row_data.get("substance")
+        or row_data.get("substance_chinese_name")
+        or row_data.get("substance_english_name")
+        or ""
+    ).strip()
+    row_index = result.get("row_index")
+
+    print(f"已成功添加化合物: CAS={cas_number}, 名称={display_name}, 行号={row_index}")
+
+
 def _update_task_id(result):
     """
     功能:
@@ -434,6 +463,7 @@ def _menu_chemical_library(manager):
         ("3", "化学品库去重"),
         ("4", "化学品库数据校验"),
         ("5", "在线查询并添加化学品"),
+        ("6", "SMILES 在线查询并添加化学品"),
         ("0", "返回上级菜单"),
     ]
 
@@ -465,6 +495,21 @@ def _menu_chemical_library(manager):
                 )
                 if result is None:
                     print("未查询到化合物信息或该化合物已存在, 请检查后重试")
+                else:
+                    _print_chemical_append_summary(result, source_label="在线查询")
+            else:
+                print("输入不能为空")
+            _pause()
+        elif choice == "6":
+            smiles = input("请输入 SMILES 结构式: ").strip()
+            if smiles:
+                result = _safe_run(
+                    manager.lookup_and_append_chemical_by_smiles, smiles, str(DEFAULT_CHEM_DB),
+                )
+                if result is None:
+                    print("未查询到 SMILES 对应的化合物信息或该化合物已存在, 请检查后重试")
+                else:
+                    _print_chemical_append_summary(result, source_label="SMILES 查询")
             else:
                 print("输入不能为空")
             _pause()
