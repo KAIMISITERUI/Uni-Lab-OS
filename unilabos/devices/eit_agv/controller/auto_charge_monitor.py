@@ -87,8 +87,8 @@ def main() -> None:
     返回:
         无
     """
-    # 日志文件存放在本脚本同级目录
-    log_dir = os.path.dirname(os.path.abspath(__file__))
+    # 日志文件存放在 eit_agv/data 目录
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
     _setup_logging(log_dir)
 
     logger = logging.getLogger(__name__)

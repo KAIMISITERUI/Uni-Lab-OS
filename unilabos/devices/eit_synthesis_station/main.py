@@ -192,8 +192,19 @@ def _print_chemical_append_summary(result, *, source_label="查询"):
         or ""
     ).strip()
     row_index = result.get("row_index")
+    substance = str(
+        row_data.get("substance")
+        or row_data.get("substance_chinese_name")
+        or ""
+    ).strip()
+    physical_state = str(row_data.get("physical_state") or "").strip()
+    physical_form = str(row_data.get("physical_form") or "").strip()
 
-    print(f"已成功添加化合物: CAS={cas_number}, 名称={display_name}, 行号={row_index}")
+    print(
+        f"已成功添加化合物: CAS={cas_number}, 名称={display_name}, "
+        f"substance={substance}, physical_state={physical_state}, "
+        f"physical_form={physical_form}, 行号={row_index}"
+    )
 
 
 def _update_task_id(result):

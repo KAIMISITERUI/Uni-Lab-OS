@@ -19,6 +19,26 @@ _ZHIDA_CLIENT_PATH = "unilabos.devices.eit_analysis_station.driver.zhida_driver.
 _SLEEP_PATH = "eit_agv.controller.agv_controller.time.sleep"
 
 
+def _make_status_detail(raw_status: str, base_status: str = None, sub_status: str = "") -> dict:
+    """
+    功能:
+        构造智达状态明细字典, 统一测试里的状态 mock 结构.
+    参数:
+        raw_status: 原始状态字符串.
+        base_status: 主状态, None 表示与原始状态一致.
+        sub_status: 子状态字符串.
+    返回:
+        Dict, 包含 raw_status/base_status/sub_status 三个字段.
+    """
+    if base_status is None:
+        base_status = raw_status
+    return {
+        "raw_status": raw_status,
+        "base_status": base_status,
+        "sub_status": sub_status,
+    }
+
+
 def _make_controller():
     """
     功能:
@@ -69,7 +89,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
             无.
         """
         client = mock_zhida_client.return_value
-        client.get_status.return_value = "Idle"
+        client.get_status_detail.return_value = _make_status_detail("Idle")
 
         result = self.controller.transfer_analysis_to_shelf(
             source_trays=["analysis_station_tray_1-2"]
@@ -107,7 +127,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
             无.
         """
         client = mock_zhida_client.return_value
-        client.get_status.return_value = "Idle"
+        client.get_status_detail.return_value = _make_status_detail("Idle")
         self.controller.go_to_charging_station.return_value = None
 
         result = self.controller.transfer_analysis_to_shelf(
@@ -130,7 +150,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
             无.
         """
         client = mock_zhida_client.return_value
-        client.get_status.return_value = "Idle"
+        client.get_status_detail.return_value = _make_status_detail("Idle")
         self.controller.go_to_charging_station.side_effect = RuntimeError("导航异常")
 
         with self.assertLogs("eit_agv.controller.agv_controller", level="ERROR") as log_context:
@@ -157,7 +177,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
             无.
         """
         client = mock_zhida_client.return_value
-        client.get_status.return_value = "Idle"
+        client.get_status_detail.return_value = _make_status_detail("Idle")
         self.controller.batch_transfer_materials.return_value = False
 
         result = self.controller.transfer_analysis_to_shelf(
@@ -181,7 +201,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
             无.
         """
         client = mock_zhida_client.return_value
-        client.get_status.return_value = "Idle"
+        client.get_status_detail.return_value = _make_status_detail("Idle")
         self.controller.shelf_manager.find_empty_slots.return_value = []
 
         result = self.controller.transfer_analysis_to_shelf(
@@ -206,7 +226,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
             无.
         """
         client = mock_zhida_client.return_value
-        client.get_status.return_value = "Busy"
+        client.get_status_detail.return_value = _make_status_detail("Busy")
 
         result = self.controller.transfer_analysis_to_shelf(
             source_trays=["analysis_station_tray_1-2"],
@@ -221,6 +241,32 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
         client.close.assert_called_once_with()
 
     @patch(_ZHIDA_CLIENT_PATH)
+    def test_composite_idle_status_allows_transfer(self, mock_zhida_client):
+        """
+        功能:
+            验证复合状态 Idle#SeqRun:Error 会按 Idle 主状态放行转运.
+        参数:
+            mock_zhida_client: 智达客户端补丁对象.
+        返回:
+            无.
+        """
+        client = mock_zhida_client.return_value
+        client.get_status_detail.return_value = _make_status_detail(
+            raw_status="Idle#SeqRun:Error",
+            base_status="Idle",
+            sub_status="SeqRun:Error",
+        )
+
+        result = self.controller.transfer_analysis_to_shelf(
+            source_trays=["analysis_station_tray_1-2"]
+        )
+
+        self.assertIs(result, True)
+        self.controller.batch_transfer_materials.assert_called_once()
+        self.controller.go_to_charging_station.assert_called_once_with(block=True)
+        client.close.assert_called_once_with()
+
+    @patch(_ZHIDA_CLIENT_PATH)
     def test_error_status_skips_transfer_and_return(self, mock_zhida_client):
         """
         功能:
@@ -231,7 +277,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
             无.
         """
         client = mock_zhida_client.return_value
-        client.get_status.return_value = "Error"
+        client.get_status_detail.return_value = _make_status_detail("Error")
 
         result = self.controller.transfer_analysis_to_shelf(
             source_trays=["analysis_station_tray_1-2"]

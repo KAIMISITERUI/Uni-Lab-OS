@@ -57,6 +57,10 @@ AGV_MAX_WSPEED = 0.8  # 最大角速度, 单位rad/s
 AGV_MAX_ACC = 0.2  # 最大加速度, 单位m/s^2
 AGV_MAX_WACC = 0.5  # 最大角加速度, 单位rad/s^2
 
+# AGV查询重试配置
+AGV_QUERY_MAX_RETRIES = 3       # 查询最大重试次数
+AGV_QUERY_RETRY_DELAY = 1.0    # 首次重试等待时间, 单位秒, 后续翻倍(指数退避)
+
 # 工站位置配置
 STATION_POSITIONS = {
     "LM1": {

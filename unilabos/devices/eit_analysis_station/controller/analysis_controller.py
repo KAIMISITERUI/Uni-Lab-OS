@@ -2820,9 +2820,16 @@ def main() -> None:
             try:
                 client.connect()
                 if choice == "4":
-                    print("\n>>> 调用 ZhidaClient.get_status()")
-                    status = client.get_status()
-                    print(f"\n  设备状态: {status}\n")
+                    print("\n>>> 调用 ZhidaClient.get_status_detail()")
+                    status_detail = client.get_status_detail()
+                    raw_status = status_detail["raw_status"] or "(空)"
+                    sub_status = status_detail["sub_status"] or "(无)"
+                    print(
+                        "\n"
+                        f"  原始状态: {raw_status}\n"
+                        f"  主状态: {status_detail['base_status']}\n"
+                        f"  子状态: {sub_status}\n"
+                    )
                 else:
                     print("\n>>> 调用 ZhidaClient.get_methods()")
                     methods = client.get_methods()

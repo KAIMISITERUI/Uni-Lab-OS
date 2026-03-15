@@ -373,6 +373,29 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             str(row_data.get("substance") or "").strip() != "",
         ])
 
+    @staticmethod
+    def _format_append_row_summary(row_data: Dict[str, Any]) -> str:
+        """
+        功能:
+            提取 chemical list 关键字段, 生成统一的日志摘要文本.
+        参数:
+            row_data: Dict[str, Any], 追加到 chemical list 的行数据.
+        返回:
+            str, 包含 substance, physical_state, physical_form 的摘要文本.
+        """
+        substance = str(
+            row_data.get("substance")
+            or row_data.get("substance_chinese_name")
+            or ""
+        ).strip()
+        physical_state = str(row_data.get("physical_state") or "").strip()
+        physical_form = str(row_data.get("physical_form") or "").strip()
+        return (
+            f"substance={substance}, "
+            f"physical_state={physical_state}, "
+            f"physical_form={physical_form}"
+        )
+
     def _resolve_append_excel_path(self, excel_path: Optional[str]) -> Path:
         """
         功能:
@@ -471,12 +494,14 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             duplicate_result = self._find_duplicate_append_row(ws, header_map, row_data)
             if duplicate_result is not None:
                 label_text, target_value, column_name, row_idx = duplicate_result
+                summary_text = self._format_append_row_summary(row_data)
                 logger.warning(
-                    "化合物已存在, %s=%s, 表头=%s, 行号=%d, 跳过添加",
+                    "化合物已存在, %s=%s, 表头=%s, 行号=%d, %s, 跳过添加",
                     label_text,
                     target_value,
                     column_name,
                     row_idx,
+                    summary_text,
                 )
                 return None
 
@@ -589,10 +614,12 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if new_row is None:
             return None
 
+        summary_text = self._format_append_row_summary(row_data)
         logger.info(
-            "已追加化合物到 Excel: CAS=%s, 英文名=%s, 行号=%d",
+            "已追加化合物到 Excel: CAS=%s, 英文名=%s, %s, 行号=%d",
             row_data.get("cas_number"),
             row_data.get("substance_english_name"),
+            summary_text,
             new_row,
         )
 
@@ -647,11 +674,13 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         if new_row is None:
             return None
 
+        summary_text = self._format_append_row_summary(row_data)
         logger.info(
-            "已通过 SMILES 追加化合物到 Excel: SMILES=%s, CAS=%s, 英文名=%s, 行号=%d",
+            "已通过 SMILES 追加化合物到 Excel: SMILES=%s, CAS=%s, 英文名=%s, %s, 行号=%d",
             normalized_smiles,
             row_data.get("cas_number"),
             row_data.get("substance_english_name"),
+            summary_text,
             new_row,
         )
 

@@ -11,6 +11,7 @@
     无.
 """
 
+import ctypes
 import logging
 import os
 import time
@@ -115,6 +116,104 @@ def _iter_excel_workbooks_from_active_instance() -> Iterator[Any]:
         yield workbook
 
 
+class _GUID(ctypes.Structure):
+    """COM GUID 结构体, 用于 ctypes 调用 AccessibleObjectFromWindow."""
+
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+# IDispatch GUID: {00020400-0000-0000-C000-000000000046}
+_IID_IDISPATCH = _GUID(
+    0x00020400,
+    0x0000,
+    0x0000,
+    (ctypes.c_ubyte * 8)(0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46),
+)
+
+
+def _iter_excel_workbooks_from_all_instances() -> Iterator[Any]:
+    """
+    功能:
+        通过窗口句柄枚举所有 Excel 实例中的工作簿.
+        使用 EnumWindows + AccessibleObjectFromWindow 技术,
+        能覆盖多实例场景, 不依赖 ROT 或 GetActiveObject.
+    参数:
+        无.
+    返回:
+        Iterator[Any], 所有 Excel 实例中的工作簿对象序列.
+    """
+    import win32gui  # noqa: 延迟导入, 避免非 Windows 环境报错
+
+    pythoncom, win32_client = _load_com_modules()
+
+    excel_hwnds: list = []
+
+    # 收集所有 XLMAIN 窗口句柄.
+    def _collect_excel_windows(hwnd, _):
+        try:
+            if win32gui.GetClassName(hwnd) == "XLMAIN":
+                excel_hwnds.append(hwnd)
+        except Exception:
+            pass
+
+    win32gui.EnumWindows(_collect_excel_windows, None)
+
+    seen_app_hwnds: set = set()
+
+    for main_hwnd in excel_hwnds:
+        # 查找 XLMAIN -> XLDESK -> EXCEL7 子窗口.
+        try:
+            desk_hwnd = win32gui.FindWindowEx(main_hwnd, 0, "XLDESK", None)
+            if desk_hwnd == 0:
+                continue
+            excel7_hwnd = win32gui.FindWindowEx(desk_hwnd, 0, "EXCEL7", None)
+            if excel7_hwnd == 0:
+                continue
+        except Exception:
+            continue
+
+        # 通过 AccessibleObjectFromWindow 获取 COM 对象.
+        try:
+            ptr = ctypes.c_void_p()
+            hr = ctypes.windll.oleacc.AccessibleObjectFromWindow(
+                excel7_hwnd,
+                ctypes.c_long(-16),  # OBJID_NATIVEOM = 0xFFFFFFF0
+                ctypes.byref(_IID_IDISPATCH),
+                ctypes.byref(ptr),
+            )
+            if hr != 0 or not ptr.value:
+                continue
+
+            # 将原始 IDispatch 指针包装为 pywin32 COM 对象.
+            window_obj = win32_client.Dispatch(
+                pythoncom.ObjectFromAddress(ptr.value)
+            )
+            excel_app = window_obj.Application
+        except Exception:
+            continue
+
+        # 用 Application.Hwnd 去重, 避免同一实例的多个窗口重复枚举.
+        try:
+            app_hwnd = excel_app.Hwnd
+        except Exception:
+            app_hwnd = main_hwnd
+
+        if app_hwnd in seen_app_hwnds:
+            continue
+        seen_app_hwnds.add(app_hwnd)
+
+        try:
+            for workbook in excel_app.Workbooks:
+                yield workbook
+        except Exception:
+            continue
+
+
 def _close_target_workbook_from_iterable(workbooks: Iterator[Any], target_path: str) -> bool:
     """
     功能:
@@ -136,6 +235,8 @@ def _close_target_workbook_from_iterable(workbooks: Iterator[Any], target_path: 
         if workbook_path in seen_paths:
             continue
         seen_paths.add(workbook_path)
+
+        logger.debug("COM 枚举到工作簿: %s | 目标: %s", workbook_path, target_path)
 
         if workbook_path != target_path:
             continue
@@ -198,6 +299,10 @@ def _try_close_excel_workbook(path: Path) -> bool:
 
         if _close_target_workbook_from_iterable(_iter_excel_workbooks_from_active_instance(), target_path):
             logger.info("已通过活动 Excel 实例保存并关闭工作簿: %s", path.name)
+            return True
+
+        if _close_target_workbook_from_iterable(_iter_excel_workbooks_from_all_instances(), target_path):
+            logger.info("已通过窗口句柄枚举保存并关闭工作簿: %s", path.name)
             return True
 
         logger.warning("未在运行中的 Excel 中找到目标工作簿, 无法自动关闭 | 文件: %s", path.name)

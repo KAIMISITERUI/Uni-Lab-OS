@@ -18,6 +18,8 @@ from ..config.agv_config import (
     AGV_PORT_NAVIGATION,
     AGV_TIMEOUT,
     TASK_STATUS_MAP,
+    AGV_QUERY_MAX_RETRIES,
+    AGV_QUERY_RETRY_DELAY,
 )
 from ..config.arm_config import ENABLE_GRIP_DETECTION
 from ..data.shelf_manager import ShelfManager
@@ -588,37 +590,69 @@ class AGVController:
             logger.error(f"工站点位校准失败: {e}")
             return None
 
+    def _query_with_retry(self, query_func, query_name, max_retries=None, retry_delay=None):
+        """
+        功能:
+            带重试机制的AGV查询通用方法, 每次重试会创建新的AGVDriver连接
+        参数:
+            query_func: callable, 接收一个AGVDriver实例作为参数, 返回查询结果
+            query_name: str, 查询操作名称, 用于日志输出
+            max_retries: int, 最大重试次数, 默认使用配置值AGV_QUERY_MAX_RETRIES
+            retry_delay: float, 首次重试延迟秒数, 后续指数退避, 默认使用AGV_QUERY_RETRY_DELAY
+        返回:
+            查询结果或None, 所有重试均失败时返回None
+        """
+        if max_retries is None:
+            max_retries = AGV_QUERY_MAX_RETRIES
+        if retry_delay is None:
+            retry_delay = AGV_QUERY_RETRY_DELAY
+
+        for attempt in range(1, max_retries + 1):
+            agv_driver = AGVDriver(AGVDriverConfig(
+                host=AGV_HOST,
+                port=AGV_PORT,
+                port_navigation=AGV_PORT_NAVIGATION,
+                timeout_s=AGV_TIMEOUT,
+                debug_hex=False
+            ))
+
+            try:
+                agv_driver.connect()
+                result = query_func(agv_driver)
+                return result
+            except Exception as e:
+                if attempt < max_retries:
+                    # 计算指数退避延迟
+                    delay = retry_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        "%s第%d次尝试失败: %s, %.1f秒后重试",
+                        query_name, attempt, e, delay
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "%s第%d次尝试失败(已达最大重试次数): %s",
+                        query_name, attempt, e
+                    )
+            finally:
+                agv_driver.close()
+
+        return None
+
     def query_current_station(self):
         """
         功能:
-            查询AGV当前所在站点
+            查询AGV当前所在站点, 带重试机制
         返回:
             dict或None, 成功时返回包含站点信息的字典{"station_id": str, "station_name": str, "description": str}, 失败时返回None
         """
-        # 初始化AGV驱动
-        agv_driver = AGVDriver(AGVDriverConfig(
-            host=AGV_HOST,
-            port=AGV_PORT,
-            port_navigation=AGV_PORT_NAVIGATION,
-            timeout_s=AGV_TIMEOUT,
-            debug_hex=False
-        ))
 
-        try:
-            # 连接到AGV查询端口
-            logger.debug("正在连接到AGV查询端口...")
-            agv_driver.connect()
-            logger.debug("连接成功")
-
-            # 查询机器人位置
-            logger.debug("正在查询机器人位置...")
+        def _do_query(agv_driver):
+            """执行站点查询并映射结果"""
             location_info = agv_driver.query_robot_location()
-
-            # 获取当前站点名称
             current_station_id = location_info.get("current_station", "")
-            logger.debug(f"查询到当前站点ID: {current_station_id}")
+            logger.debug("查询到当前站点ID: %s", current_station_id)
 
-            # 根据STATION_POSITIONS映射成位置name
             if current_station_id in STATION_POSITIONS:
                 station_info = STATION_POSITIONS[current_station_id]
                 result = {
@@ -628,28 +662,25 @@ class AGVController:
                 }
                 # 更新当前工站
                 self.current_station = current_station_id
-                logger.info(f"当前站点: {current_station_id} - {station_info['name']} ({station_info['description']})")
+                logger.info(
+                    "当前站点: %s - %s (%s)",
+                    current_station_id, station_info["name"], station_info["description"]
+                )
                 return result
             else:
-                logger.warning(f"未知的站点ID: {current_station_id}")
+                logger.warning("未知的站点ID: %s", current_station_id)
                 return {
                     "station_id": current_station_id,
                     "station_name": "未知站点",
                     "description": "未在配置中找到该站点"
                 }
 
-        except Exception as e:
-            logger.error(f"查询站点失败: {e}")
-            return None
-        finally:
-            # 关闭AGV连接
-            agv_driver.close()
-            logger.debug("AGV连接已关闭")
+        return self._query_with_retry(_do_query, "查询站点")
 
     def query_battery_status(self, simple=True):
         """
         功能:
-            查询AGV电池状态
+            查询AGV电池状态, 带重试机制
         参数:
             simple: True表示只返回电池电量, False返回完整信息, 默认True
         返回:
@@ -659,50 +690,28 @@ class AGVController:
             - charging: 是否正在充电 (仅完整模式)
             - 其他字段见AGVDriver.query_battery_status文档
         """
-        # 初始化AGV驱动
-        agv_driver = AGVDriver(AGVDriverConfig(
-            host=AGV_HOST,
-            port=AGV_PORT,
-            port_navigation=AGV_PORT_NAVIGATION,
-            timeout_s=AGV_TIMEOUT,
-            debug_hex=False
-        ))
 
-        try:
-            # 连接到AGV查询端口
-            logger.debug("正在连接到AGV查询端口...")
-            agv_driver.connect()
-            logger.debug("连接成功")
-
-            # 查询电池状态
-            logger.info("正在查询电池状态...")
+        def _do_query(agv_driver):
+            """执行电池状态查询"""
             battery_info = agv_driver.query_battery_status(simple=simple)
-
-            # 检查返回结果
             if battery_info.get("ret_code") == 0:
                 battery_level = battery_info.get("battery_level")
                 if battery_level is not None:
-                    logger.info(f"电池电量: {battery_level * 100:.1f}%")
+                    logger.info("电池电量: %.1f%%", battery_level * 100)
                     return battery_info
                 else:
-                    logger.error("未获取到电池电量")
-                    return None
+                    raise ValueError("未获取到电池电量")
             else:
-                logger.error(f"查询电池状态失败: {battery_info.get('err_msg', '未知错误')}")
-                return None
+                raise RuntimeError(
+                    "查询电池状态返回错误: %s" % battery_info.get("err_msg", "未知错误")
+                )
 
-        except Exception as e:
-            logger.error(f"查询电池状态失败: {e}")
-            return None
-        finally:
-            # 关闭AGV连接
-            agv_driver.close()
-            logger.debug("AGV连接已关闭")
+        return self._query_with_retry(_do_query, "查询电池状态")
 
     def query_nav_task_status(self):
         """
         功能:
-            查询AGV当前导航任务状态, 用于判断AGV是否正在执行导航任务
+            查询AGV当前导航任务状态, 带重试机制, 用于判断AGV是否正在执行导航任务
         参数:
             无
         返回:
@@ -710,37 +719,22 @@ class AGVController:
             - task_status: int, 状态码(0=NONE, 1=WAITING, 2=RUNNING, 3=SUSPENDED, 4=COMPLETED, 5=FAILED, 6=CANCELED)
             - task_status_name: str, 状态名称
         """
-        agv_driver = AGVDriver(AGVDriverConfig(
-            host=AGV_HOST,
-            port=AGV_PORT,
-            port_navigation=AGV_PORT_NAVIGATION,
-            timeout_s=AGV_TIMEOUT,
-            debug_hex=False
-        ))
 
-        try:
-            logger.debug("正在连接到AGV查询端口(导航状态)...")
-            agv_driver.connect()
+        def _do_query(agv_driver):
+            """执行导航状态查询"""
             nav_info = agv_driver.query_agv_nav_status(simple=True)
-
             if nav_info is None:
-                logger.error("查询导航状态返回空")
-                return None
+                raise RuntimeError("查询导航状态返回空")
 
             task_status = nav_info.get("task_status")
             task_status_name = TASK_STATUS_MAP.get(task_status, "UNKNOWN")
-            logger.debug(f"当前导航状态: {task_status_name}({task_status})")
+            logger.debug("当前导航状态: %s(%s)", task_status_name, task_status)
             return {
                 "task_status": task_status,
                 "task_status_name": task_status_name,
             }
 
-        except Exception as e:
-            logger.error(f"查询导航任务状态失败: {e}")
-            return None
-        finally:
-            agv_driver.close()
-            logger.debug("AGV连接已关闭")
+        return self._query_with_retry(_do_query, "查询导航任务状态")
 
     def navigate_to_station(self, station_id):
         """
@@ -2328,14 +2322,25 @@ class AGVController:
         try:
             elapsed = 0.0
             while elapsed < poll_timeout:
-                status = client.get_status()
-                logger.info("智达设备当前状态: %s (已等待 %.0f 秒)", status, elapsed)
+                status_detail = client.get_status_detail()
+                base_status = status_detail["base_status"]
+                raw_status = status_detail["raw_status"] or "(空)"
+                logger.info(
+                    "智达设备当前状态, 主状态: %s, 原始状态: %s, 已等待 %.0f 秒",
+                    base_status,
+                    raw_status,
+                    elapsed,
+                )
 
-                if status == "Idle":
-                    logger.info("智达设备已空闲, 准备执行转运")
+                if base_status == "Idle":
+                    logger.info("智达设备主状态已空闲, 原始状态: %s, 准备执行转运", raw_status)
                     break
-                elif status in ("Offline", "Error"):
-                    logger.error("智达设备异常状态: %s, 终止转运", status)
+                elif base_status in ("Offline", "Error"):
+                    logger.error(
+                        "智达设备异常状态, 主状态: %s, 原始状态: %s, 终止转运",
+                        base_status,
+                        raw_status,
+                    )
                     return False
                 else:
                     # Busy / RunSample 等状态, 继续等待

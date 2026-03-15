@@ -13,6 +13,7 @@ import socket
 import time
 import os
 from pathlib import Path
+from typing import Dict
 
 
 class ZhidaClient:
@@ -157,15 +158,40 @@ class ZhidaClient:
             else:
                 raise ConnectionError(f"Command send failed: {str(e)}")
 
-    def get_status(self) -> str:
+    @staticmethod
+    def _parse_status_detail(raw_status: str) -> Dict[str, str]:
         """
-        获取设备状态
-        
-        Returns:
-            str: 设备状态 (Idle|Offline|Error|Busy|RunSample|Unknown)
+        功能:
+        将智达协议返回的原始状态拆分为主状态和子状态, 统一复合状态判定.
+        参数:
+        raw_status: 协议返回的 result 字段, 例如 "Idle" 或 "Idle#SeqRun:Error".
+        返回:
+        Dict[str, str], 包含 raw_status/base_status/sub_status 三个键.
+        """
+        normalized_raw_status = raw_status.strip() if isinstance(raw_status, str) else ""
+        if normalized_raw_status == "":
+            return {"raw_status": "", "base_status": "Unknown", "sub_status": ""}
+
+        base_status, separator, sub_status = normalized_raw_status.partition("#")
+        base_status = base_status.strip() or "Unknown"
+        sub_status = sub_status.strip() if separator else ""
+        return {
+            "raw_status": normalized_raw_status,
+            "base_status": base_status,
+            "sub_status": sub_status,
+        }
+
+    def get_status_detail(self) -> Dict[str, str]:
+        """
+        功能:
+        查询设备状态并返回原始状态、归一化主状态和子状态, 便于流程判定与排障.
+        参数:
+        无.
+        返回:
+        Dict[str, str], 形如 {"raw_status": str, "base_status": str, "sub_status": str}.
         """
         if not self.sock:
-            # 尝试重新连接
+            # 尝试重新连接, 避免长连接断开后状态查询直接失败.
             try:
                 self.connect()
                 if self._ros_node:
@@ -173,15 +199,26 @@ class ZhidaClient:
             except Exception as e:
                 if self._ros_node:
                     self._ros_node.lab_logger().warning(f"智达GCMS设备连接失败: {e}")
-                return "Offline"
-        
+                return self._parse_status_detail("Offline")
+
         try:
             response = self._send_command({"command": "getstatus"})
-            return response.get("result", "Unknown")
+            return self._parse_status_detail(response.get("result", ""))
         except Exception as e:
             if self._ros_node:
                 self._ros_node.lab_logger().warning(f"获取设备状态失败: {e}")
-            return "Error"
+            return self._parse_status_detail("Error")
+
+    def get_status(self) -> str:
+        """
+        功能:
+        获取归一化后的设备主状态, 兼容旧调用方的字符串状态接口.
+        参数:
+        无.
+        返回:
+        str, 设备主状态. 复合状态如 "Idle#SeqRun:Error" 会返回 "Idle".
+        """
+        return self.get_status_detail()["base_status"]
     
     def get_methods(self) -> dict:
         """

@@ -234,6 +234,42 @@ class AGVDriver:
             finally:
                 self._sock_nav = None
 
+    def reconnect(self) -> None:
+        """
+        功能:
+            重新连接到AGV查询端口, 先关闭已有连接再创建新连接
+        """
+        # 关闭旧的查询端口socket
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+        # 创建新连接
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(self.cfg.timeout_s)
+        s.connect((self.cfg.host, self.cfg.port))
+        self._sock = s
+        logger.info("已重新连接到查询端口 %s:%s", self.cfg.host, self.cfg.port)
+
+    def reconnect_navigation(self) -> None:
+        """
+        功能:
+            重新连接到AGV导航端口, 先关闭已有连接再创建新连接
+        """
+        if self._sock_nav is not None:
+            try:
+                self._sock_nav.close()
+            except Exception:
+                pass
+            self._sock_nav = None
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(self.cfg.timeout_s)
+        s.connect((self.cfg.host, self.cfg.port_navigation))
+        self._sock_nav = s
+        logger.info("已重新连接到导航端口 %s:%s", self.cfg.host, self.cfg.port_navigation)
+
     def _send_and_recv_json(
         self,
         cmd_id: int,
@@ -563,11 +599,17 @@ class AGVDriver:
         logger.info("导航指令已发送, 目标站点: %s", target_id)
 
         # 循环查询导航状态, 直到完成
+        max_reconnect_attempts = 5  # 最大连续重连次数
+        consecutive_errors = 0      # 连续错误计数器
+
         while True:
             time.sleep(0.5)  # 每0.5秒查询一次, 避免频繁查询
 
             try:
                 status_data = self.query_agv_nav_status(simple=False)
+                # 查询成功, 重置连续错误计数
+                consecutive_errors = 0
+
                 task_status = status_data.get("task_status")
 
                 if task_status is None:
@@ -587,9 +629,42 @@ class AGVDriver:
                     logger.warning("导航已取消, 目标站点: %s", target_id)
                     return status_data
 
+            except (ConnectionError, ConnectionResetError, OSError) as e:
+                consecutive_errors += 1
+                logger.warning(
+                    "查询导航状态时连接异常(第%d次): %s",
+                    consecutive_errors, e
+                )
+
+                if consecutive_errors >= max_reconnect_attempts:
+                    logger.error(
+                        "连续%d次连接异常, 放弃导航状态查询, 目标站点: %s",
+                        consecutive_errors, target_id
+                    )
+                    raise ConnectionError(
+                        "导航状态查询连续%d次连接失败, 放弃查询" % consecutive_errors
+                    ) from e
+
+                # 尝试重新连接查询端口
+                try:
+                    logger.info("正在尝试重新连接查询端口...")
+                    self.reconnect()
+                except Exception as reconnect_err:
+                    logger.error("重新连接失败: %s", reconnect_err)
+
             except Exception as e:
-                logger.error("查询导航状态时发生错误: %s", e)
-                # 发生错误时继续查询, 不中断导航
+                consecutive_errors += 1
+                logger.error(
+                    "查询导航状态时发生非连接错误(第%d次): %s",
+                    consecutive_errors, e
+                )
+
+                if consecutive_errors >= max_reconnect_attempts:
+                    logger.error(
+                        "连续%d次错误, 放弃导航状态查询, 目标站点: %s",
+                        consecutive_errors, target_id
+                    )
+                    raise
 
     def play_sound(
         self,
