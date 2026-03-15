@@ -134,6 +134,128 @@ def join_aliases(alias_values: Optional[Sequence[Any]]) -> str:
     return "; ".join(deduplicated_aliases)
 
 
+def _format_numeric_text(value: Any) -> str:
+    """
+    功能:
+        将数值格式化为适合写入展示名的紧凑文本.
+    参数:
+        value: Any, 原始数值.
+    返回:
+        str, 去除多余尾零后的文本.
+    """
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return str(value or "").strip()
+    return format(numeric_value, "g")
+
+
+def build_prepared_display_name(
+    base_row_data: Dict[str, Any],
+    prepared_form: str,
+    active_content: Any,
+    *,
+    solvent_name: str = "",
+) -> str:
+    """
+    功能:
+        根据母体化合物信息构造溶液或 beads 条目的展示名称.
+    参数:
+        base_row_data: Dict[str, Any], 母体化合物行数据.
+        prepared_form: str, 派生形态, 支持 solution 或 beads.
+        active_content: Any, solution 时表示 mol/L, beads 时表示 wt%.
+        solvent_name: str, solution 使用的溶剂名称.
+    返回:
+        str, 派生条目展示名称.
+    异常:
+        ValueError: 形态非法, 或缺少母体名称, 或 solution 缺少溶剂名时抛出.
+    """
+    normalized_form = str(prepared_form or "").strip().lower()
+    base_name = _first_non_empty(base_row_data.get("base_substance"))
+    if base_name == "":
+        substance_text = _first_non_empty(
+            base_row_data.get("substance"),
+            base_row_data.get("substance_chinese_name"),
+        )
+        if " (" in substance_text:
+            substance_text = substance_text.split(" (", 1)[0].strip()
+        base_name = _first_non_empty(
+            substance_text,
+            base_row_data.get("substance_english_name"),
+        )
+    if base_name == "":
+        raise ValueError("母体化合物缺少名称, 无法生成派生条目名称")
+
+    active_text = _format_numeric_text(active_content)
+    if normalized_form == "solution":
+        normalized_solvent_name = str(solvent_name or "").strip()
+        if normalized_solvent_name == "":
+            raise ValueError("溶液条目缺少溶剂名称")
+        return f"{base_name} (溶液, {active_text} M in {normalized_solvent_name})"
+    if normalized_form == "beads":
+        return f"{base_name} (beads, {active_text}%)"
+
+    raise ValueError(f"不支持的派生形态: {prepared_form}")
+
+
+def build_prepared_chemical_row_data(
+    base_row_data: Dict[str, Any],
+    prepared_form: str,
+    active_content: Any,
+    *,
+    solvent_name: str = "",
+) -> Dict[str, Any]:
+    """
+    功能:
+        基于母体化合物行数据构造溶液或 beads 的追加入库字段.
+    参数:
+        base_row_data: Dict[str, Any], 母体化合物行数据.
+        prepared_form: str, 派生形态, 支持 solution 或 beads.
+        active_content: Any, solution 时表示 mol/L, beads 时表示 wt%.
+        solvent_name: str, solution 使用的溶剂名称.
+    返回:
+        Dict[str, Any], 可直接用于 Excel 追加的派生条目字段.
+    异常:
+        ValueError: 形态非法, active_content 无法转浮点, 或必要字段缺失时抛出.
+    """
+    normalized_form = str(prepared_form or "").strip().lower()
+    if normalized_form not in {"solution", "beads"}:
+        raise ValueError(f"不支持的派生形态: {prepared_form}")
+
+    try:
+        numeric_active_content = float(active_content)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("active_content 必须为数值") from exc
+
+    display_name = build_prepared_display_name(
+        base_row_data=base_row_data,
+        prepared_form=normalized_form,
+        active_content=numeric_active_content,
+        solvent_name=solvent_name,
+    )
+
+    derived_density = base_row_data.get("density (g/mL)")
+    if normalized_form == "beads":
+        derived_density = ""
+
+    return {
+        "cas_number": str(base_row_data.get("cas_number") or "").strip(),
+        "chemical_id": "",
+        "substance_english_name": str(base_row_data.get("substance_english_name") or "").strip(),
+        "substance": display_name,
+        "substance_chinese_name": display_name,
+        "other_name": "",
+        "brand": "",
+        "package_size": "",
+        "storage_location": "",
+        "molecular_weight": base_row_data.get("molecular_weight"),
+        "density (g/mL)": derived_density,
+        "physical_state": "liquid" if normalized_form == "solution" else "solid",
+        "physical_form": normalized_form,
+        "active_content(mol/L or wt%)": numeric_active_content,
+    }
+
+
 def build_append_row_data(
     query: str,
     lookup_info: Optional[Any],
@@ -347,21 +469,25 @@ def build_duplicate_check_specs(row_data: Dict[str, Any]) -> List[Tuple[Tuple[st
     """
     功能:
         生成按优先级排列的重复检查规则.
-        优先级固定为 CAS > 英文名 > 中文名.
+        neat 条目按 CAS > 英文名 > 中文名检查.
+        solution 与 beads 仅按完整展示名检查, 允许与母体共享 CAS 与英文名.
     参数:
         row_data: Dict[str, Any], 准备写入 Excel 的行数据.
     返回:
         List[Tuple[Tuple[str, ...], str, str]], 每项包含候选列名集合, 目标值, 日志标签.
     """
     duplicate_specs: List[Tuple[Tuple[str, ...], str, str]] = []
+    physical_form = str(row_data.get("physical_form") or "").strip().lower()
+    is_prepared_form = physical_form in {"solution", "beads"}
 
-    cas_number = str(row_data.get("cas_number") or "").strip()
-    if cas_number != "":
-        duplicate_specs.append((("cas_number",), cas_number, "CAS"))
+    if is_prepared_form is False:
+        cas_number = str(row_data.get("cas_number") or "").strip()
+        if cas_number != "":
+            duplicate_specs.append((("cas_number",), cas_number, "CAS"))
 
-    substance_english_name = str(row_data.get("substance_english_name") or "").strip()
-    if substance_english_name != "":
-        duplicate_specs.append((("substance_english_name",), substance_english_name, "英文名"))
+        substance_english_name = str(row_data.get("substance_english_name") or "").strip()
+        if substance_english_name != "":
+            duplicate_specs.append((("substance_english_name",), substance_english_name, "英文名"))
 
     substance_chinese_name = str(
         row_data.get("substance")

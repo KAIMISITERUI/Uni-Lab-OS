@@ -31,6 +31,7 @@ from ..utils.file_utils import safe_excel_write, safe_workbook_save
 from ..chem_tools.chemical_append_utils import (
     build_append_row_data,
     build_append_row_data_for_smiles,
+    build_prepared_chemical_row_data,
     build_duplicate_check_specs,
     collect_missing_append_headers,
     get_excel_write_value,
@@ -431,6 +432,299 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         return header_map
 
     @staticmethod
+    def _build_append_row_snapshot(
+        worksheet: Any,
+        header_map: Dict[str, int],
+        row_index: int,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            从化学品库工作表中提取单行数据快照, 统一补齐常用别名字段.
+        参数:
+            worksheet: Any, openpyxl 工作表对象.
+            header_map: Dict[str, int], 表头名称到列号映射.
+            row_index: int, 目标行号.
+        返回:
+            Dict[str, Any], 单行字段字典.
+        """
+        row_data: Dict[str, Any] = {}
+        for column_name, column_index in header_map.items():
+            row_data[column_name] = worksheet.cell(row=row_index, column=column_index).value
+
+        substance_value = str(row_data.get("substance") or "").strip()
+        chinese_name_value = str(row_data.get("substance_chinese_name") or "").strip()
+        if substance_value == "" and chinese_name_value != "":
+            row_data["substance"] = chinese_name_value
+        if chinese_name_value == "" and substance_value != "":
+            row_data["substance_chinese_name"] = substance_value
+        base_substance = row_data.get("substance") or row_data.get("substance_chinese_name") or ""
+        physical_form = str(row_data.get("physical_form") or "").strip().lower()
+        if physical_form in {"solution", "beads"} and " (" in str(base_substance):
+            base_substance = str(base_substance).split(" (", 1)[0].strip()
+        row_data["base_substance"] = base_substance
+        return row_data
+
+    def _find_existing_chemical_row(
+        self,
+        *,
+        excel_path: Optional[str] = None,
+        cas_number: str = "",
+        substance_english_name: str = "",
+        substance: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        功能:
+            按 CAS, 英文名, 中文名顺序在化学品库中查找已有条目, 优先返回 neat 行.
+        参数:
+            excel_path: Optional[str], 化学品库文件路径.
+            cas_number: str, 候选 CAS 号.
+            substance_english_name: str, 候选英文名.
+            substance: str, 候选中文名或展示名.
+        返回:
+            Optional[Dict[str, Any]], 命中时返回包含 row_data 与 row_index 的结果字典.
+        """
+        path = self._resolve_append_excel_path(excel_path)
+        wb = load_workbook(path, data_only=True)
+        try:
+            ws = wb.active
+            header_map = self._build_append_header_map(ws)
+            lookup_specs = []
+            normalized_cas = str(cas_number or "").strip()
+            normalized_english_name = str(substance_english_name or "").strip()
+            normalized_substance = str(substance or "").strip()
+            if normalized_cas != "":
+                lookup_specs.append((("cas_number",), normalized_cas))
+            if normalized_english_name != "":
+                lookup_specs.append((("substance_english_name",), normalized_english_name))
+            if normalized_substance != "":
+                lookup_specs.append((("substance", "substance_chinese_name"), normalized_substance))
+
+            for candidate_columns, target_value in lookup_specs:
+                matched_rows: List[Dict[str, Any]] = []
+                for row_idx in range(2, ws.max_row + 1):
+                    for candidate_column in candidate_columns:
+                        if candidate_column not in header_map:
+                            continue
+                        existing_value = str(
+                            ws.cell(row=row_idx, column=header_map[candidate_column]).value or ""
+                        ).strip()
+                        if existing_value != target_value:
+                            continue
+                        row_data = self._build_append_row_snapshot(ws, header_map, row_idx)
+                        matched_rows.append({
+                            "row_index": row_idx,
+                            "row_data": row_data,
+                        })
+                        break
+
+                if len(matched_rows) == 0:
+                    continue
+
+                neat_rows = [
+                    row_item
+                    for row_item in matched_rows
+                    if str(row_item["row_data"].get("physical_form") or "").strip().lower() == "neat"
+                ]
+                if len(neat_rows) > 0:
+                    return neat_rows[0]
+                return matched_rows[0]
+        finally:
+            wb.close()
+
+        return None
+
+    @staticmethod
+    def _parse_positive_float(value: Any, field_name: str) -> float:
+        """
+        功能:
+            将输入值解析为大于 0 的浮点数.
+        参数:
+            value: Any, 待解析的数值.
+            field_name: str, 字段中文名, 用于异常提示.
+        返回:
+            float, 解析后的正数.
+        异常:
+            ValidationError: 字段为空, 非数字或不大于 0 时抛出.
+        """
+        text_value = str(value or "").strip()
+        if text_value == "":
+            raise ValidationError(f"{field_name}不能为空")
+
+        try:
+            numeric_value = float(text_value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f"{field_name}必须为数字") from exc
+
+        if numeric_value <= 0:
+            raise ValidationError(f"{field_name}必须大于0")
+        return numeric_value
+
+    @staticmethod
+    def _format_preparation_number(value: float) -> str:
+        """
+        功能:
+            将配液或称量结果格式化为紧凑展示文本.
+        参数:
+            value: float, 原始数值.
+        返回:
+            str, 去除多余尾零后的文本.
+        """
+        return format(float(value), ".6g")
+
+    def _build_solution_recipe(
+        self,
+        base_row_data: Dict[str, Any],
+        concentration_mol_l: float,
+        target_volume_ml: float,
+        solvent_name: str,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            根据母体化合物信息生成溶液配置结果.
+        参数:
+            base_row_data: Dict[str, Any], 母体化合物行数据.
+            concentration_mol_l: float, 目标浓度, 单位 mol/L.
+            target_volume_ml: float, 目标定容体积, 单位 mL.
+            solvent_name: str, 溶剂名称.
+        返回:
+            Dict[str, Any], 包含质量, 体积与展示文案的结果字典.
+        异常:
+            ValidationError: 缺少分子量时抛出.
+        """
+        molecular_weight = self._parse_positive_float(
+            base_row_data.get("molecular_weight"),
+            "母体化合物分子量",
+        )
+        normalized_solvent_name = str(solvent_name or "").strip()
+        if normalized_solvent_name == "":
+            raise ValidationError("溶剂名称不能为空")
+
+        solute_moles = concentration_mol_l * target_volume_ml / 1000.0
+        solute_mass_g = solute_moles * molecular_weight
+        instruction_text = (
+            f"称取/加入溶质 {self._format_preparation_number(solute_mass_g)} g, "
+            f"用 {normalized_solvent_name} 溶解后定容至 "
+            f"{self._format_preparation_number(target_volume_ml)} mL"
+        )
+
+        solute_volume_ml = None
+        density_text = str(base_row_data.get("density (g/mL)") or "").strip()
+        physical_state = str(base_row_data.get("physical_state") or "").strip().lower()
+        if physical_state == "liquid" and density_text != "":
+            try:
+                density_value = self._parse_positive_float(density_text, "母体化合物密度")
+                solute_volume_ml = solute_mass_g / density_value
+            except ValidationError:
+                logger.warning("母体液体密度无效, 跳过溶质量取体积估算: density=%s", density_text)
+
+        return {
+            "prepared_form": "solution",
+            "solute_moles": solute_moles,
+            "solute_mass_g": solute_mass_g,
+            "solute_volume_ml": solute_volume_ml,
+            "target_volume_ml": target_volume_ml,
+            "active_content": concentration_mol_l,
+            "solvent_name": normalized_solvent_name,
+            "instruction_text": instruction_text,
+        }
+
+    def _build_beads_recipe(
+        self,
+        base_row_data: Dict[str, Any],
+        wt_percent: float,
+        target_active_mmol: float,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            根据母体化合物信息生成 beads 称量结果.
+        参数:
+            base_row_data: Dict[str, Any], 母体化合物行数据.
+            wt_percent: float, 有效成分质量分数.
+            target_active_mmol: float, 目标活性摩尔数, 单位 mmol.
+        返回:
+            Dict[str, Any], 包含 beads 质量与展示文案的结果字典.
+        异常:
+            ValidationError: 缺少分子量时抛出.
+        """
+        molecular_weight = self._parse_positive_float(
+            base_row_data.get("molecular_weight"),
+            "母体化合物分子量",
+        )
+        active_mass_g = target_active_mmol / 1000.0 * molecular_weight
+        beads_mass_g = active_mass_g / (wt_percent / 100.0)
+        instruction_text = (
+            f"称取 beads {self._format_preparation_number(beads_mass_g)} g, "
+            f"其中有效成分约为 {self._format_preparation_number(target_active_mmol)} mmol"
+        )
+        return {
+            "prepared_form": "beads",
+            "active_mass_g": active_mass_g,
+            "beads_mass_g": beads_mass_g,
+            "target_active_mmol": target_active_mmol,
+            "active_content": wt_percent,
+            "instruction_text": instruction_text,
+        }
+
+    def _resolve_prepared_base_chemical(
+        self,
+        identifier: str,
+        excel_path: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        功能:
+            为溶液或 beads 配置流程解析母体化合物, 不存在时自动补录 neat 条目.
+        参数:
+            identifier: str, CAS 或 SMILES.
+            excel_path: Optional[str], 化学品库文件路径.
+        返回:
+            Optional[Dict[str, Any]], 成功时返回母体行数据与来源信息, 失败时返回 None.
+        """
+        from ..chem_tools.chemical_lookup import is_cas_number, lookup_chemical_by_smiles
+
+        normalized_identifier = str(identifier or "").strip()
+        if normalized_identifier == "":
+            raise ValidationError("CAS 或 SMILES 不能为空")
+
+        if is_cas_number(normalized_identifier) is True:
+            existing_result = self._find_existing_chemical_row(
+                excel_path=excel_path,
+                cas_number=normalized_identifier,
+            )
+            if existing_result is not None:
+                existing_result["base_created"] = False
+                existing_result["chemicalbook_status"] = ""
+                existing_result["chemicalbook_record_path"] = ""
+                return existing_result
+
+            append_result = self.lookup_and_append_chemical(normalized_identifier, excel_path)
+            if append_result is None:
+                return None
+            append_result["base_created"] = True
+            return append_result
+
+        lookup_info = lookup_chemical_by_smiles(normalized_identifier)
+        if lookup_info is None:
+            return None
+
+        existing_result = self._find_existing_chemical_row(
+            excel_path=excel_path,
+            cas_number=str(getattr(lookup_info, "cas_number", "") or "").strip(),
+            substance_english_name=str(getattr(lookup_info, "substance_english_name", "") or "").strip(),
+            substance=str(getattr(lookup_info, "substance", "") or "").strip(),
+        )
+        if existing_result is not None:
+            existing_result["base_created"] = False
+            existing_result["chemicalbook_status"] = ""
+            existing_result["chemicalbook_record_path"] = ""
+            return existing_result
+
+        append_result = self.lookup_and_append_chemical_by_smiles(normalized_identifier, excel_path)
+        if append_result is None:
+            return None
+        append_result["base_created"] = True
+        return append_result
+
+    @staticmethod
     def _find_duplicate_append_row(
         worksheet: Any,
         header_map: Dict[str, int],
@@ -689,6 +983,115 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             "row_index": new_row,
             "chemicalbook_status": chemicalbook_status,
             "chemicalbook_record_path": chemicalbook_record_path,
+        }
+
+    def prepare_solution_or_beads(
+        self,
+        identifier: str,
+        prepared_form: str,
+        *,
+        solvent_name: str = "",
+        active_content: Any,
+        target_volume_ml: Optional[Any] = None,
+        target_active_mmol: Optional[Any] = None,
+        excel_path: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        功能:
+            根据 CAS 或 SMILES 解析母体化合物, 按指定形态生成溶液或 beads 条目并追加到化学品库.
+        参数:
+            identifier: str, 母体化合物 CAS 或 SMILES.
+            prepared_form: str, 派生形态, 支持 solution 或 beads.
+            solvent_name: str, solution 使用的溶剂名称.
+            active_content: Any, solution 时表示 mol/L, beads 时表示 wt%.
+            target_volume_ml: Optional[Any], solution 目标定容体积, 单位 mL.
+            target_active_mmol: Optional[Any], beads 目标活性摩尔数, 单位 mmol.
+            excel_path: Optional[str], 目标 Excel 文件路径.
+        返回:
+            Optional[Dict[str, Any]], 成功返回母体信息, 派生条目信息与配制结果摘要.
+            派生条目重复或母体无法解析时返回 None.
+        异常:
+            ValidationError: 形态或数值参数非法时抛出.
+        """
+        normalized_form = str(prepared_form or "").strip().lower()
+        if normalized_form not in {"solution", "beads"}:
+            raise ValidationError("派生形态仅支持 solution 或 beads")
+
+        base_result = self._resolve_prepared_base_chemical(
+            identifier=identifier,
+            excel_path=excel_path,
+        )
+        if base_result is None:
+            logger.warning("未找到可用于配置的母体化合物: %s", identifier)
+            return None
+
+        base_row_data = dict(base_result.get("row_data") or {})
+        if base_row_data.get("base_substance") in (None, ""):
+            base_row_data["base_substance"] = (
+                base_row_data.get("substance")
+                or base_row_data.get("substance_chinese_name")
+                or base_row_data.get("substance_english_name")
+                or ""
+            )
+
+        normalized_active_content = self._parse_positive_float(active_content, "活性含量")
+        if normalized_form == "solution":
+            normalized_target_volume_ml = self._parse_positive_float(target_volume_ml, "目标定容体积")
+            derived_row_data = build_prepared_chemical_row_data(
+                base_row_data=base_row_data,
+                prepared_form="solution",
+                active_content=normalized_active_content,
+                solvent_name=solvent_name,
+            )
+            recipe = self._build_solution_recipe(
+                base_row_data=base_row_data,
+                concentration_mol_l=normalized_active_content,
+                target_volume_ml=normalized_target_volume_ml,
+                solvent_name=solvent_name,
+            )
+        else:
+            normalized_target_active_mmol = self._parse_positive_float(target_active_mmol, "目标活性 mmol")
+            derived_row_data = build_prepared_chemical_row_data(
+                base_row_data=base_row_data,
+                prepared_form="beads",
+                active_content=normalized_active_content,
+            )
+            recipe = self._build_beads_recipe(
+                base_row_data=base_row_data,
+                wt_percent=normalized_active_content,
+                target_active_mmol=normalized_target_active_mmol,
+            )
+
+        derived_row_index = self._append_chemical_row_to_excel(
+            row_data=derived_row_data,
+            excel_path=excel_path,
+        )
+        if derived_row_index is None:
+            logger.warning(
+                "派生条目已存在, 跳过添加: identifier=%s, substance=%s",
+                identifier,
+                derived_row_data.get("substance"),
+            )
+            return None
+
+        summary_text = self._format_append_row_summary(derived_row_data)
+        logger.info(
+            "已完成溶液或 beads 配置: identifier=%s, 母体新建=%s, %s, 行号=%d",
+            identifier,
+            base_result.get("base_created"),
+            summary_text,
+            derived_row_index,
+        )
+
+        return {
+            "base_row_data": base_row_data,
+            "base_row_index": base_result.get("row_index"),
+            "base_created": bool(base_result.get("base_created")),
+            "derived_row_data": derived_row_data,
+            "derived_row_index": derived_row_index,
+            "recipe": recipe,
+            "chemicalbook_status": base_result.get("chemicalbook_status", ""),
+            "chemicalbook_record_path": base_result.get("chemicalbook_record_path", ""),
         }
 
     # ---------- 2. 上料动作 ----------

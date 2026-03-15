@@ -1981,6 +1981,39 @@ class AnalysisStationController:
             logger.warning("复制文件失败: %s -> %s, 原因: %s", src, dest, exc)
             return False
 
+    @staticmethod
+    def _select_plan_sheet(wb: openpyxl.Workbook):
+        """
+        功能:
+            从实验方案工作簿中选取包含 '实验编号' 表头的工作表.
+            优先尝试名为 '实验方案设定' 的工作表, 其次激活表, 最后遍历其余表.
+        参数:
+            wb: openpyxl Workbook 对象.
+        返回:
+            命中的 Worksheet; 未命中则回退到激活表.
+        """
+        preferred = "实验方案设定"
+        candidates = []
+        if preferred in wb.sheetnames:
+            candidates.append(preferred)
+        active_name = wb.active.title
+        if active_name not in candidates:
+            candidates.append(active_name)
+        for name in wb.sheetnames:
+            if name not in candidates:
+                candidates.append(name)
+
+        for name in candidates:
+            ws = wb[name]
+            # 在前 5 行中查找 '实验编号' 关键词
+            for row in range(1, min(ws.max_row + 1, 6)):
+                for col in range(1, min(ws.max_column + 1, 20)):
+                    val = ws.cell(row, col).value
+                    if val is not None and "实验编号" in str(val):
+                        return ws
+        # 未命中则回退到激活表
+        return wb.active
+
     def _collect_experiment_plan(
         self,
         task_id: str,
@@ -2014,6 +2047,22 @@ class AnalysisStationController:
             rel = f"experiment_plan/{plan_name}"
             if self._safe_copy(plan_src, plan_dir / plan_name, self._logger):
                 copied["experiment_plan"] = rel
+                # 从实验方案 sheet 中提取实验名称
+                try:
+                    wb = openpyxl.load_workbook(plan_src, data_only=True)
+                    ws = self._select_plan_sheet(wb)
+                    # 扫描 A 列, 找到 "实验名称" 标签对应的 B 列值
+                    exp_name = None
+                    for r in range(1, min(ws.max_row + 1, 10)):
+                        label = ws.cell(r, 1).value
+                        if label is not None and "实验名称" in str(label):
+                            exp_name = ws.cell(r, 2).value
+                            break
+                    wb.close()
+                    if exp_name is not None and str(exp_name).strip() != "":
+                        copied["experiment_name"] = str(exp_name).strip()
+                except Exception:
+                    self._logger.debug("无法从实验方案中提取实验名称")
         else:
             missing.append({
                 "expected": f"{task_id}_experiment_plan.xlsx",
@@ -2496,6 +2545,10 @@ class AnalysisStationController:
         lines.append(f"实验数据归档清单 - 任务 {task_id}")
         lines.append(f"归档时间: {now_str}")
         lines.append(f"归档目录: {dest_dir}")
+        # 实验名称 (从实验方案 Excel B1 单元格提取)
+        exp_name = experiment_plan.get("experiment_name")
+        if exp_name:
+            lines.append(f"实验名称: {exp_name}")
         lines.append("")
 
         # 一. 实验计划

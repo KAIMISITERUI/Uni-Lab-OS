@@ -1246,7 +1246,7 @@ class SynthesisStationController:
 
             row_label = english_name or chinese_name or cas_number or chemical_id or f"第{idx}行"  # 标记行用于提示
 
-            if english_name != "":
+            if english_name != "" and physical_form_raw.strip().lower() == "neat":
                 english_name_count[english_name] = english_name_count.get(english_name, 0) + 1
             if chinese_name != "":
                 chinese_name_count[chinese_name] = chinese_name_count.get(chinese_name, 0) + 1

@@ -104,6 +104,31 @@ def _input_task_id(allow_none=True):
         return None
 
 
+def _input_positive_float(prompt):
+    """
+    功能:
+        提示用户输入大于 0 的数值, 输入非法时循环重试.
+    参数:
+        prompt: str, 提示文本.
+    返回:
+        float, 用户输入的正数.
+    """
+    while True:
+        val = input(f"{prompt}: ").strip()
+        if val == "":
+            print("输入不能为空")
+            continue
+        try:
+            numeric_value = float(val)
+        except ValueError:
+            print("请输入数字")
+            continue
+        if numeric_value <= 0:
+            print("请输入大于0的数值")
+            continue
+        return numeric_value
+
+
 def _pause():
     """按回车键继续"""
     input("\n按回车键继续...")
@@ -205,6 +230,50 @@ def _print_chemical_append_summary(result, *, source_label="查询"):
         f"substance={substance}, physical_state={physical_state}, "
         f"physical_form={physical_form}, 行号={row_index}"
     )
+
+
+def _print_prepared_chemical_summary(result):
+    """
+    功能:
+        输出溶液或 beads 派生条目的精简摘要与配制结果.
+    参数:
+        result: dict | None, prepare_solution_or_beads 的返回结果.
+    返回:
+        None
+    """
+    if isinstance(result, dict) is False:
+        return
+
+    base_row_data = result.get("base_row_data") or {}
+    derived_row_data = result.get("derived_row_data") or {}
+    recipe = result.get("recipe") or {}
+
+    base_name = str(
+        base_row_data.get("base_substance")
+        or base_row_data.get("substance")
+        or base_row_data.get("substance_chinese_name")
+        or base_row_data.get("substance_english_name")
+        or ""
+    ).strip()
+    derived_name = str(
+        derived_row_data.get("substance")
+        or derived_row_data.get("substance_chinese_name")
+        or derived_row_data.get("substance_english_name")
+        or ""
+    ).strip()
+    base_created = bool(result.get("base_created"))
+    derived_row_index = result.get("derived_row_index")
+    instruction_text = str(recipe.get("instruction_text") or "").strip()
+
+    base_source_text = "新补录母体" if base_created is True else "复用现有母体"
+    print(f"母体条目: 名称={base_name}, 来源={base_source_text}")
+    print(f"已成功添加派生条目: 名称={derived_name}, 行号={derived_row_index}")
+    if instruction_text != "":
+        print(f"配制结果: {instruction_text}")
+
+    solute_volume_ml = recipe.get("solute_volume_ml")
+    if solute_volume_ml is not None:
+        print(f"液体母体估算体积: {solute_volume_ml:.6g} mL")
 
 
 def _update_task_id(result):
@@ -475,6 +544,7 @@ def _menu_chemical_library(manager):
         ("4", "化学品库数据校验"),
         ("5", "在线查询并添加化学品"),
         ("6", "SMILES 在线查询并添加化学品"),
+        ("7", "配置溶液或beads并添加到化学品库"),
         ("0", "返回上级菜单"),
     ]
 
@@ -523,6 +593,49 @@ def _menu_chemical_library(manager):
                     _print_chemical_append_summary(result, source_label="SMILES 查询")
             else:
                 print("输入不能为空")
+            _pause()
+        elif choice == "7":
+            identifier = input("请输入 CAS 或 SMILES: ").strip()
+            if identifier == "":
+                print("输入不能为空")
+                _pause()
+                continue
+
+            prepared_form = input("请选择派生形态(solution/beads): ").strip().lower()
+            if prepared_form not in {"solution", "beads"}:
+                print("派生形态仅支持 solution 或 beads")
+                _pause()
+                continue
+
+            if prepared_form == "solution":
+                solvent_name = input("请输入溶剂名称: ").strip()
+                concentration_mol_l = _input_positive_float("请输入目标浓度(mol/L)")
+                target_volume_ml = _input_positive_float("请输入目标定容体积(mL)")
+                result = _safe_run(
+                    manager.prepare_solution_or_beads,
+                    identifier,
+                    prepared_form,
+                    solvent_name=solvent_name,
+                    active_content=concentration_mol_l,
+                    target_volume_ml=target_volume_ml,
+                    excel_path=str(DEFAULT_CHEM_DB),
+                )
+            else:
+                wt_percent = _input_positive_float("请输入载量(wt%)")
+                target_active_mmol = _input_positive_float("请输入目标活性(mmol)")
+                result = _safe_run(
+                    manager.prepare_solution_or_beads,
+                    identifier,
+                    prepared_form,
+                    active_content=wt_percent,
+                    target_active_mmol=target_active_mmol,
+                    excel_path=str(DEFAULT_CHEM_DB),
+                )
+
+            if result is None:
+                print("未完成派生条目添加, 请检查输入或确认该条目是否已存在")
+            else:
+                _print_prepared_chemical_summary(result)
             _pause()
         else:
             print("无效选择, 请重新输入")
