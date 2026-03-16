@@ -64,7 +64,7 @@ class Settings:
 
     # ---------- NIST 配置 ----------
     nist_path: Path = field(default_factory=lambda: Path(r"D:\NIST23\MSSEARCH"))  # NIST 安装目录, 修改后切换检索程序与库路径基准.
-    nist_max_hits: int = 5  # NIST 每峰返回命中数, 调大可保留更多候选.
+    nist_max_hits: int = 3  # NIST 匹配化合物数量上限, 同时控制搜索命中数, 内存保留数和报表输出列数.
     nist_search_timeout: float = 120.0  # NIST 单峰搜索超时秒数, 调大可降低超时中断.
     nist_avg_scans: int = 3  # 质谱平均扫描数, 调大可提升信噪比但会平滑细节.
     pim_enable: bool = True  # 是否启用 PIM 预测, 关闭后不输出 PIM 列结果. 

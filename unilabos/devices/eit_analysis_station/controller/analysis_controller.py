@@ -1698,6 +1698,7 @@ class AnalysisStationController:
             report_path = generator.generate_task_report(
                 resolved_id, sample_results, local_report_dir,
                 structure_images=structure_images,
+                nist_max_hits=self._settings.nist_max_hits,
                 alignment_tolerance=self._settings.alignment_tolerance,
                 include_tic_only=self._settings.alignment_include_tic_only,
                 include_fid_only=self._settings.alignment_include_fid_only,
@@ -1712,6 +1713,7 @@ class AnalysisStationController:
                 syn_report = generator.generate_task_report(
                     resolved_id, sample_results, syn_dir,
                     structure_images=structure_images,
+                    nist_max_hits=self._settings.nist_max_hits,
                     alignment_tolerance=self._settings.alignment_tolerance,
                     include_tic_only=self._settings.alignment_include_tic_only,
                     include_fid_only=self._settings.alignment_include_fid_only,

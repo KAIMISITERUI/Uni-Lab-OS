@@ -207,7 +207,7 @@ class NISTHitInfo:
     功能:
         存储单条峰行内的 NIST 命中信息.
     参数:
-        rank: 命中序号, 1 表示化合物1, 2 表示化合物2.
+        rank: 命中序号, 1 表示化合物1, 2 表示化合物2, 依此类推.
         compound_name: 命中名称.
         formula: 命中分子式.
         molecular_weight: 命中分子量.
@@ -1461,14 +1461,26 @@ class YieldCalculator:
     def _extract_nist_hits(self, row: Dict[str, Any]) -> List[NISTHitInfo]:
         """
         功能:
-            从对照表行提取 NIST Top2 命中信息.
+            从对照表行动态提取 NIST 命中信息.
+            支持化合物1, 化合物2, 化合物3 等任意数量候选.
         参数:
             row: 对照表行字典.
         返回:
             List[NISTHitInfo]: 命中信息列表.
         """
         hits: List[NISTHitInfo] = []
-        for rank in [1, 2]:
+        candidate_ranks: Set[int] = set()
+
+        for key in row.keys():
+            if isinstance(key, str) is False:
+                continue
+            key_text = key.strip()
+            match = re.match(r"^化合物(\d+)\((名称|分子式|分子量)\)$", key_text)
+            if match is None:
+                continue
+            candidate_ranks.add(int(match.group(1)))
+
+        for rank in sorted(candidate_ranks):
             name_text = str(row.get(f"化合物{rank}(名称)", "")).strip()
             formula_text = str(row.get(f"化合物{rank}(分子式)", "")).strip()
             mw_value = self._parse_opt_float(row.get(f"化合物{rank}(分子量)"))

@@ -99,7 +99,7 @@ class SampleResult:
         d_dir: .D 目录路径.
         tic_peaks: TIC 峰检测与积分结果列表.
         fid_peaks: FID 峰检测与积分结果列表.
-        compound_matches: 保留时间 -> 化合物匹配结果列表 (最多2个).
+        compound_matches: 保留时间 -> 化合物匹配结果列表.
         acq_time: 采集时间字符串.
         nist_result_path: NIST SRCRESLT 结果文件副本路径.
         tic_plot_path: TIC 色谱图图片路径.
@@ -156,6 +156,7 @@ class ReportGenerator:
         sample_results: List[SampleResult],
         output_dir: Path,
         structure_images: Optional[Dict[str, Optional[Path]]] = None,
+        nist_max_hits: int = 5,
         alignment_tolerance: float = 0.05,
         include_tic_only: bool = True,
         include_fid_only: bool = True,
@@ -171,6 +172,7 @@ class ReportGenerator:
             sample_results: 各样品的积分结果列表.
             output_dir: 输出目录.
             structure_images: 结构键 -> 结构图 PNG 路径映射, None 表示不嵌入结构图.
+            nist_max_hits: NIST 匹配化合物数量上限, 与 setting.py 中配置保持一致.
             alignment_tolerance: FID 与 TIC 峰保留时间对齐容差(min).
             include_tic_only: 对照表是否输出 TIC 有峰但 FID 无峰的行.
             include_fid_only: 对照表是否输出 FID 有峰但 TIC 无峰的行.
@@ -190,6 +192,7 @@ class ReportGenerator:
         ws_tic.title = "TIC峰表"
         self._write_tic_sheet(
             ws_tic, sample_results, structure_images,
+            nist_max_hits=nist_max_hits,
             pim_enabled=pim_enabled,
             sshm_enabled=sshm_enabled,
             ihshm_enabled=ihshm_enabled,
@@ -205,6 +208,7 @@ class ReportGenerator:
             ws_align,
             sample_results=sample_results,
             structure_images=structure_images,
+            nist_max_hits=nist_max_hits,
             tolerance=alignment_tolerance,
             include_tic_only=include_tic_only,
             include_fid_only=include_fid_only,
@@ -244,12 +248,14 @@ class ReportGenerator:
 
     @staticmethod
     def _build_tic_headers(
+        compound_slot_count: int,
         pim_enabled: bool, sshm_enabled: bool, ihshm_enabled: bool,
     ) -> List[str]:
         """
         功能:
             根据启用的预测方法动态构建 TIC 峰表表头列表.
         参数:
+            compound_slot_count: 化合物候选列组数量.
             pim_enabled: 是否启用 PIM 预测方法.
             sshm_enabled: 是否启用 SS-HM 预测方法.
             ihshm_enabled: 是否启用 iHS-HM 预测方法.
@@ -259,10 +265,11 @@ class ReportGenerator:
         headers = [
             "样品名", "峰号", "保留时间(min)", "峰高", "峰面积",
             "面积%", "峰起始(min)", "峰结束(min)", "峰宽(min)",
-            "化合物1(名称)", "化合物1(匹配度)", "化合物1(分子式)", "化合物1(分子量)",
-            "化合物2(名称)", "化合物2(匹配度)", "化合物2(分子式)", "化合物2(分子量)",
-            "质谱图",
         ]
+        headers.extend(
+            ReportGenerator._build_compound_headers(compound_slot_count)
+        )
+        headers.append("质谱图")
         if pim_enabled is True:
             headers.extend(["PIM预测分子量(Da)", "PIM置信指数"])
         if sshm_enabled is True:
@@ -273,12 +280,14 @@ class ReportGenerator:
 
     @staticmethod
     def _build_alignment_headers(
+        compound_slot_count: int,
         pim_enabled: bool, sshm_enabled: bool, ihshm_enabled: bool,
     ) -> List[str]:
         """
         功能:
             根据启用的预测方法动态构建 TIC-FID 对照表表头列表.
         参数:
+            compound_slot_count: 化合物候选列组数量.
             pim_enabled: 是否启用 PIM 预测方法.
             sshm_enabled: 是否启用 SS-HM 预测方法.
             ihshm_enabled: 是否启用 iHS-HM 预测方法.
@@ -288,9 +297,10 @@ class ReportGenerator:
         headers = [
             "样品名", "FID峰号", "FID保留时间(min)",
             "TIC峰号", "TIC保留时间(min)", "FID峰面积",
-            "化合物1(名称)", "化合物1(匹配度)", "化合物1(分子式)", "化合物1(分子量)",
-            "化合物2(名称)", "化合物2(匹配度)", "化合物2(分子式)", "化合物2(分子量)",
         ]
+        headers.extend(
+            ReportGenerator._build_compound_headers(compound_slot_count)
+        )
         if pim_enabled is True:
             headers.extend(["PIM预测分子量(Da)", "PIM置信指数"])
         if sshm_enabled is True:
@@ -311,6 +321,90 @@ class ReportGenerator:
             Dict[str, int], 列名到列号的映射.
         """
         return {name: idx for idx, name in enumerate(headers, start=1)}
+
+    @staticmethod
+    def _normalize_nist_max_hits(nist_max_hits: int) -> int:
+        """
+        功能:
+            归一化 NIST 匹配化合物数量上限, 确保至少为 1.
+        参数:
+            nist_max_hits: setting.py 中配置的命中数量上限.
+        返回:
+            int, 归一化后的命中数量上限.
+        """
+        if nist_max_hits < 1:
+            return 1
+        return nist_max_hits
+
+    @staticmethod
+    def _build_compound_headers(compound_slot_count: int) -> List[str]:
+        """
+        功能:
+            根据化合物候选数量构建动态列组表头.
+        参数:
+            compound_slot_count: 化合物候选列组数量.
+        返回:
+            List[str], 动态化合物列组表头.
+        """
+        headers: List[str] = []
+        for rank in range(1, compound_slot_count + 1):
+            headers.extend([
+                f"化合物{rank}(名称)",
+                f"化合物{rank}(匹配度)",
+                f"化合物{rank}(分子式)",
+                f"化合物{rank}(分子量)",
+            ])
+        return headers
+
+    @staticmethod
+    def _build_compound_col_groups(
+        col_map: Dict[str, int],
+        compound_slot_count: int,
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        功能:
+            将动态化合物列组转换为列号元组列表.
+        参数:
+            col_map: 表头名称到列号的映射.
+            compound_slot_count: 化合物候选列组数量.
+        返回:
+            List[Tuple[int, int, int, int]], 每组依次为名称/匹配度/分子式/分子量列号.
+        """
+        compound_cols: List[Tuple[int, int, int, int]] = []
+        for rank in range(1, compound_slot_count + 1):
+            compound_cols.append(
+                (
+                    col_map[f"化合物{rank}(名称)"],
+                    col_map[f"化合物{rank}(匹配度)"],
+                    col_map[f"化合物{rank}(分子式)"],
+                    col_map[f"化合物{rank}(分子量)"],
+                )
+            )
+        return compound_cols
+
+    def _determine_compound_slot_count(
+        self,
+        sample_results: List[SampleResult],
+        nist_max_hits: int,
+    ) -> int:
+        """
+        功能:
+            根据 setting.py 中的命中上限和当前任务实际结果, 确定报表中的化合物列组数量.
+        参数:
+            sample_results: 各样品积分结果列表.
+            nist_max_hits: setting.py 中配置的命中数量上限.
+        返回:
+            int, 报表应输出的化合物列组数量.
+        """
+        normalized_hits = self._normalize_nist_max_hits(nist_max_hits)
+        actual_max_hits = 0
+        for sample_result in sample_results:
+            for match_list in sample_result.compound_matches.values():
+                actual_max_hits = max(actual_max_hits, len(match_list))
+
+        if actual_max_hits < 1:
+            return 1
+        return min(normalized_hits, actual_max_hits)
 
     @staticmethod
     def _format_acq_time(raw_time: str) -> str:
@@ -338,6 +432,7 @@ class ReportGenerator:
         ws,
         sample_results: List[SampleResult],
         structure_images: Optional[Dict[str, Optional[Path]]] = None,
+        nist_max_hits: int = 5,
         pim_enabled: bool = True,
         sshm_enabled: bool = True,
         ihshm_enabled: bool = True,
@@ -345,27 +440,31 @@ class ReportGenerator:
         """
         功能:
             写入 TIC 峰表 Sheet, 包含所有样品的 TIC 峰检测积分结果,
-            Top2 化合物匹配结果, 并在化合物名称列写入结构图超链接.
+            多候选化合物匹配结果, 并在化合物名称列写入结构图超链接.
             根据启用的预测方法动态构建表头, 未启用的方法不出现对应列.
         参数:
             ws: openpyxl Worksheet.
             sample_results: 各样品积分结果列表.
             structure_images: 结构键 -> 结构图 PNG 路径, None 表示无结构图.
+            nist_max_hits: setting.py 中配置的命中数量上限.
             pim_enabled: 是否启用 PIM 预测方法.
             sshm_enabled: 是否启用 SS-HM 预测方法.
             ihshm_enabled: 是否启用 iHS-HM 预测方法.
         返回:
             无.
         """
-        headers = self._build_tic_headers(pim_enabled, sshm_enabled, ihshm_enabled)
+        compound_slot_count = self._determine_compound_slot_count(
+            sample_results=sample_results,
+            nist_max_hits=nist_max_hits,
+        )
+        headers = self._build_tic_headers(
+            compound_slot_count, pim_enabled, sshm_enabled, ihshm_enabled
+        )
         col = self._build_col_map(headers)
         self._write_header(ws, headers)
 
         # 化合物列组: (名称列, 匹配度列, 分子式列, 分子量列)
-        compound_cols = [
-            (col["化合物1(名称)"], col["化合物1(匹配度)"], col["化合物1(分子式)"], col["化合物1(分子量)"]),
-            (col["化合物2(名称)"], col["化合物2(匹配度)"], col["化合物2(分子式)"], col["化合物2(分子量)"]),
-        ]
+        compound_cols = self._build_compound_col_groups(col, compound_slot_count)
 
         row = 2
         for sr in sample_results:
@@ -385,7 +484,7 @@ class ReportGenerator:
                 ws.cell(row=row, column=col["峰结束(min)"], value=round(peak.end_time, 3))
                 ws.cell(row=row, column=col["峰宽(min)"], value=round(peak.width, 3))
 
-                # 填充 Top 2 化合物 (每个化合物占4列: 名称, 匹配度, 分子式, 分子量)
+                # 填充化合物候选列组 (每个化合物占4列: 名称, 匹配度, 分子式, 分子量)
                 for i, (c_name, c_score, c_formula, c_mw) in enumerate(compound_cols):
                     if match_list is not None and i < len(match_list):
                         m = match_list[i]
@@ -560,6 +659,7 @@ class ReportGenerator:
         ws,
         sample_results: List[SampleResult],
         structure_images: Optional[Dict[str, Optional[Path]]] = None,
+        nist_max_hits: int = 5,
         tolerance: float = 0.05,
         include_tic_only: bool = True,
         include_fid_only: bool = True,
@@ -570,12 +670,13 @@ class ReportGenerator:
         """
         功能:
             写入 TIC-FID 对照表 Sheet, 按保留时间对齐 FID 和 TIC 峰,
-            并展示 TIC 峰对应的 Top2 化合物预测结果.
+            并展示 TIC 峰对应的多候选化合物预测结果.
             根据启用的预测方法动态构建表头, 未启用的方法不出现对应列.
         参数:
             ws: openpyxl Worksheet.
             sample_results: 各样品积分结果列表.
             structure_images: 结构键 -> 结构图 PNG 路径, None 表示无结构图.
+            nist_max_hits: setting.py 中配置的命中数量上限.
             tolerance: FID-TIC 峰保留时间对齐容差(min).
             include_tic_only: 是否输出 TIC 有峰但 FID 无峰的行.
             include_fid_only: 是否输出 FID 有峰但 TIC 无峰的行.
@@ -585,15 +686,18 @@ class ReportGenerator:
         返回:
             无.
         """
-        headers = self._build_alignment_headers(pim_enabled, sshm_enabled, ihshm_enabled)
+        compound_slot_count = self._determine_compound_slot_count(
+            sample_results=sample_results,
+            nist_max_hits=nist_max_hits,
+        )
+        headers = self._build_alignment_headers(
+            compound_slot_count, pim_enabled, sshm_enabled, ihshm_enabled
+        )
         col = self._build_col_map(headers)
         self._write_header(ws, headers)
 
         # 化合物列组: (名称列, 匹配度列, 分子式列, 分子量列)
-        compound_cols = [
-            (col["化合物1(名称)"], col["化合物1(匹配度)"], col["化合物1(分子式)"], col["化合物1(分子量)"]),
-            (col["化合物2(名称)"], col["化合物2(匹配度)"], col["化合物2(分子式)"], col["化合物2(分子量)"]),
-        ]
+        compound_cols = self._build_compound_col_groups(col, compound_slot_count)
 
         row = 2
         for sr in sample_results:
@@ -627,7 +731,7 @@ class ReportGenerator:
                     match_list = self._find_match_list(
                         tic_peak.retention_time, sr.compound_matches
                     )
-                    # 填充 Top2 化合物 (每个化合物占4列: 名称/匹配度/分子式/分子量)
+                    # 填充化合物候选列组 (每个化合物占4列: 名称/匹配度/分子式/分子量)
                     for i, (c_name, c_score, c_formula, c_mw) in enumerate(compound_cols):
                         if match_list is not None and i < len(match_list):
                             m = match_list[i]

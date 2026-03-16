@@ -203,6 +203,35 @@ class NISTMatcher:
             normalized_hits = 1
         return normalized_hits
 
+    def _limit_match_list(self, hits: List[CompoundMatch]) -> List[CompoundMatch]:
+        """
+        功能:
+            按当前 max_hits 配置裁剪单个质谱的命中列表.
+        参数:
+            hits: 单个质谱对应的命中列表.
+        返回:
+            List[CompoundMatch], 裁剪后的命中列表.
+        """
+        normalized_hits = self._normalize_max_hits()
+        return list(hits[:normalized_hits])
+
+    def _limit_match_dict(
+        self,
+        results: Dict,
+    ) -> Dict:
+        """
+        功能:
+            按当前 max_hits 配置裁剪多组命中结果.
+        参数:
+            results: 任意键 -> 命中列表 的字典.
+        返回:
+            Dict, 裁剪后的结果字典.
+        """
+        limited_results: Dict = {}
+        for key, hits in results.items():
+            limited_results[key] = self._limit_match_list(hits)
+        return limited_results
+
     @staticmethod
     def _find_section_range(
         lines: List[str],
@@ -309,6 +338,7 @@ class NISTMatcher:
             同步目标:
             1. [Search Options] Hits to Print.
             2. [REPORT] First Hits Number.
+            3. [Compare List] Hits.
         参数:
             ini_path: 目标 INI 文件路径.
             normalized_hits: 归一化后的命中数量.
@@ -333,33 +363,27 @@ class NISTMatcher:
         ini_lines = ini_text.splitlines()
         has_changed = False
 
-        ini_lines, search_changed, search_section_exists = self._set_ini_key_value(
-            lines=ini_lines,
-            section_name="Search Options",
-            key_name="Hits to Print",
-            key_value=normalized_hits,
-        )
-        if search_section_exists is False:
-            logger.warning(
-                "NIST 配置文件缺少 [Search Options], 跳过键 Hits to Print: %s",
-                ini_path,
+        target_keys = [
+            ("Search Options", "Hits to Print"),
+            ("REPORT", "First Hits Number"),
+            ("Compare List", "Hits"),
+        ]
+        for section_name, key_name in target_keys:
+            ini_lines, key_changed, section_exists = self._set_ini_key_value(
+                lines=ini_lines,
+                section_name=section_name,
+                key_name=key_name,
+                key_value=normalized_hits,
             )
-        if search_changed:
-            has_changed = True
-
-        ini_lines, report_changed, report_section_exists = self._set_ini_key_value(
-            lines=ini_lines,
-            section_name="REPORT",
-            key_name="First Hits Number",
-            key_value=normalized_hits,
-        )
-        if report_section_exists is False:
-            logger.warning(
-                "NIST 配置文件缺少 [REPORT], 跳过键 First Hits Number: %s",
-                ini_path,
-            )
-        if report_changed:
-            has_changed = True
+            if section_exists is False:
+                logger.warning(
+                    "NIST 配置文件缺少 [%s], 跳过键 %s: %s",
+                    section_name,
+                    key_name,
+                    ini_path,
+                )
+            if key_changed is True:
+                has_changed = True
 
         if has_changed is False:
             logger.debug("NIST 配置文件无需更新: %s", ini_path)
@@ -387,6 +411,7 @@ class NISTMatcher:
             同步目标键:
             1. [Search Options] Hits to Print.
             2. [REPORT] First Hits Number.
+            3. [Compare List] Hits.
         参数:
             无.
         返回:
@@ -618,7 +643,7 @@ class NISTMatcher:
             logger.warning("NIST 搜索未完成, 尝试读取已有结果")
 
         # 解析结果
-        return self._parse_srcreslt()
+        return self._limit_match_dict(self._parse_srcreslt())
 
     def search_single_spectrum(
         self,
@@ -660,7 +685,7 @@ class NISTMatcher:
             reader: GCMSDataReader 实例.
             avg_scans: 以 apex 为中心的平均扫描数.
         返回:
-            Dict[float, List[CompoundMatch]]: 保留时间 -> 前2个匹配结果列表.
+            Dict[float, List[CompoundMatch]]: 保留时间 -> 按 max_hits 裁剪后的匹配结果列表.
         """
         if not self.nist_available:
             logger.info("NIST 不可用, 跳过峰匹配")
@@ -704,12 +729,12 @@ class NISTMatcher:
             except Exception as e:
                 logger.warning("备份 SRCRESLT.TXT 失败: %s", e)
 
-        # 映射回保留时间, 取每个峰的前2个 Hit
+        # 映射回保留时间, 每个峰保留 setting.py 配置的命中上限
         matches: Dict[float, List[CompoundMatch]] = {}
         for name, hits in all_results.items():
             if name in rt_name_map and hits:
                 rt = rt_name_map[name]
-                matches[rt] = hits[:2]  # 保留前2个匹配结果
+                matches[rt] = hits
 
         logger.info("NIST 峰匹配完成: %d/%d 个峰有匹配结果",
                      len(matches), len(spectra))
@@ -738,7 +763,7 @@ class NISTMatcher:
         # 策略1: 尝试读取 MassHunter 导出的报告文件
         report_files = list(d_dir.glob("*.report.csv")) + list(d_dir.glob("Report*.csv"))
         if report_files:
-            results = self._parse_masshunter_report_csv(report_files[0])
+            results = self._limit_match_dict(self._parse_masshunter_report_csv(report_files[0]))
             if results:
                 logger.info("从 MassHunter 报告文件提取 %d 个化合物匹配", len(results))
                 return results
@@ -783,14 +808,14 @@ class NISTMatcher:
                     formula = self._extract_str_from_row(row, ["Formula", "Molecular Formula"])
                     mw = self._extract_float_from_row(row, ["MW", "Molecular Weight", "Mol. Weight"])
 
-                    results[rt] = [CompoundMatch(
+                    results.setdefault(rt, []).append(CompoundMatch(
                         compound_name=name or "",
                         inchikey=inchikey or "",
                         cas_number=cas or "",
                         match_score=score or 0.0,
                         formula=formula or "",
                         mw=mw or 0.0,
-                    )]
+                    ))
 
         except Exception as e:
             logger.warning("解析 MassHunter 报告文件失败: %s - %s", csv_path, e)
