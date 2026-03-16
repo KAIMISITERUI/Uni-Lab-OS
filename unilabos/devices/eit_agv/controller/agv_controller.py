@@ -1153,6 +1153,204 @@ class AGVController:
                 logger.info("等待5分钟后重试...")
                 self._interruptible_sleep(300)
 
+    def auto_charge_pp5_cp6_check(self):
+        """
+        功能:
+            基于PP5待命点和CP6充电站的自动充电检查函数.
+            前置守卫:
+                1. AGV导航任务正在运行时, 直接跳过本次检查.
+            主要逻辑:
+                - 在PP5且电量<50%时, 进入CP6充电.
+                - 在PP5且电量>=50%时, 继续在PP5待命.
+                - 在CP6且电量>90%时, 返回PP5待命.
+                - 在CP6且电量<=90%时, 继续在CP6待命.
+                - 既不在PP5也不在CP6时, 视为工作途中并跳过本次检查.
+        参数:
+            无
+        返回:
+            dict, 包含检查结果的字典:
+                - status: "success" / "skipped" / "error"
+                - action: 执行的动作标识
+                - battery_level: 电池电量, 查询成功时包含
+                - current_station: 当前站点ID, 查询成功时包含
+                - message: 详细信息
+        """
+        logger.info("开始PP5/CP6自动充电检查")
+
+        try:
+            # 导航任务忙碌时直接跳过, 避免监控逻辑和现场任务争抢控制权.
+            nav_status = self.query_nav_task_status()
+            if nav_status is not None:
+                task_status = nav_status.get("task_status")
+                if task_status in {1, 2, 3}:
+                    status_name = nav_status.get("task_status_name", "UNKNOWN")
+                    logger.info(f"AGV导航任务正忙(状态={status_name}), 跳过本次PP5/CP6充电检查")
+                    return {
+                        "status": "skipped",
+                        "action": "skipped_busy_nav",
+                        "nav_task_status": task_status,
+                        "nav_task_status_name": status_name,
+                        "message": f"AGV导航任务正忙(状态={status_name}), 跳过本次PP5/CP6充电检查"
+                    }
+
+            logger.info("步骤1: 查询当前位置")
+            current_station = self.query_current_station()
+            if current_station is None:
+                logger.error("查询当前位置失败")
+                return {
+                    "status": "error",
+                    "action": "query_location",
+                    "message": "查询当前位置失败"
+                }
+
+            current_station_id = current_station.get("station_id")
+            logger.info(f"当前位置: {current_station_id} - {current_station.get('station_name')}")
+
+            logger.info("步骤2: 查询电池电量")
+            battery_info = self.query_battery_status(simple=True)
+            if battery_info is None:
+                logger.error("查询电池电量失败")
+                return {
+                    "status": "error",
+                    "action": "query_battery",
+                    "current_station": current_station_id,
+                    "message": "查询电池电量失败"
+                }
+
+            battery_level = battery_info.get("battery_level")
+            if battery_level is None:
+                logger.error("查询电池电量失败, 返回结果缺少battery_level")
+                return {
+                    "status": "error",
+                    "action": "query_battery",
+                    "current_station": current_station_id,
+                    "message": "查询电池电量失败, 返回结果缺少battery_level"
+                }
+
+            logger.info(f"当前电池电量: {battery_level * 100:.1f}%")
+
+            if current_station_id == "PP5":
+                if battery_level < 0.5:
+                    logger.info("步骤3: AGV在PP5且电量低于50%, 准备进入CP6充电")
+                    result_cp6 = self.safe_navigate_to_station("CP6")
+                    if result_cp6 is None:
+                        logger.error("从PP5移动到CP6失败")
+                        return {
+                            "status": "error",
+                            "action": "move_to_cp6",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "message": f"电量{battery_level * 100:.1f}%低于50%, 但从PP5移动到CP6失败"
+                        }
+
+                    logger.info("AGV已从PP5移动到CP6充电站")
+                    return {
+                        "status": "success",
+                        "action": "pp5_to_cp6_for_charge",
+                        "battery_level": battery_level,
+                        "current_station": current_station_id,
+                        "message": f"电量{battery_level * 100:.1f}%低于50%, 已从PP5移动到CP6充电"
+                    }
+
+                logger.info("AGV在PP5待命, 当前电量无需进入CP6")
+                return {
+                    "status": "success",
+                    "action": "standby_at_pp5",
+                    "battery_level": battery_level,
+                    "current_station": current_station_id,
+                    "message": f"电量{battery_level * 100:.1f}%达到待命要求, 继续在PP5待命"
+                }
+
+            if current_station_id == "CP6":
+                if battery_level > 0.9:
+                    logger.info("步骤3: AGV在CP6且电量高于90%, 准备返回PP5待命")
+                    result_pp5 = self.safe_navigate_to_station("PP5")
+                    if result_pp5 is None:
+                        logger.error("从CP6移动到PP5失败")
+                        return {
+                            "status": "error",
+                            "action": "move_to_pp5",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "message": f"电量{battery_level * 100:.1f}%高于90%, 但从CP6移动到PP5失败"
+                        }
+
+                    logger.info("AGV已从CP6返回PP5待命点")
+                    return {
+                        "status": "success",
+                        "action": "cp6_to_pp5_after_charge",
+                        "battery_level": battery_level,
+                        "current_station": current_station_id,
+                        "message": f"电量{battery_level * 100:.1f}%高于90%, 已从CP6返回PP5待命"
+                    }
+
+                logger.info("AGV在CP6待命, 当前电量尚未达到离站阈值")
+                return {
+                    "status": "success",
+                    "action": "standby_at_cp6",
+                    "battery_level": battery_level,
+                    "current_station": current_station_id,
+                    "message": f"电量{battery_level * 100:.1f}%未高于90%, 继续在CP6待命"
+                }
+
+            logger.info(f"AGV当前位置={current_station_id}, 视为工作途中, 跳过本次PP5/CP6充电检查")
+            return {
+                "status": "skipped",
+                "action": "working_in_progress",
+                "battery_level": battery_level,
+                "current_station": current_station_id,
+                "message": f"当前位置={current_station_id}, 不在PP5或CP6, 视为工作途中并跳过本次检查"
+            }
+
+        except Exception as e:
+            logger.error(f"PP5/CP6自动充电检查过程中发生异常: {e}")
+            return {
+                "status": "error",
+                "action": "exception",
+                "message": f"PP5/CP6自动充电检查过程中发生异常: {e}"
+            }
+
+    def auto_charge_pp5_cp6_loop(self, interval_hours=1, retry_wait_minutes=5):
+        """
+        功能:
+            基于PP5待命点和CP6充电站的自动充电循环函数.
+            - 检查成功时, 等待interval_hours后执行下一轮.
+            - 检查被跳过或出错时, 等待retry_wait_minutes后重试.
+        参数:
+            interval_hours: 检查成功后的等待时间, 单位小时, 默认1小时.
+            retry_wait_minutes: 检查跳过或出错后的重试间隔, 单位分钟, 默认5分钟.
+        返回:
+            无, 持续运行直到用户中断.
+        """
+        logger.info(
+            f"启动PP5/CP6自动充电循环, 检查间隔: {interval_hours}小时, "
+            f"重试间隔: {retry_wait_minutes}分钟"
+        )
+
+        while True:
+            try:
+                result = self.auto_charge_pp5_cp6_check()
+                action = result.get("action", "")
+                status = result.get("status", "")
+                logger.info(f"PP5/CP6充电检查结果: {result}")
+
+                if status == "success":
+                    wait_seconds = interval_hours * 3600
+                    logger.info(f"检查成功(action={action}), 等待{interval_hours}小时后进行下次检查...")
+                else:
+                    wait_seconds = retry_wait_minutes * 60
+                    logger.info(f"检查未完成(action={action}, status={status}), 等待{retry_wait_minutes}分钟后重试...")
+
+                self._interruptible_sleep(wait_seconds)
+
+            except KeyboardInterrupt:
+                logger.info("用户中断PP5/CP6自动充电循环")
+                break
+            except Exception as e:
+                logger.error(f"PP5/CP6自动充电循环中发生异常: {e}")
+                logger.info(f"等待{retry_wait_minutes}分钟后重试...")
+                self._interruptible_sleep(retry_wait_minutes * 60)
+
     def _interruptible_sleep(self, total_seconds):
         """
         功能:
@@ -3014,10 +3212,12 @@ def main():
         print("29. 批量物料转运循环测试")
         print("30. 分析站→货架样品转运")
         print("31. 查看/管理货架状态")
+        print("32. PP5/CP6自动充电检查(单次)")
+        print("33. 启动PP5/CP6自动充电循环")
         print("0. 退出程序")
         print("=" * 60)
 
-        choice = input("请输入选项 (0-31): ").strip()
+        choice = input("请输入选项 (0-33): ").strip()
 
         if choice == "1":
             # 连接机械臂
@@ -4542,6 +4742,78 @@ def main():
                         print("已取消")
                 else:
                     print("无效选择")
+
+        elif choice == "32":
+            # PP5/CP6自动充电检查
+            print("\n--- PP5/CP6自动充电检查 ---")
+            print("说明: 执行一次PP5/CP6待命充电检查")
+            print("  - 如果在PP5且电量低于50%, 则进入CP6充电")
+            print("  - 如果在CP6且电量高于90%, 则返回PP5待命")
+            print("  - 如果在PP5且电量不低于50%, 则继续在PP5待命")
+            print("  - 如果在CP6且电量不高于90%, 则继续在CP6待命")
+            print("  - 如果不在PP5或CP6, 则视为工作途中并跳过本次检查")
+
+            try:
+                result = controller.auto_charge_pp5_cp6_check()
+
+                print("\n充电检查结果:")
+                print(f"  状态: {result.get('status')}")
+                print(f"  动作: {result.get('action')}")
+                print(f"  消息: {result.get('message')}")
+
+                if "current_station" in result:
+                    print(f"  当前站点: {result.get('current_station')}")
+                if "battery_level" in result:
+                    battery_level = result.get("battery_level")
+                    print(f"  电池电量: {battery_level * 100:.1f}%")
+
+            except Exception as e:
+                print(f"错误: {e}")
+
+        elif choice == "33":
+            # 启动PP5/CP6自动充电循环
+            print("\n--- 启动PP5/CP6自动充电循环 ---")
+            print("说明: 启动PP5/CP6待命充电循环监控")
+            print("提示: 按Ctrl+C可以中断循环")
+
+            try:
+                interval_input = input("请输入检查间隔时间(小时, 默认1): ").strip()
+                retry_input = input("请输入重试间隔时间(分钟, 默认5): ").strip()
+
+                if interval_input == "":
+                    interval_hours = 1
+                else:
+                    interval_hours = float(interval_input)
+
+                if retry_input == "":
+                    retry_wait_minutes = 5
+                else:
+                    retry_wait_minutes = float(retry_input)
+
+                if interval_hours <= 0:
+                    print("错误: 检查间隔时间必须大于0")
+                    continue
+                if retry_wait_minutes <= 0:
+                    print("错误: 重试间隔时间必须大于0")
+                    continue
+
+                print(
+                    f"\n启动PP5/CP6自动充电循环, 检查间隔: {interval_hours}小时, "
+                    f"重试间隔: {retry_wait_minutes}分钟"
+                )
+                print("按Ctrl+C可以中断循环\n")
+
+                controller.auto_charge_pp5_cp6_loop(
+                    interval_hours=interval_hours,
+                    retry_wait_minutes=retry_wait_minutes
+                )
+
+            except KeyboardInterrupt:
+                print("\n用户中断PP5/CP6自动充电循环")
+            except ValueError:
+                print("错误: 请输入有效的数字")
+            except Exception as e:
+                print(f"错误: {e}")
 
         elif choice == "0":
             # 退出程序

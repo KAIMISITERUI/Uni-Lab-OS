@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 from .manager.station_manager import SynthesisStationManager
 from .config.setting import Settings
 from .config.constants import TaskStatus, StationState

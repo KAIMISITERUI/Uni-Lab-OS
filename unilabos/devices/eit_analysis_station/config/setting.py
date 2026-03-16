@@ -109,7 +109,7 @@ class Settings:
     integration_mode: str = "robust_v3"  # 处理模式, 可选 robust_v3 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
     peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
     peak_prominence: float = 20000.0  # TIC 最小峰显著性阈值, 小幅调高以抑制平基线弱假峰.
-    peak_min_distance: int = 5  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
+    peak_min_distance: int = 3  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
     peak_width_rel_height: float = 0.99  # 峰宽计算相对高度, 调整后影响峰边界与面积.
     fid_peak_prominence: float = 0.5  # FID 最小峰显著性阈值, 调高会减少弱峰识别.
     fid_peak_min_distance: int = 50  # FID 相邻峰最小点距, 调大可减少近邻峰分裂.
@@ -139,10 +139,17 @@ class Settings:
     robust_v3_tail_artifact_half_width_asymmetry_min: float = 2.0  # 拖尾假峰右/左半高宽不对称下限, 调大将减少误合并.
     robust_v3_tail_monotonic_filter_enable: bool = True  # robust_v3 是否启用平滑信号单调下降拖尾过滤, 关闭后仅使用三条件拖尾过滤.
     robust_v3_tail_monotonic_ratio_max: float = 0.25  # 单调下降拖尾判定时上升步占比上限, 调大会放松判定.
-    robust_v3_max_peak_width_min: float = 0.5  # robust_v3 峰最大边界宽度(min), 超过此值视为基线抬升假峰. 设0关闭.
+    robust_v3_max_peak_width_min: float = 1.0  # robust_v3 峰最大边界宽度(min), 配合自适应逻辑放宽基准值. 超过自适应上限视为基线抬升假峰. 设0关闭.
     robust_v3_leading_edge_filter_enable: bool = True  # robust_v3 是否启用前沿假峰过滤, 检测强峰上升沿上的假峰并丢弃.
     robust_v3_leading_edge_relative_prominence_max: float = 0.25  # 前沿假峰相对后峰显著性上限, 调大将丢弃更强的前沿假峰.
     robust_v3_leading_edge_monotonic_ratio_min: float = 0.65  # 前沿假峰判定时上升步占比下限, 调低会放松判定.
+
+    # ---------- CWT 峰检测参数 ----------
+    use_cwt_detection: bool = True  # 是否使用 CWT 多尺度峰检测替代 find_peaks, 关闭后回退到传统 find_peaks.
+    cwt_min_width_min: float = 0.01  # CWT 最小小波宽度(min), 控制能检测的最窄峰宽度. 调小可分辨更近的双峰.
+    cwt_max_width_min: float = 0.40  # CWT 最大小波宽度(min), 控制能检测的最宽峰宽度. 调大可覆盖更宽的峰.
+    cwt_min_snr: float = 2.0  # CWT 脊线最小信噪比, 调高减少噪声假峰.
+    cwt_noise_perc: float = 10.0  # CWT 噪声估计分位数, 调低使噪声估计更保守.
 
     # ---------- gcpy 参数 ----------
     gcpy_whittaker_lmbd: float = 10.0  # gcpy 模式 Whittaker 平滑参数, 调大可使信号更平滑.

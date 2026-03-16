@@ -1321,6 +1321,11 @@ class AnalysisStationController:
                 leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
                 leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
+                use_cwt_detection=self._settings.use_cwt_detection,
+                cwt_min_width_min=self._settings.cwt_min_width_min,
+                cwt_max_width_min=self._settings.cwt_max_width_min,
+                cwt_min_snr=self._settings.cwt_min_snr,
+                cwt_noise_perc=self._settings.cwt_noise_perc,
             )
             result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
             tic_baseline = tic_integrator.last_baseline
@@ -1369,6 +1374,11 @@ class AnalysisStationController:
                 leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
                 leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
                 gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
+                use_cwt_detection=self._settings.use_cwt_detection,
+                cwt_min_width_min=self._settings.cwt_min_width_min,
+                cwt_max_width_min=self._settings.cwt_max_width_min,
+                cwt_min_snr=self._settings.cwt_min_snr,
+                cwt_noise_perc=self._settings.cwt_noise_perc,
             )
             result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
             fid_baseline = fid_integrator.last_baseline

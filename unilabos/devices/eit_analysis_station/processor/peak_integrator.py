@@ -92,6 +92,11 @@ class PeakIntegrator:
         leading_edge_relative_prominence_max: 判定前沿假峰的相对后峰显著性上限.
         leading_edge_monotonic_ratio_min: 平滑信号从当前峰到后峰的上升步占比下限, 高于此值判定为前沿假峰.
         max_peak_width_min: 峰最大边界宽度(min), 超出判定为基线抬升假峰, 设0关闭.
+        use_cwt_detection: 是否使用 CWT 多尺度峰检测替代 find_peaks.
+        cwt_min_width_min: CWT 最小小波宽度(min), 控制能检测的最窄峰.
+        cwt_max_width_min: CWT 最大小波宽度(min), 控制能检测的最宽峰.
+        cwt_min_snr: CWT 脊线最小信噪比, 调高减少噪声假峰.
+        cwt_noise_perc: CWT 噪声估计分位数, 调低使噪声估计更保守.
     返回:
         无.
     """
@@ -130,6 +135,11 @@ class PeakIntegrator:
         leading_edge_monotonic_ratio_min: float = 0.65,
         max_peak_width_min: float = 0.5,
         gcpy_whittaker_lmbd: float = 10.0,
+        use_cwt_detection: bool = True,
+        cwt_min_width_min: float = 0.01,
+        cwt_max_width_min: float = 0.40,
+        cwt_min_snr: float = 2.0,
+        cwt_noise_perc: float = 10.0,
     ):
         self._smoothing_window = self._ensure_odd(max(3, int(smoothing_window)))
         self._prominence = float(prominence)
@@ -175,6 +185,13 @@ class PeakIntegrator:
 
         # gcpy 参数
         self._gcpy_whittaker_lmbd = float(gcpy_whittaker_lmbd)
+
+        # CWT 多尺度峰检测参数
+        self._use_cwt_detection = bool(use_cwt_detection)
+        self._cwt_min_width_min = float(cwt_min_width_min)
+        self._cwt_max_width_min = float(cwt_max_width_min)
+        self._cwt_min_snr = float(cwt_min_snr)
+        self._cwt_noise_perc = float(cwt_noise_perc)
 
         # integrate() 完成后可读取最后一次使用的基线.
         self.last_baseline: Optional[np.ndarray] = None
@@ -443,6 +460,106 @@ class PeakIntegrator:
             return 0.0
 
         return sigma
+
+    def _find_peaks_cwt(
+        self,
+        times: np.ndarray,
+        corrected_signal: np.ndarray,
+    ) -> np.ndarray:
+        """
+        功能:
+            混合峰检测: CWT 多尺度检测 + find_peaks 在原始校正信号上检测, 取并集.
+            - CWT 擅长在不同宽度尺度上定位峰, 不易遗漏宽峰.
+            - find_peaks 在未经 SG 平滑的信号上运行, 可分辨被平滑抹平的窄双峰.
+            两者取并集后统一按 prominence 阈值筛选.
+        参数:
+            times: 时间数组(min).
+            corrected_signal: 基线校正后的原始信号(未经 SG 平滑).
+        返回:
+            np.ndarray: 通过 prominence 过滤后的峰索引数组(已排序).
+        """
+        from scipy.signal import find_peaks_cwt
+        import warnings
+
+        dt = self._median_dt(times)
+        if dt <= 0:
+            logger.warning("混合峰检测: 时间轴步长无效, 回退到 find_peaks.")
+            return np.array([], dtype=int)
+
+        n_pts = len(corrected_signal)
+
+        # --- CWT 多尺度检测 ---
+        min_w = max(2, int(round(self._cwt_min_width_min / dt)))
+        max_w = max(min_w + 1, int(round(self._cwt_max_width_min / dt)))
+        widths = np.arange(min_w, max_w + 1)
+
+        cwt_raw = find_peaks_cwt(
+            corrected_signal,
+            widths=widths,
+            min_snr=self._cwt_min_snr,
+            noise_perc=self._cwt_noise_perc,
+        )
+
+        # CWT 返回的位置可能偏离真实峰顶, 在邻域内对齐到局部最大值
+        snap_window = max(3, min_w)
+        cwt_snapped = set()
+        for idx in cwt_raw:
+            lo = max(0, idx - snap_window)
+            hi = min(n_pts, idx + snap_window + 1)
+            cwt_snapped.add(lo + int(np.argmax(corrected_signal[lo:hi])))
+
+        # --- find_peaks 在原始校正信号上检测(可分辨窄双峰) ---
+        # 使用 distance=1 而非 self._min_distance, 允许检测间距极小的双峰;
+        # 后续统一由 prominence 过滤和去重逻辑保证质量.
+        fp_indices, _ = find_peaks(
+            corrected_signal,
+            prominence=self._prominence,
+            distance=1,
+        )
+
+        # --- 取并集 ---
+        combined = np.array(sorted(cwt_snapped | set(fp_indices.tolist())), dtype=int)
+        if len(combined) == 0:
+            return np.array([], dtype=int)
+
+        # 边界保护和正值过滤
+        valid = (combined >= 0) & (combined < n_pts) & (corrected_signal[combined] > 0)
+        combined = combined[valid]
+        if len(combined) == 0:
+            return np.array([], dtype=int)
+
+        # 统一按 prominence 阈值筛选
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            proms = peak_prominences(corrected_signal, combined)[0]
+        mask = proms >= self._prominence
+        combined = combined[mask]
+        if len(combined) == 0:
+            return np.array([], dtype=int)
+
+        # 去重: 间距 < 2 点的峰保留 prominence 更大者
+        if len(combined) > 1:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                proms_final = peak_prominences(corrected_signal, combined)[0]
+            keep = np.ones(len(combined), dtype=bool)
+            order = np.argsort(-proms_final)
+            for i_rank in order:
+                if not keep[i_rank]:
+                    continue
+                for j in range(len(combined)):
+                    if j != i_rank and keep[j]:
+                        if abs(int(combined[j]) - int(combined[i_rank])) < 2:
+                            keep[j] = False
+            combined = np.sort(combined[keep])
+
+        logger.info(
+            "混合峰检测完成: CWT(%d~%d 点) + find_peaks, 检测到 %d 个峰.",
+            min_w,
+            max_w,
+            len(combined),
+        )
+        return combined
 
     @staticmethod
     def _integrate_with_local_baseline(times: np.ndarray, intensities: np.ndarray) -> float:
@@ -1110,14 +1227,35 @@ class PeakIntegrator:
         corrected_signal = np.maximum(smoothed_signal - baseline, 0)
         baseline_available = baseline is not None and len(baseline) == len(intensities)
 
-        peak_indices, _ = find_peaks(
-            corrected_signal,
-            prominence=self._prominence,
-            distance=self._min_distance,
-        )
+        # 峰检测: CWT 混合检测或传统 find_peaks
+        if self._use_cwt_detection:
+            # 混合检测在原始信号(未经 SG 平滑)上运行, 避免平滑抹平窄双峰
+            raw_corrected = np.maximum(intensities - baseline, 0)
+            peak_indices = self._find_peaks_cwt(times, raw_corrected)
+            if len(peak_indices) == 0:
+                # 混合检测未检测到峰时回退到 find_peaks
+                logger.info("%s 模式混合检测未检测到峰, 回退到 find_peaks.", mode_name)
+                peak_indices, _ = find_peaks(
+                    corrected_signal,
+                    prominence=self._prominence,
+                    distance=self._min_distance,
+                )
+            else:
+                logger.info("%s 模式使用混合峰检测, 初始峰数: %d", mode_name, len(peak_indices))
+            # 混合检测在原始信号上定位峰, 后续边界/过滤也需使用原始信号以保持一致
+            corrected_signal = raw_corrected
+        else:
+            peak_indices, _ = find_peaks(
+                corrected_signal,
+                prominence=self._prominence,
+                distance=self._min_distance,
+            )
         if len(peak_indices) == 0:
             logger.info("%s 模式未检测到峰.", mode_name)
             return []
+
+        # 计算噪声 sigma, 供边界检测和自适应宽度过滤复用
+        noise_sigma = self._estimate_noise_sigma(corrected_signal)
 
         boundaries = self._find_robust_boundaries(times, corrected_signal, peak_indices)
         keep_mask = np.ones(len(peak_indices), dtype=bool)
@@ -1179,15 +1317,23 @@ class PeakIntegrator:
             left_idx = max(0, left_idx)
             right_idx = min(len(times) - 1, right_idx)
 
-            # 超宽峰过滤: 边界宽度超过阈值视为基线抬升假峰
+            # 超宽峰过滤: 高度自适应, 高强度峰允许更宽的边界
             if self._max_peak_width_min > 0:
                 peak_width_check = float(times[right_idx] - times[left_idx])
-                if peak_width_check > self._max_peak_width_min:
+                peak_h = float(corrected_signal[int(peak_idx)])
+                noise_ref = max(noise_sigma, 1.0)
+                height_ratio = peak_h / noise_ref
+                adaptive_limit = self._max_peak_width_min
+                if height_ratio > 100:
+                    # log 缩放: log10(100)=2→1.0x, log10(10000)=4→3.0x, 最多放大 3 倍
+                    scale = 1.0 + min(np.log10(height_ratio / 100.0), 2.0)
+                    adaptive_limit = self._max_peak_width_min * scale
+                if peak_width_check > adaptive_limit:
                     logger.info(
-                        "RT=%.3f 的峰因边界宽度 %.4f min > %.4f min 被过滤.",
+                        "RT=%.3f 的峰因边界宽度 %.4f min > 自适应上限 %.4f min 被过滤.",
                         float(times[int(peak_idx)]),
                         peak_width_check,
-                        self._max_peak_width_min,
+                        adaptive_limit,
                     )
                     continue
 
