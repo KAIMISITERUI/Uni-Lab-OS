@@ -3,11 +3,11 @@
 功能:
     PP5/CP6自动充电监控独立入口脚本.
     持续监控AGV所在位置, 当AGV位于PP5或CP6时按待命充电规则执行检查.
-    支持命令行参数配置检查间隔和重试间隔.
+    支持命令行参数配置检查间隔, 重试间隔和低电量阈值.
 
 用法:
     python -m eit_agv.controller.auto_charge_pp5_cp6_monitor
-    python -m eit_agv.controller.auto_charge_pp5_cp6_monitor --interval-hours 2 --retry-minutes 10
+    python -m eit_agv.controller.auto_charge_pp5_cp6_monitor --interval-minutes 3 --retry-minutes 5 --low-battery 80
 """
 
 import argparse
@@ -15,6 +15,10 @@ import logging
 import os
 import sys
 
+from ..config.agv_config import (
+    AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
+    AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
+)
 from .agv_controller import AGVController
 
 
@@ -55,17 +59,17 @@ def _parse_args() -> argparse.Namespace:
     功能:
         解析命令行参数.
     返回:
-        argparse.Namespace, 包含interval_hours和retry_minutes.
+        argparse.Namespace, 包含interval_minutes, retry_minutes和low_battery.
     """
     parser = argparse.ArgumentParser(
         description="AGV PP5/CP6自动充电监控, 根据待命点和电量阈值切换PP5与CP6"
     )
     parser.add_argument(
-        "--interval-hours",
+        "--interval-minutes",
         type=float,
-        default=1.0,
-        metavar="HOURS",
-        help="检查成功后的等待时间(小时), 默认1.0",
+        default=AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
+        metavar="MINUTES",
+        help=f"检查成功后的等待时间(分钟), 默认{AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES}",
     )
     parser.add_argument(
         "--retry-minutes",
@@ -73,6 +77,13 @@ def _parse_args() -> argparse.Namespace:
         default=5.0,
         metavar="MINUTES",
         help="检查跳过或出错后的重试间隔(分钟), 默认5.0",
+    )
+    parser.add_argument(
+        "--low-battery",
+        type=int,
+        default=AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
+        metavar="PERCENT",
+        help=f"低电量阈值(百分比), 电量低于此值触发充电, 默认{AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT}",
     )
     return parser.parse_args()
 
@@ -92,15 +103,16 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     args = _parse_args()
     logger.info(
-        f"PP5/CP6自动充电监控启动 | 检查间隔: {args.interval_hours}小时 | "
-        f"重试间隔: {args.retry_minutes}分钟"
+        f"PP5/CP6自动充电监控启动 | 检查间隔: {args.interval_minutes}分钟 | "
+        f"重试间隔: {args.retry_minutes}分钟 | 低电量阈值: {args.low_battery}%"
     )
 
     try:
         controller = AGVController()
         controller.auto_charge_pp5_cp6_loop(
-            interval_hours=args.interval_hours,
+            interval_minutes=args.interval_minutes,
             retry_wait_minutes=args.retry_minutes,
+            low_battery_pct=args.low_battery,
         )
     except KeyboardInterrupt:
         logger.info("收到中断信号, PP5/CP6自动充电监控已退出")

@@ -67,7 +67,10 @@ class Settings:
     nist_max_hits: int = 3  # NIST 匹配化合物数量上限, 同时控制搜索命中数, 内存保留数和报表输出列数.
     nist_search_timeout: float = 120.0  # NIST 单峰搜索超时秒数, 调大可降低超时中断.
     nist_avg_scans: int = 3  # 质谱平均扫描数, 调大可提升信噪比但会平滑细节.
-    pim_enable: bool = True  # 是否启用 PIM 预测, 关闭后不输出 PIM 列结果. 
+    ms_bg_subtract: bool = True  # 是否对峰质谱执行背景扣除。
+    ms_bg_height_pct: float = 0.0  # 背景采样高度百分比(0-50), 0=峰边界采样, >0=在峰高X%处采样.
+    ms_bg_avg_scans: int = 3  # 背景采样平均扫描数, 调大可提升背景估计稳定性.
+    pim_enable: bool = True  # 是否启用 PIM 预测, 关闭后不输出 PIM 列结果.
     pim_ab_m: float = 1.5  # PIM 参数 ab_m, 调整后影响分子离子峰判定敏感度. 推荐范围：0.5 ~ 2.0.
     pim_beta: float = 5.0  # PIM 参数 beta, 调整后影响高质量峰加权强度. 推荐范围：3.0 ~ 7.0	
     pim_epsilon_f: float = 0.0  # PIM 参数 epsilon_f, 调整后影响峰筛选阈值. 可以尝试设为 0.01.
@@ -156,7 +159,7 @@ class Settings:
 
     # ---------- 峰过滤参数 ----------
     peak_rt_min: Optional[float] = 4.0  # 峰保留时间下限(min), 调大可忽略前段溶剂峰.
-    peak_rt_max: Optional[float] = 15.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
+    peak_rt_max: Optional[float] = 12.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
     tic_area_min: Optional[float] = 10000.0  # TIC 峰面积下限, 调大可过滤小面积峰.
     tic_area_max: Optional[float] = None  # TIC 峰面积上限, 设置后可过滤过载峰.
     fid_area_min: Optional[float] = 0.01  # FID 峰面积下限, 调大可过滤微小峰.
@@ -404,6 +407,9 @@ class Settings:
             nist_max_hits=_int("ANALYSIS_NIST_MAX_HITS", defaults.nist_max_hits),
             nist_search_timeout=_float("ANALYSIS_NIST_SEARCH_TIMEOUT", defaults.nist_search_timeout),
             nist_avg_scans=_int("ANALYSIS_NIST_AVG_SCANS", defaults.nist_avg_scans),
+            ms_bg_subtract=_bool("ANALYSIS_MS_BG_SUBTRACT", defaults.ms_bg_subtract),
+            ms_bg_height_pct=_float("ANALYSIS_MS_BG_HEIGHT_PCT", defaults.ms_bg_height_pct),
+            ms_bg_avg_scans=_int("ANALYSIS_MS_BG_AVG_SCANS", defaults.ms_bg_avg_scans),
             pim_enable=_bool("ANALYSIS_PIM_ENABLE", defaults.pim_enable),
             pim_ab_m=_float("ANALYSIS_PIM_AB_M", defaults.pim_ab_m),
             pim_beta=_float("ANALYSIS_PIM_BETA", defaults.pim_beta),

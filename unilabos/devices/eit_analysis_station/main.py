@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+功能:
+    提供分析站交互式命令行入口, 将 controller 中的测试菜单独立到 main.py.
+参数:
+    无.
+返回:
+    无.
+"""
+
+import logging
+from typing import Any, Dict, Optional
+
+from .config.setting import configure_logging
+from .controller.analysis_controller import AnalysisStationController
+from .driver.zhida_driver import ZhidaClient
+
+logger = logging.getLogger("AnalysisInteractiveCLI")
+
+
+def _print_result(result: Any) -> None:
+    """
+    功能:
+        格式化打印执行结果, 兼容字典与普通对象.
+    参数:
+        result: 任意返回对象.
+    返回:
+        无.
+    """
+    if isinstance(result, dict):
+        print("\n========== 执行结果 ==========")
+        for key, value in result.items():
+            print(f"  {key}: {value}")
+        print("==============================\n")
+        return
+
+    print(result)
+
+
+def _prompt_task_id() -> Optional[str]:
+    """
+    功能:
+        读取 task_id 输入, 留空时返回 None 以便自动选取最新任务.
+    参数:
+        无.
+    返回:
+        Optional[str], task_id 字符串或 None.
+    """
+    task_id_input = input("请输入 task_id (留空则自动选取最新任务): ").strip()
+    if task_id_input == "":
+        return None
+    return task_id_input
+
+
+def _handle_device_query(controller: AnalysisStationController, choice: str) -> None:
+    """
+    功能:
+        处理设备状态与方法查询分支.
+    参数:
+        controller: AnalysisStationController 实例.
+        choice: 菜单选项, 仅支持 4 或 5.
+    返回:
+        无.
+    """
+    settings = controller._settings
+    client = ZhidaClient(
+        host=settings.gc_ms_host,
+        port=settings.gc_ms_port,
+        timeout=settings.gc_ms_timeout,
+    )
+
+    try:
+        client.connect()
+        if choice == "4":
+            print("\n>>> 调用 ZhidaClient.get_status_detail()")
+            status_detail = client.get_status_detail()
+            raw_status = status_detail["raw_status"] or "(空)"
+            sub_status = status_detail["sub_status"] or "(无)"
+            print(
+                "\n"
+                f"  原始状态: {raw_status}\n"
+                f"  主状态: {status_detail['base_status']}\n"
+                f"  子状态: {sub_status}\n"
+            )
+        else:
+            print("\n>>> 调用 ZhidaClient.get_methods()")
+            methods = client.get_methods()
+            _print_result(methods)
+    except Exception as exc:
+        logger.exception("分析站设备查询失败")
+        print(f"\n操作失败: {exc}\n")
+    finally:
+        client.close()
+
+
+def _handle_submit_by_csv_path(controller: AnalysisStationController) -> None:
+    """
+    功能:
+        处理按 CSV 路径直接提交分析任务的交互流程.
+    参数:
+        controller: AnalysisStationController 实例.
+    返回:
+        无.
+    """
+    instrument_options = {
+        "1": ("gc_ms", "GC-MS"),
+        "2": ("uplc_qtof", "UPLC_QTOF"),
+        "3": ("hplc", "HPLC"),
+    }
+    print("\n请选择仪器:")
+    for option, (_, instrument_name) in instrument_options.items():
+        print(f"  {option}. {instrument_name}")
+
+    instrument_choice = input("请输入仪器编号(1/2/3): ").strip()
+    if instrument_choice not in instrument_options:
+        print("无效选择, 请输入 1/2/3.")
+        return
+
+    instrument = instrument_options[instrument_choice][0]
+    csv_file_path = input("请输入CSV文件路径: ").strip()
+    print(
+        f"\n>>> 调用 submit_by_csv_path("
+        f"instrument={instrument!r}, csv_file_path={csv_file_path!r})"
+    )
+    result = controller.submit_by_csv_path(
+        instrument=instrument, csv_file_path=csv_file_path
+    )
+    _print_result(result)
+
+
+def _handle_transfer_to_shelf() -> None:
+    """
+    功能:
+        处理分析完成样品转运到货架的交互流程.
+    参数:
+        无.
+    返回:
+        无.
+    """
+    print("\n>>> 分析完成样品→货架转运")
+    print("说明: 轮询智达进样设备状态, 等待空闲后将样品从分析站转运到货架空位\n")
+
+    try:
+        from eit_agv.controller.agv_controller import AGVController
+
+        agv = AGVController(timeout=180000)
+
+        # 先展示当前货架状态, 方便用户确认目标空位.
+        agv.shelf_manager.print_status()
+
+        print("默认源托盘: analysis_station_tray_1-2")
+        source_input = input(
+            "请输入源托盘(多个用逗号分隔, 直接回车使用默认): "
+        ).strip()
+
+        if source_input == "":
+            source_trays = ["analysis_station_tray_1-2"]
+        else:
+            source_trays = [
+                item.strip() for item in source_input.split(",") if item.strip() != ""
+            ]
+
+        interval_input = input("请输入轮询间隔秒数 (留空默认30): ").strip()
+        try:
+            interval = float(interval_input) if interval_input else 30.0
+        except ValueError:
+            print("无效数值, 使用默认30秒.")
+            interval = 30.0
+
+        print(f"\n源托盘: {source_trays}")
+        print(f"轮询间隔: {interval} 秒")
+        print("\n开始执行分析站→货架样品转运...")
+
+        success = agv.transfer_analysis_to_shelf(
+            source_trays=source_trays,
+            poll_interval=interval,
+        )
+
+        _print_result(
+            {
+                "success": success,
+                "source_trays": source_trays,
+                "poll_interval": interval,
+            }
+        )
+
+        if success:
+            agv.shelf_manager.print_status()
+    except Exception as exc:
+        logger.exception("分析站到货架转运失败")
+        print(f"\n操作失败: {exc}\n")
+
+
+def interactive() -> None:
+    """
+    功能:
+        启动分析站交互式菜单.
+    参数:
+        无.
+    返回:
+        无.
+    """
+    configure_logging("DEBUG")
+    logger.info("初始化分析站控制器...")
+    controller = AnalysisStationController()
+
+    menu = (
+        "\n===== 分析站交互式测试菜单 =====\n"
+        "  1. run_analysis          - 统一分析入口(生成CSV并提交至仪器)\n"
+        "  2. process_gc_ms_results - GC-MS结果处理(积分+定性+报告)\n"
+        "  3. poll_analysis_run     - 轮询GC-MS分析任务状态并自动处理结果\n"
+        "  4. get_status            - 获取GC-MS设备当前状态\n"
+        "  5. get_methods           - 获取当前Project的方法列表\n"
+        "  6. calculate_yields      - 产率计算\n"
+        "  7. submit_by_csv_path    - 选择仪器并按CSV路径直接提交任务\n"
+        "  8. aggregate_task_data   - 实验数据归档汇总\n"
+        "  9. transfer_to_shelf     - 分析完成样品→货架转运(等待空闲后自动执行)\n"
+        "  0. 退出\n"
+        "================================"
+    )
+
+    while True:
+        print(menu)
+        choice = input("请选择功能编号: ").strip()
+
+        if choice == "0":
+            print("已退出测试.")
+            break
+
+        if choice not in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            print("无效选择, 请输入 0/1/2/3/4/5/6/7/8/9.")
+            continue
+
+        if choice in ("4", "5"):
+            _handle_device_query(controller, choice)
+            continue
+
+        if choice == "7":
+            _handle_submit_by_csv_path(controller)
+            continue
+
+        if choice == "9":
+            _handle_transfer_to_shelf()
+            continue
+
+        task_id = _prompt_task_id()
+
+        if choice == "1":
+            print(f"\n>>> 调用 run_analysis(task_id={task_id!r})")
+            result = controller.run_analysis(task_id=task_id)
+            _print_result(result)
+
+        elif choice == "2":
+            print(f"\n>>> 调用 process_gc_ms_results(task_id={task_id!r})")
+            result = controller.process_gc_ms_results(task_id=task_id)
+            _print_result(result)
+
+        elif choice == "3":
+            interval_input = input("请输入轮询间隔秒数 (留空默认30): ").strip()
+            try:
+                interval = float(interval_input) if interval_input else 30.0
+            except ValueError:
+                print("无效数值, 使用默认30秒.")
+                interval = 30.0
+
+            print(
+                f"\n>>> 调用 poll_analysis_run(task_id={task_id!r}, "
+                f"poll_interval={interval})"
+            )
+            result = controller.poll_analysis_run(
+                task_id=task_id, poll_interval=interval
+            )
+            _print_result(result)
+
+        elif choice == "6":
+            print(f"\n>>> 调用 calculate_yields(task_id={task_id!r})")
+            result = controller.calculate_yields(task_id=task_id)
+            _print_result(result)
+
+        elif choice == "8":
+            default_copy = controller._settings.archive_copy_raw_data
+            hint = "Y/n" if default_copy is True else "y/N"
+            copy_raw_input = input(
+                f"是否复制原始数据(.D目录)? ({hint}, 留空使用配置默认值): "
+            ).strip().lower()
+            if copy_raw_input == "":
+                copy_raw: Optional[bool] = None
+            else:
+                copy_raw = copy_raw_input in ("y", "yes")
+            print(
+                f"\n>>> 调用 aggregate_task_data("
+                f"task_id={task_id!r}, copy_raw_data={copy_raw})"
+            )
+            result = controller.aggregate_task_data(
+                task_id=task_id, copy_raw_data=copy_raw
+            )
+            _print_result(result)
+
+
+if __name__ == "__main__":
+    interactive()

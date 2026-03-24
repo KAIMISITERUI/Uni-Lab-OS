@@ -21,19 +21,18 @@ import openpyxl
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from pysmiles import PTE
-from pysmiles.read_smiles import read_smiles
-
-from .ecn import smiles2carbontypes, ecn_dct, class_dct
+from .ecn import class_dct, ecn_dct, molecule2carbontypes
 
 try:
     from rdkit import Chem
     from rdkit.Chem import Descriptors
     from rdkit.Chem import inchi as RDKitInchi
+    from rdkit.Chem import rdMolDescriptors
 except Exception:
     Chem = None
     Descriptors = None
     RDKitInchi = None
+    rdMolDescriptors = None
 
 logger = logging.getLogger(__name__)
 YIELD_CONFIG_SHEET_NAME = "GC产率计算"
@@ -63,6 +62,7 @@ class TargetProduct:
     smiles: str = ""
     formula: str = ""
     molecular_weight: Optional[float] = None
+    nominal_mass: Optional[int] = None
     ecn: float = 0.0
     expected_rt: Optional[float] = None
     applicable_experiments: List[int] = field(default_factory=list)
@@ -99,6 +99,7 @@ class YieldCalcConfig:
     is_smiles: str = ""
     is_formula: str = ""
     is_molecular_weight: Optional[float] = None
+    is_nominal_mass: Optional[int] = None
     is_ecn: float = 0.0
     is_expected_rt: Optional[float] = None
     is_amount: float = 0.0
@@ -137,7 +138,7 @@ class SampleYieldResult:
         molar_ratio: 摩尔比 (产物/内标).
         n_product_mol: 产物物质的量(mol).
         yield_percent: 产率(%).
-        match_method: 峰匹配方式, 可选 NIST命中/RT命中/分子量命中.
+        match_method: 峰匹配方式, 可选 NIST命中/RT命中/分子量命中(PIM,SS-HM,iHS-HM).
         confidence_level: 峰判定置信度分数, 0-100.
         confidence_score: 峰判定置信度分数值, 0-100.
         confidence_reason: 置信度说明.
@@ -187,7 +188,7 @@ class NISTLibraryQueryResult:
         存储 NIST 库收录查询结果.
     参数:
         has_record: 是否检索到对应记录.
-        query_mode: 命中模式, 可选 inchikey_exact/smiles_exact/formula_mw_fallback/not_found.
+        query_mode: 命中模式, 可选 inchikey_exact/smiles_exact/formula_nominal_mass_fallback/not_found.
         reference_names: 命中记录中的化合物名称集合.
         reference_formulas: 命中记录中的分子式集合.
         reference_mw: 命中记录中的分子量集合.
@@ -402,6 +403,166 @@ class YieldCalculator:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _parse_smiles_to_molecule(smiles: str) -> Tuple[str, Any]:
+        """
+        功能:
+            使用 RDKit 解析 SMILES, 并返回规范化字符串与分子对象.
+        参数:
+            smiles: 化合物 SMILES 字符串.
+        返回:
+            Tuple[str, Any], 规范化后的 SMILES 与 RDKit Mol 对象.
+        """
+        smiles_text = YieldCalculator._normalize_smiles(smiles)
+        if smiles_text == "":
+            raise ValueError("SMILES 不能为空")
+        if Chem is None:
+            raise RuntimeError("未安装 RDKit, 无法解析 SMILES")
+
+        try:
+            molecule = Chem.MolFromSmiles(smiles_text)
+        except Exception as exc:
+            raise ValueError(f"SMILES 解析失败: {smiles_text}, 错误={exc}") from exc
+
+        if molecule is None:
+            raise ValueError(f"SMILES 解析失败: {smiles_text}")
+
+        return smiles_text, molecule
+
+    @staticmethod
+    def _formula_from_molecule(molecule: Any) -> str:
+        """
+        功能:
+            根据 RDKit 分子对象计算分子式.
+        参数:
+            molecule: RDKit Mol 对象.
+        返回:
+            str, Hill 排序的分子式.
+        """
+        if rdMolDescriptors is None:
+            raise RuntimeError("未安装 RDKit, 无法计算分子式")
+        return str(rdMolDescriptors.CalcMolFormula(molecule))
+
+    @staticmethod
+    def _molecular_weight_from_molecule(molecule: Any) -> float:
+        """
+        功能:
+            根据 RDKit 分子对象计算平均分子量.
+        参数:
+            molecule: RDKit Mol 对象.
+        返回:
+            float, 平均分子量.
+        """
+        if Descriptors is None:
+            raise RuntimeError("未安装 RDKit, 无法计算分子量")
+        return float(Descriptors.MolWt(molecule))
+
+    @staticmethod
+    def _nominal_mass_from_molecule(molecule: Any) -> int:
+        """
+        功能:
+            根据 RDKit 分子对象计算名义质量.
+        参数:
+            molecule: RDKit Mol 对象.
+        返回:
+            int, 名义质量.
+        """
+        if rdMolDescriptors is None:
+            raise RuntimeError("未安装 RDKit, 无法计算名义质量")
+        exact_mass = rdMolDescriptors.CalcExactMolWt(molecule)
+        return int(round(float(exact_mass)))
+
+    @staticmethod
+    def _calculate_ecn_from_molecule(molecule: Any) -> float:
+        """
+        功能:
+            根据 RDKit 分子对象计算有效碳数.
+        参数:
+            molecule: RDKit Mol 对象.
+        返回:
+            float, ECN 值.
+        """
+        ecn = 0.0
+        for ary, typ in molecule2carbontypes(molecule):
+            if typ == "alcohol":
+                key = (ary + " " + typ) if ary else typ
+                ecn += ecn_dct[key]
+            else:
+                ecn += ecn_dct[class_dct[typ]]
+        return ecn
+
+    @staticmethod
+    def _describe_compound_from_smiles(
+        smiles: str, compound_label: str
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            统一解析化合物 SMILES, 计算分子式, 分子量, 名义质量和 ECN.
+        参数:
+            smiles: 化合物 SMILES 字符串.
+            compound_label: 用于错误信息的化合物标签.
+        返回:
+            Dict[str, Any], 包含 smiles, formula, molecular_weight, nominal_mass, ecn.
+        """
+        try:
+            smiles_text, molecule = YieldCalculator._parse_smiles_to_molecule(smiles)
+            return {
+                "smiles": smiles_text,
+                "formula": YieldCalculator._formula_from_molecule(molecule),
+                "molecular_weight": YieldCalculator._molecular_weight_from_molecule(molecule),
+                "nominal_mass": YieldCalculator._nominal_mass_from_molecule(molecule),
+                "ecn": YieldCalculator._calculate_ecn_from_molecule(molecule),
+            }
+        except Exception as exc:
+            raise ValueError(f"{compound_label} 结构信息计算失败: {exc}") from exc
+
+    @staticmethod
+    def _log_compound_summary(
+        compound_type: str, compound_name: str, properties: Dict[str, Any]
+    ) -> None:
+        """
+        功能:
+            统一记录化合物分子描述摘要日志.
+        参数:
+            compound_type: 化合物类型, 例如 内标 或 产物.
+            compound_name: 化合物名称.
+            properties: 化合物描述信息字典.
+        返回:
+            无.
+        """
+        display_name = str(compound_name).strip() or "未命名"
+        logger.info(
+            "%s '%s': 分子式=%s, 平均分子量=%s, 名义质量=%s, ECN=%.2f",
+            compound_type,
+            display_name,
+            properties["formula"],
+            round(properties["molecular_weight"], 4),
+            properties["nominal_mass"],
+            properties["ecn"],
+        )
+
+    @staticmethod
+    def _apply_target_product_properties(product: TargetProduct) -> None:
+        """
+        功能:
+            根据产物 SMILES 填充分子描述字段.
+        参数:
+            product: 目标产物对象.
+        返回:
+            无.
+        """
+        product_name = str(product.name).strip() or "未命名产物"
+        properties = YieldCalculator._describe_compound_from_smiles(
+            product.smiles,
+            f"产物 '{product_name}'",
+        )
+        product.smiles = properties["smiles"]
+        product.formula = properties["formula"]
+        product.molecular_weight = properties["molecular_weight"]
+        product.nominal_mass = properties["nominal_mass"]
+        product.ecn = properties["ecn"]
+        YieldCalculator._log_compound_summary("产物", product_name, properties)
+
+    @staticmethod
     def calculate_ecn(smiles: str) -> float:
         """
         功能:
@@ -411,15 +572,11 @@ class YieldCalculator:
         返回:
             float: ECN 值.
         """
-        ecn = 0.0
-        for ary, typ in smiles2carbontypes(smiles):
-            if typ == 'alcohol':
-                # 醇类需要区分伯/仲/叔
-                key = (ary + ' ' + typ) if ary else typ
-                ecn += ecn_dct[key]
-            else:
-                ecn += ecn_dct[class_dct[typ]]
-        return ecn
+        smiles_text = YieldCalculator._normalize_smiles(smiles)
+        if smiles_text == "":
+            return 0.0
+        _, molecule = YieldCalculator._parse_smiles_to_molecule(smiles_text)
+        return YieldCalculator._calculate_ecn_from_molecule(molecule)
 
     @staticmethod
     def smiles_to_formula(smiles: str) -> str:
@@ -431,81 +588,45 @@ class YieldCalculator:
         返回:
             str: 分子式, 如 "C13H13N".
         """
-        graph = read_smiles(smiles, explicit_hydrogen=True)
-        atom_counts: Dict[str, int] = {}
-        for node in graph.nodes:
-            elem = graph.nodes[node].get('element', '')
-            if elem:
-                atom_counts[elem] = atom_counts.get(elem, 0) + 1
-
-        # Hill 排序: C 在前, H 次之, 其余按字母序
-        parts = []
-        for elem in ['C', 'H']:
-            if elem in atom_counts:
-                count = atom_counts.pop(elem)
-                parts.append(elem + (str(count) if count > 1 else ""))
-        for elem in sorted(atom_counts.keys()):
-            count = atom_counts[elem]
-            parts.append(elem + (str(count) if count > 1 else ""))
-        return "".join(parts)
+        smiles_text = YieldCalculator._normalize_smiles(smiles)
+        if smiles_text == "":
+            return ""
+        _, molecule = YieldCalculator._parse_smiles_to_molecule(smiles_text)
+        return YieldCalculator._formula_from_molecule(molecule)
 
     @staticmethod
     def smiles_to_molecular_weight(smiles: str) -> Optional[float]:
         """
         功能:
             从 SMILES 计算分子量.
-            计算顺序:
-            1. 优先使用 RDKit 的 MolWt, 覆盖元素更完整.
-            2. RDKit 不可用或解析失败时, 回退到 pysmiles + PTE 原子量累加.
+            使用 RDKit 的 MolWt 计算平均分子量.
         参数:
             smiles: 化合物 SMILES 字符串.
         返回:
             Optional[float]: 分子量(Da), 失败时返回 None.
         """
-        smiles_text = str(smiles).strip()
+        smiles_text = YieldCalculator._normalize_smiles(smiles)
         if smiles_text == "":
             return None
+        _, molecule = YieldCalculator._parse_smiles_to_molecule(smiles_text)
+        return YieldCalculator._molecular_weight_from_molecule(molecule)
 
-        if Chem is not None and Descriptors is not None:
-            try:
-                mol = Chem.MolFromSmiles(smiles_text)
-                if mol is not None:
-                    return float(Descriptors.MolWt(mol))
-                logger.warning("RDKit 无法解析 SMILES, 将回退 PTE 计算: %s", smiles_text)
-            except Exception as exc:
-                logger.warning("RDKit 计算分子量失败, 将回退 PTE 计算: %s, 错误=%s", smiles_text, exc)
-
-        try:
-            graph = read_smiles(smiles_text, explicit_hydrogen=True)
-        except Exception as exc:
-            logger.warning("SMILES 解析失败, 无法计算分子量: %s, 错误=%s", smiles_text, exc)
+    @staticmethod
+    def smiles_to_nominal_mass(smiles: str) -> Optional[int]:
+        """
+        功能:
+            从 SMILES 计算名义质量.
+            使用 RDKit 计算单同位素精确质量, 再取最接近的整数.
+        参数:
+            smiles: 化合物 SMILES 字符串.
+        返回:
+            Optional[int]: 名义质量(Da), 失败时返回 None.
+        """
+        smiles_text = YieldCalculator._normalize_smiles(smiles)
+        if smiles_text == "":
             return None
-
-        total_weight = 0.0
-        missing_elements: Set[str] = set()
-        for node in graph.nodes:
-            element_symbol = str(graph.nodes[node].get("element", "")).strip()
-            if element_symbol == "":
-                continue
-            pte_entry = PTE.get(element_symbol)
-            if pte_entry is None:
-                missing_elements.add(element_symbol)
-                continue
-            atomic_mass = pte_entry.get("AtomicMass")
-            if atomic_mass is None or atomic_mass == "":
-                missing_elements.add(element_symbol)
-                continue
-            total_weight += float(atomic_mass)
-
-        if len(missing_elements) > 0:
-            logger.warning(
-                "分子量计算失败, 缺少元素原子量: SMILES=%s, 元素=%s",
-                smiles_text,
-                sorted(missing_elements),
-            )
-            return None
-
-        return total_weight
+        _, molecule = YieldCalculator._parse_smiles_to_molecule(smiles_text)
+        return YieldCalculator._nominal_mass_from_molecule(molecule)
 
     @staticmethod
     def parse_experiment_range(range_str: str) -> List[int]:
@@ -783,28 +904,19 @@ class YieldCalculator:
             raise ValueError(f"{YIELD_CONFIG_SHEET_NAME} Sheet 中未找到目标产物列表")
 
         # ---------- 4. 计算分子式和 ECN ----------
-        is_formula = self.smiles_to_formula(is_smiles)
-        is_molecular_weight = self.smiles_to_molecular_weight(is_smiles)
-        is_ecn = self.calculate_ecn(is_smiles)
-        logger.info(
-            "内标 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
-            is_name,
-            is_formula,
-            round(is_molecular_weight, 4) if is_molecular_weight is not None else "未知",
-            is_ecn,
+        is_properties = self._describe_compound_from_smiles(
+            is_smiles,
+            f"内标 '{str(is_name).strip() or '未命名内标'}'",
         )
+        is_smiles = is_properties["smiles"]
+        is_formula = is_properties["formula"]
+        is_molecular_weight = is_properties["molecular_weight"]
+        is_nominal_mass = is_properties["nominal_mass"]
+        is_ecn = is_properties["ecn"]
+        self._log_compound_summary("内标", is_name, is_properties)
 
         for p in products:
-            p.formula = self.smiles_to_formula(p.smiles)
-            p.molecular_weight = self.smiles_to_molecular_weight(p.smiles)
-            p.ecn = self.calculate_ecn(p.smiles)
-            logger.info(
-                "产物 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
-                p.name,
-                p.formula,
-                round(p.molecular_weight, 4) if p.molecular_weight is not None else "未知",
-                p.ecn,
-            )
+            self._apply_target_product_properties(p)
 
         # ---------- 5. 推算内标摩尔量 ----------
         is_moles = self._calculate_is_moles(is_name, is_amount, chemical_list_path)
@@ -816,6 +928,7 @@ class YieldCalculator:
             is_smiles=is_smiles,
             is_formula=is_formula,
             is_molecular_weight=is_molecular_weight,
+            is_nominal_mass=is_nominal_mass,
             is_ecn=is_ecn,
             is_expected_rt=is_expected_rt,
             is_amount=is_amount,
@@ -994,28 +1107,19 @@ class YieldCalculator:
                 raise ValueError(f"{YIELD_CONFIG_SHEET_NAME} Sheet 中未找到目标产物列表")
 
             # ---------- 4. 计算分子式和 ECN ----------
-            is_formula = self.smiles_to_formula(is_smiles)
-            is_molecular_weight = self.smiles_to_molecular_weight(is_smiles)
-            is_ecn = self.calculate_ecn(is_smiles)
-            logger.info(
-                "内标 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
-                is_name,
-                is_formula,
-                round(is_molecular_weight, 4) if is_molecular_weight is not None else "未知",
-                is_ecn,
+            is_properties = self._describe_compound_from_smiles(
+                is_smiles,
+                f"内标 '{str(is_name).strip() or '未命名内标'}'",
             )
+            is_smiles = is_properties["smiles"]
+            is_formula = is_properties["formula"]
+            is_molecular_weight = is_properties["molecular_weight"]
+            is_nominal_mass = is_properties["nominal_mass"]
+            is_ecn = is_properties["ecn"]
+            self._log_compound_summary("内标", is_name, is_properties)
 
             for product in products:
-                product.formula = self.smiles_to_formula(product.smiles)
-                product.molecular_weight = self.smiles_to_molecular_weight(product.smiles)
-                product.ecn = self.calculate_ecn(product.smiles)
-                logger.info(
-                    "产物 '%s': 分子式=%s, 分子量=%s, ECN=%.2f",
-                    product.name,
-                    product.formula,
-                    round(product.molecular_weight, 4) if product.molecular_weight is not None else "未知",
-                    product.ecn,
-                )
+                self._apply_target_product_properties(product)
 
             # ---------- 5. 推算内标摩尔量 ----------
             is_moles = self._calculate_is_moles(is_name, is_amount, chemical_list_path)
@@ -1025,6 +1129,7 @@ class YieldCalculator:
                 is_smiles=is_smiles,
                 is_formula=is_formula,
                 is_molecular_weight=is_molecular_weight,
+                is_nominal_mass=is_nominal_mass,
                 is_ecn=is_ecn,
                 is_expected_rt=is_expected_rt,
                 is_amount=is_amount,
@@ -1214,15 +1319,12 @@ class YieldCalculator:
         if smiles_text == "":
             return ""
 
-        if Chem is None or RDKitInchi is None:
-            logger.warning("RDKit 不可用, 无法生成 InChIKey: %s", smiles_text)
+        if RDKitInchi is None:
+            logger.warning("RDKit InChI 模块不可用, 无法生成 InChIKey: %s", smiles_text)
             return ""
 
         try:
-            molecule = Chem.MolFromSmiles(smiles_text)
-            if molecule is None:
-                logger.warning("SMILES 解析失败, 无法生成 InChIKey: %s", smiles_text)
-                return ""
+            _, molecule = self._parse_smiles_to_molecule(smiles_text)
             inchikey = RDKitInchi.MolToInchiKey(molecule)
         except Exception as exc:
             logger.warning("生成 InChIKey 失败: SMILES=%s, 错误=%s", smiles_text, exc)
@@ -1282,7 +1384,7 @@ class YieldCalculator:
     def _ensure_nist_library_index(self) -> None:
         """
         功能:
-            懒加载 NIST MSP 索引, 支持按 InChIKey/SMILES/Formula+MW 查询收录状态.
+            懒加载 NIST MSP 索引, 支持按 InChIKey/SMILES/Formula+Nominal Mass 查询收录状态.
         参数:
             无.
         返回:
@@ -1372,16 +1474,16 @@ class YieldCalculator:
         self,
         smiles: str,
         formula: str,
-        target_mw: Optional[float],
+        target_nominal_mass: Optional[int],
     ) -> NISTLibraryQueryResult:
         """
         功能:
             查询目标化合物是否在 NIST 库中收录.
-            查询顺序: InChIKey 精确命中 -> SMILES 精确命中 -> Formula+MW 回退命中.
+            查询顺序: InChIKey 精确命中 -> SMILES 精确命中 -> Formula+Nominal Mass 回退命中.
         参数:
             smiles: 目标 SMILES.
             formula: 目标分子式.
-            target_mw: 目标分子量.
+            target_nominal_mass: 目标名义质量.
         返回:
             NISTLibraryQueryResult, 查询结果对象.
         """
@@ -1425,7 +1527,7 @@ class YieldCalculator:
                 item_mw = item.get("mw")
                 if item_mw is None:
                     continue
-                if self._is_mass_match(float(item_mw), target_mw) is True:
+                if self._is_mass_match(float(item_mw), target_nominal_mass) is True:
                     matched_entries.append(item)
 
             if len(matched_entries) > 0:
@@ -1434,7 +1536,7 @@ class YieldCalculator:
                 mw_values = sorted({float(item.get("mw")) for item in matched_entries if item.get("mw") is not None})
                 return NISTLibraryQueryResult(
                     has_record=True,
-                    query_mode="formula_mw_fallback",
+                    query_mode="formula_nominal_mass_fallback",
                     reference_names=names,
                     reference_formulas=formulas,
                     reference_mw=mw_values,
@@ -1560,26 +1662,25 @@ class YieldCalculator:
             return self._clip_zero_to_one(raw_confidence / 2.0)
         return self._clip_zero_to_one(raw_confidence)
 
-    def _is_mass_match(self, observed_mw: Optional[float], target_mw: Optional[float]) -> bool:
+    def _is_mass_match(self, observed_mw: Optional[float], target_nominal_mass: Optional[int]) -> bool:
         """
         功能:
-            判断观测分子量与目标分子量是否命中.
+            判断观测质量与目标名义质量是否命中.
             命中规则:
-            1. 两者都存在时, 分别四舍五入为整数.
-            2. 仅当整数完全相等时判定命中.
+            1. 任一侧缺失时, 直接返回 False.
+            2. 观测质量取整后, 与目标名义质量完全相等时判定命中.
         参数:
-            observed_mw: 观测分子量.
-            target_mw: 目标分子量.
+            observed_mw: 观测质量.
+            target_nominal_mass: 目标名义质量.
         返回:
             bool: 命中返回 True.
         """
         if observed_mw is None:
             return False
-        if target_mw is None:
+        if target_nominal_mass is None:
             return False
         observed_int = int(round(observed_mw))
-        target_int = int(round(target_mw))
-        return observed_int == target_int
+        return observed_int == int(target_nominal_mass)
 
     def _is_name_matched(
         self,
@@ -1840,6 +1941,7 @@ class YieldCalculator:
         base_match_method: str,
         nist_target_matched: bool,
         nist_mw_matched: bool,
+        mass_match_methods: Optional[List[str]] = None,
     ) -> str:
         """
         功能:
@@ -1848,6 +1950,7 @@ class YieldCalculator:
             base_match_method: 内部匹配路径标记.
             nist_target_matched: 当前峰的 NIST 候选是否支持目标.
             nist_mw_matched: 当前峰的 NIST 候选分子量是否命中目标.
+            mass_match_methods: 分子量命中的预测方法列表, 如 ["PIM", "SS-HM", "iHS-HM"].
         返回:
             str: 匹配方式文本.
         """
@@ -1858,6 +1961,9 @@ class YieldCalculator:
             return "NIST命中"
         if base_match_method == "rt":
             return "RT命中"
+        # 标注具体命中的预测方法种类
+        if mass_match_methods is not None and len(mass_match_methods) > 0:
+            return f"分子量命中({','.join(mass_match_methods)})"
         return "分子量命中"
 
     def _build_confidence(
@@ -2108,7 +2214,7 @@ class YieldCalculator:
         match_method: str,
         target_name: str,
         target_formula: str,
-        target_mw: Optional[float],
+        target_nominal_mass: Optional[int],
         nist_query: NISTLibraryQueryResult,
         expected_rt: Optional[float] = None,
     ) -> PeakDecision:
@@ -2120,7 +2226,7 @@ class YieldCalculator:
             match_method: 匹配路径标记.
             target_name: 目标化合物名称.
             target_formula: 目标分子式.
-            target_mw: 目标分子量.
+            target_nominal_mass: 目标名义质量.
             nist_query: NIST 收录查询结果.
         返回:
             PeakDecision: 候选峰判定对象.
@@ -2130,7 +2236,7 @@ class YieldCalculator:
         matched_methods: List[str] = []
         for method_name, method_data in predictions.items():
             method_mw = method_data.get("mw")
-            if self._is_mass_match(method_mw, target_mw) is True:
+            if self._is_mass_match(method_mw, target_nominal_mass) is True:
                 matched_methods.append(method_name)
 
         best_hit: Optional[NISTHitInfo] = None
@@ -2146,7 +2252,7 @@ class YieldCalculator:
             formula_matched = False
             if target_formula != "" and hit.formula != "":
                 formula_matched = (hit.formula == target_formula)
-            mw_matched = self._is_mass_match(hit.molecular_weight, target_mw)
+            mw_matched = self._is_mass_match(hit.molecular_weight, target_nominal_mass)
 
             if name_matched is True or formula_matched is True:
                 nist_target_matched = True
@@ -2206,6 +2312,7 @@ class YieldCalculator:
                 base_match_method=match_method,
                 nist_target_matched=nist_target_matched,
                 nist_mw_matched=nist_mw_matched,
+                mass_match_methods=matched_methods,
             ),
             fid_rt=self._parse_opt_float(row.get("FID保留时间(min)")),
             fid_area=self._parse_opt_float(row.get("FID峰面积")),
@@ -2286,7 +2393,7 @@ class YieldCalculator:
         expected_rt: Optional[float],
         target_name: str,
         target_formula: str,
-        target_mw: Optional[float],
+        target_nominal_mass: Optional[int],
         nist_query: NISTLibraryQueryResult,
         allow_multiple: bool = False,
     ) -> List[PeakDecision]:
@@ -2302,7 +2409,7 @@ class YieldCalculator:
             expected_rt: 目标预期保留时间.
             target_name: 目标化合物名称.
             target_formula: 目标分子式.
-            target_mw: 目标分子量.
+            target_nominal_mass: 目标名义质量.
             nist_query: NIST 收录查询结果.
             allow_multiple: 是否允许返回多个候选峰.
         返回:
@@ -2320,7 +2427,7 @@ class YieldCalculator:
                     match_method="rt",
                     target_name=target_name,
                     target_formula=target_formula,
-                    target_mw=target_mw,
+                    target_nominal_mass=target_nominal_mass,
                     nist_query=nist_query,
                     expected_rt=expected_rt,
                 )
@@ -2336,7 +2443,7 @@ class YieldCalculator:
                 match_method="mass",
                 target_name=target_name,
                 target_formula=target_formula,
-                target_mw=target_mw,
+                target_nominal_mass=target_nominal_mass,
                 nist_query=nist_query,
                 expected_rt=None,
             )
@@ -2481,7 +2588,7 @@ class YieldCalculator:
         is_nist_query = self._query_nist_library_by_smiles(
             smiles=config.is_smiles,
             formula=config.is_formula,
-            target_mw=config.is_molecular_weight,
+            target_nominal_mass=config.is_nominal_mass,
         )
         config.is_nist_has_record = is_nist_query.has_record
         config.is_nist_query_mode = is_nist_query.query_mode
@@ -2492,7 +2599,7 @@ class YieldCalculator:
             product_nist_query = self._query_nist_library_by_smiles(
                 smiles=product.smiles,
                 formula=product.formula,
-                target_mw=product.molecular_weight,
+                target_nominal_mass=product.nominal_mass,
             )
             product.nist_has_record = product_nist_query.has_record
             product.nist_query_mode = product_nist_query.query_mode
@@ -2517,7 +2624,7 @@ class YieldCalculator:
                 expected_rt=config.is_expected_rt,
                 target_name=config.is_name,
                 target_formula=config.is_formula,
-                target_mw=config.is_molecular_weight,
+                target_nominal_mass=config.is_nominal_mass,
                 nist_query=is_nist_query,
                 allow_multiple=False,
             )
@@ -2572,7 +2679,7 @@ class YieldCalculator:
                     expected_rt=product.expected_rt,
                     target_name=product.name,
                     target_formula=product.formula,
-                    target_mw=product.molecular_weight,
+                    target_nominal_mass=product.nominal_mass,
                     nist_query=product_nist_query,
                     allow_multiple=True,
                 )
@@ -2765,6 +2872,7 @@ class YieldCalculator:
                 "内标分子量(Da)",
                 round(config.is_molecular_weight, 4) if config.is_molecular_weight is not None else "",
             ),
+            ("内标名义质量(Da)", config.is_nominal_mass if config.is_nominal_mass is not None else ""),
             ("内标ECN", round(config.is_ecn, 4)),
             ("内标NIST收录", "是" if config.is_nist_has_record is True else "否"),
             ("内标NIST查询模式", config.is_nist_query_mode),
@@ -2794,6 +2902,7 @@ class YieldCalculator:
             rows.append((f"产物{i} SMILES", p.smiles))
             rows.append((f"产物{i} 分子式", p.formula))
             rows.append((f"产物{i} 分子量(Da)", round(p.molecular_weight, 4) if p.molecular_weight is not None else ""))
+            rows.append((f"产物{i} 名义质量(Da)", p.nominal_mass if p.nominal_mass is not None else ""))
             rows.append((f"产物{i} ECN", round(p.ecn, 4)))
             rows.append((f"产物{i} NIST收录", "是" if p.nist_has_record is True else "否"))
             rows.append((f"产物{i} NIST查询模式", p.nist_query_mode))

@@ -192,18 +192,25 @@ class GCMSDataReader:
         start_time: float,
         end_time: float,
         avg_scans: int = 3,
+        bg_subtract: bool = False,
+        bg_height_pct: float = 0.0,
+        bg_avg_scans: Optional[int] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         功能:
             读取峰边界范围内 TIC 强度最高的质谱 (apex), 并对附近扫描取平均以提升信噪比.
-            相比 read_ms_spectra_at_rt 只取最近单次扫描, 本方法:
+            可选背景扣除: 在峰边界或指定高度百分比处采样背景谱, 从 apex 谱中扣除.
             1. 在 [start_time, end_time] 内找到 TIC 最大的扫描 (真正的 apex).
             2. 以 apex 为中心, 平均 avg_scans 个扫描, 降低噪声.
+            3. (可选) 采样背景谱并从 apex 谱中减去, 去除柱流失和溶剂干扰.
         参数:
             d_dir: .D 目录路径.
             start_time: 峰起始时间 (min).
             end_time: 峰结束时间 (min).
             avg_scans: 以 apex 为中心的平均扫描数 (奇数, 默认 3).
+            bg_subtract: 是否启用背景扣除.
+            bg_height_pct: 背景采样高度百分比 (0-50). 0=峰边界采样, >0=在峰高的X%处采样.
+            bg_avg_scans: 背景平均扫描数, None 则跟随 avg_scans.
         返回:
             Tuple[np.ndarray, np.ndarray]: (m/z 数组, 平均强度数组).
         """
@@ -215,6 +222,7 @@ class GCMSDataReader:
             raise FileNotFoundError(f"未找到 data.ms: {d_dir}")
 
         scan_times = ms_file.xlabels  # shape: (n_scans,)
+        n_scans = ms_file.data.shape[0]
 
         # 找到峰边界内的扫描索引范围
         mask = (scan_times >= start_time) & (scan_times <= end_time)
@@ -237,20 +245,128 @@ class GCMSDataReader:
         # 以 apex 为中心取 avg_scans 个扫描做平均
         half = avg_scans // 2
         avg_start = max(0, apex_idx - half)
-        avg_end = min(ms_file.data.shape[0], apex_idx + half + 1)
+        avg_end = min(n_scans, apex_idx + half + 1)
 
-        avg_spectrum = ms_file.data[avg_start:avg_end].mean(axis=0)  # shape: (n_mz,)
+        apex_spectrum = ms_file.data[avg_start:avg_end].mean(axis=0)  # shape: (n_mz,)
         mz_values = ms_file.ylabels  # shape: (n_mz,)
-
-        # 过滤零强度离子
-        nonzero = avg_spectrum > 0
 
         logger.debug(
             "峰 apex 扫描: idx=%d, RT=%.3f, 平均 %d 个扫描 [%d:%d]",
             apex_idx, scan_times[apex_idx], avg_end - avg_start, avg_start, avg_end,
         )
 
-        return mz_values[nonzero], avg_spectrum[nonzero]
+        # 背景扣除
+        if bg_subtract is True:
+            bg_n = bg_avg_scans if bg_avg_scans is not None else avg_scans
+            bg_half = bg_n // 2
+
+            bg_spectrum = self._extract_background_spectrum(
+                ms_file, boundary_indices, tic_in_range,
+                apex_idx, apex_local_idx,
+                bg_height_pct, bg_half, n_scans,
+            )
+
+            if bg_spectrum is not None:
+                # 在全 m/z 维度上扣除, 负值截断为 0
+                apex_spectrum = np.maximum(apex_spectrum - bg_spectrum, 0.0)
+                logger.debug(
+                    "背景扣除完成, 非零离子数: %d / %d",
+                    np.count_nonzero(apex_spectrum), len(apex_spectrum),
+                )
+
+                # 扣除后全为零则回退到原始谱
+                if np.all(apex_spectrum == 0):
+                    logger.warning(
+                        "背景扣除后质谱全为零, 回退使用原始谱 (RT=%.3f)",
+                        scan_times[apex_idx],
+                    )
+                    apex_spectrum = ms_file.data[avg_start:avg_end].mean(axis=0)
+
+        # 过滤零强度离子
+        nonzero = apex_spectrum > 0
+        return mz_values[nonzero], apex_spectrum[nonzero]
+
+    def _extract_background_spectrum(
+        self,
+        ms_file,
+        boundary_indices: np.ndarray,
+        tic_in_range: np.ndarray,
+        apex_idx: int,
+        apex_local_idx: int,
+        bg_height_pct: float,
+        bg_half: int,
+        n_scans: int,
+    ) -> Optional[np.ndarray]:
+        """
+        功能:
+            从峰的左右两侧提取背景质谱. 支持两种采样模式:
+            - bg_height_pct == 0: 在峰边界 (start/end) 处采样.
+            - bg_height_pct > 0: 在峰高的指定百分比处采样.
+            左右背景取平均, 仅一侧有效时使用单侧.
+        参数:
+            ms_file: rainbow 解析的 MS 文件对象.
+            boundary_indices: 峰边界内的全局扫描索引数组.
+            tic_in_range: 峰边界内各扫描的 TIC 值.
+            apex_idx: apex 的全局扫描索引.
+            apex_local_idx: apex 在 boundary_indices 中的局部索引.
+            bg_height_pct: 背景采样高度百分比 (0=边界, >0=百分比高度).
+            bg_half: 背景平均的半窗口大小 (单侧扫描数).
+            n_scans: 总扫描数.
+        返回:
+            Optional[np.ndarray]: 背景质谱 (全 m/z 维度), 无法提取时返回 None.
+        """
+        left_idx = None
+        right_idx = None
+
+        if bg_height_pct <= 0:
+            # 模式 A: 在峰边界处采样
+            left_idx = boundary_indices[0]       # start_time 处
+            right_idx = boundary_indices[-1]      # end_time 处
+        else:
+            # 模式 B: 在峰高的 X% 处采样
+            apex_tic = tic_in_range[apex_local_idx]
+            baseline_tic = min(tic_in_range[0], tic_in_range[-1])  # 边界处 TIC 作为基线
+            target_tic = baseline_tic + bg_height_pct / 100.0 * (apex_tic - baseline_tic)
+
+            # 左侧: 从边界起点到 apex 之间找最接近 target_tic 的扫描
+            left_region = tic_in_range[:apex_local_idx]
+            if len(left_region) > 0:
+                left_local = int(np.argmin(np.abs(left_region - target_tic)))
+                left_idx = boundary_indices[left_local]
+
+            # 右侧: 从 apex 到边界终点之间找最接近 target_tic 的扫描
+            right_region = tic_in_range[apex_local_idx + 1:]
+            if len(right_region) > 0:
+                right_local = int(np.argmin(np.abs(right_region - target_tic)))
+                right_idx = boundary_indices[apex_local_idx + 1 + right_local]
+
+        # 提取左侧背景谱 (以 left_idx 为中心取 bg_half 个扫描)
+        bg_spectra = []
+        if left_idx is not None:
+            l_start = max(0, left_idx - bg_half)
+            l_end = min(n_scans, left_idx + bg_half + 1)
+            if l_end > l_start:
+                bg_spectra.append(ms_file.data[l_start:l_end].mean(axis=0))
+
+        # 提取右侧背景谱
+        if right_idx is not None:
+            r_start = max(0, right_idx - bg_half)
+            r_end = min(n_scans, right_idx + bg_half + 1)
+            if r_end > r_start:
+                bg_spectra.append(ms_file.data[r_start:r_end].mean(axis=0))
+
+        if len(bg_spectra) == 0:
+            logger.warning("无法提取有效背景谱, 跳过背景扣除")
+            return None
+
+        # 左右背景平均
+        bg_spectrum = np.mean(bg_spectra, axis=0)
+        logger.debug(
+            "背景采样: %d 侧有效, 模式=%s",
+            len(bg_spectra),
+            "边界" if bg_height_pct <= 0 else f"{bg_height_pct:.0f}%高度",
+        )
+        return bg_spectrum
 
     def read_sample_info(self, d_dir: Path) -> Dict:
         """

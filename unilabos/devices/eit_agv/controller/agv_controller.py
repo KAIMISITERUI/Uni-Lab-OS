@@ -20,6 +20,8 @@ from ..config.agv_config import (
     TASK_STATUS_MAP,
     AGV_QUERY_MAX_RETRIES,
     AGV_QUERY_RETRY_DELAY,
+    AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
+    AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
 )
 from ..config.arm_config import ENABLE_GRIP_DETECTION
 from ..data.shelf_manager import ShelfManager
@@ -1153,31 +1155,37 @@ class AGVController:
                 logger.info("等待5分钟后重试...")
                 self._interruptible_sleep(300)
 
-    def auto_charge_pp5_cp6_check(self):
+    def auto_charge_pp5_cp6_check(self, low_battery_pct=AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT):
         """
         功能:
             基于PP5待命点和CP6充电站的自动充电检查函数.
             前置守卫:
                 1. AGV导航任务正在运行时, 直接跳过本次检查.
             主要逻辑:
-                - 在PP5且电量<50%时, 进入CP6充电.
-                - 在PP5且电量>=50%时, 继续在PP5待命.
+                - 在PP5且电量<low_battery_pct时, 进入CP6充电.
+                - 在PP5且电量>=low_battery_pct时, 继续在PP5待命.
                 - 在CP6且电量>90%时, 返回PP5待命.
-                - 在CP6且电量<=90%时, 继续在CP6待命.
+                - 在CP6且电量<low_battery_pct且未在充电时, 执行CP6->PP5->CP6充电循环.
+                - 在CP6且电量<low_battery_pct且已在充电时, 跳过进出站.
+                - 在CP6且电量在low_battery_pct~90%之间时, 继续在CP6待命.
                 - 既不在PP5也不在CP6时, 视为工作途中并跳过本次检查.
         参数:
-            无
+            low_battery_pct: 低电量阈值(百分比), 默认80, 即电量低于80%触发充电.
         返回:
             dict, 包含检查结果的字典:
                 - status: "success" / "skipped" / "error"
                 - action: 执行的动作标识
                 - battery_level: 电池电量, 查询成功时包含
                 - current_station: 当前站点ID, 查询成功时包含
+                - charging: 是否正在充电, 相关分支时包含
                 - message: 详细信息
         """
         logger.info("开始PP5/CP6自动充电检查")
 
         try:
+            # 将百分比阈值转为小数, 方便与battery_level比较
+            low_threshold = low_battery_pct / 100
+
             # 导航任务忙碌时直接跳过, 避免监控逻辑和现场任务争抢控制权.
             nav_status = self.query_nav_task_status()
             if nav_status is not None:
@@ -1227,11 +1235,11 @@ class AGVController:
                     "message": "查询电池电量失败, 返回结果缺少battery_level"
                 }
 
-            logger.info(f"当前电池电量: {battery_level * 100:.1f}%")
+            logger.info(f"当前电池电量: {battery_level * 100:.1f}% (低电量阈值: {low_battery_pct}%)")
 
             if current_station_id == "PP5":
-                if battery_level < 0.5:
-                    logger.info("步骤3: AGV在PP5且电量低于50%, 准备进入CP6充电")
+                if battery_level < low_threshold:
+                    logger.info(f"步骤3: AGV在PP5且电量低于{low_battery_pct}%, 准备进入CP6充电")
                     result_cp6 = self.safe_navigate_to_station("CP6")
                     if result_cp6 is None:
                         logger.error("从PP5移动到CP6失败")
@@ -1240,7 +1248,7 @@ class AGVController:
                             "action": "move_to_cp6",
                             "battery_level": battery_level,
                             "current_station": current_station_id,
-                            "message": f"电量{battery_level * 100:.1f}%低于50%, 但从PP5移动到CP6失败"
+                            "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 但从PP5移动到CP6失败"
                         }
 
                     logger.info("AGV已从PP5移动到CP6充电站")
@@ -1249,7 +1257,7 @@ class AGVController:
                         "action": "pp5_to_cp6_for_charge",
                         "battery_level": battery_level,
                         "current_station": current_station_id,
-                        "message": f"电量{battery_level * 100:.1f}%低于50%, 已从PP5移动到CP6充电"
+                        "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已从PP5移动到CP6充电"
                     }
 
                 logger.info("AGV在PP5待命, 当前电量无需进入CP6")
@@ -1284,6 +1292,110 @@ class AGVController:
                         "message": f"电量{battery_level * 100:.1f}%高于90%, 已从CP6返回PP5待命"
                     }
 
+                # 在CP6且电量低于阈值时, 检查是否正在充电, 未充电则执行CP6->PP5->CP6循环
+                if battery_level < low_threshold:
+                    logger.info(f"步骤3: AGV在CP6且电量低于{low_battery_pct}%, 检查是否正在充电")
+                    battery_full_info = self.query_battery_status(simple=False)
+                    charging_flag = battery_full_info.get("charging") if battery_full_info is not None else None
+
+                    if charging_flag is None:
+                        logger.warning("无法确认AGV当前是否正在充电, 本次不执行进出站")
+                        return {
+                            "status": "skipped",
+                            "action": "charging_state_unknown",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 但无法确认是否正在充电, 本次不执行进出站"
+                        }
+
+                    if charging_flag is True:
+                        logger.info("检测到AGV当前已在充电, 跳过CP6->PP5->CP6充电循环")
+                        return {
+                            "status": "success",
+                            "action": "already_charging",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "charging": True,
+                            "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 但当前已在充电, 跳过CP6->PP5->CP6"
+                        }
+
+                    # 未在充电, 执行CP6->PP5->CP6充电循环
+                    logger.info(f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%且未在充电, 开始CP6->PP5->CP6充电循环")
+
+                    # 步骤3.1: 从CP6移动到PP5
+                    logger.info("步骤3.1: 从CP6移动到PP5")
+                    result_pp5 = self.safe_navigate_to_station("PP5")
+                    if result_pp5 is None:
+                        logger.error("从CP6移动到PP5失败")
+                        return {
+                            "status": "error",
+                            "action": "charge_cycle_move_to_pp5",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%且未在充电, 但从CP6移动到PP5失败"
+                        }
+                    logger.info("成功到达PP5")
+
+                    # 步骤3.2: 检查设备是否处于空闲状态, 非空闲则认为途中被接管
+                    logger.info("步骤3.2: 检查设备空闲状态")
+                    nav_status_after_pp5 = self.query_nav_task_status()
+                    if nav_status_after_pp5 is not None:
+                        task_status_pp5 = nav_status_after_pp5.get("task_status")
+                        if task_status_pp5 not in {0, 4}:
+                            status_name_pp5 = nav_status_after_pp5.get("task_status_name", "UNKNOWN")
+                            logger.info(f"到达PP5后设备非空闲(状态={status_name_pp5}), 认为途中被接管, 跳过后续步骤")
+                            return {
+                                "status": "skipped",
+                                "action": "intercepted_after_pp5",
+                                "battery_level": battery_level,
+                                "current_station": current_station_id,
+                                "nav_task_status": task_status_pp5,
+                                "nav_task_status_name": status_name_pp5,
+                                "message": f"到达PP5后设备非空闲(状态={status_name_pp5}), 认为途中被接管, 跳过后续步骤"
+                            }
+                    logger.info("设备处于空闲状态, 继续返回CP6")
+
+                    # 步骤3.3: 从PP5返回CP6
+                    logger.info("步骤3.3: 从PP5返回CP6")
+                    result_cp6 = self.safe_navigate_to_station("CP6")
+                    if result_cp6 is None:
+                        logger.error("从PP5返回CP6失败")
+                        return {
+                            "status": "error",
+                            "action": "charge_cycle_return_to_cp6",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已到达PP5但返回CP6失败"
+                        }
+
+                    logger.info("已返回CP6, 检查充电状态")
+
+                    # 步骤3.4: 查询完整电池状态, 确认是否正在充电
+                    logger.info("步骤3.4: 查询完整电池状态, 确认充电状态")
+                    battery_full_info = self.query_battery_status(simple=False)
+                    if battery_full_info is not None and battery_full_info.get("charging"):
+                        logger.info("确认AGV正在充电, 充电循环成功")
+                        return {
+                            "status": "success",
+                            "action": "charge_cycle_completed",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "charging": True,
+                            "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已完成充电循环(CP6->PP5->CP6), 确认正在充电"
+                        }
+                    else:
+                        charging_val = battery_full_info.get("charging") if battery_full_info is not None else None
+                        logger.warning(f"已返回CP6但未检测到充电状态(charging={charging_val})")
+                        return {
+                            "status": "success",
+                            "action": "charge_cycle_completed_no_charging",
+                            "battery_level": battery_level,
+                            "current_station": current_station_id,
+                            "charging": False,
+                            "message": f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已完成充电循环(CP6->PP5->CP6), 但未检测到正在充电"
+                        }
+
+                # 电量在阈值~90%之间, 继续在CP6待命
                 logger.info("AGV在CP6待命, 当前电量尚未达到离站阈值")
                 return {
                     "status": "success",
@@ -1310,33 +1422,39 @@ class AGVController:
                 "message": f"PP5/CP6自动充电检查过程中发生异常: {e}"
             }
 
-    def auto_charge_pp5_cp6_loop(self, interval_hours=1, retry_wait_minutes=5):
+    def auto_charge_pp5_cp6_loop(
+        self,
+        interval_minutes=AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
+        retry_wait_minutes=5,
+        low_battery_pct=AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
+    ):
         """
         功能:
             基于PP5待命点和CP6充电站的自动充电循环函数.
-            - 检查成功时, 等待interval_hours后执行下一轮.
+            - 检查成功时, 等待interval_minutes后执行下一轮.
             - 检查被跳过或出错时, 等待retry_wait_minutes后重试.
         参数:
-            interval_hours: 检查成功后的等待时间, 单位小时, 默认1小时.
+            interval_minutes: 检查成功后的等待时间, 单位分钟, 默认3分钟.
             retry_wait_minutes: 检查跳过或出错后的重试间隔, 单位分钟, 默认5分钟.
+            low_battery_pct: 低电量阈值(百分比), 默认80, 即电量低于80%触发充电.
         返回:
             无, 持续运行直到用户中断.
         """
         logger.info(
-            f"启动PP5/CP6自动充电循环, 检查间隔: {interval_hours}小时, "
-            f"重试间隔: {retry_wait_minutes}分钟"
+            f"启动PP5/CP6自动充电循环, 检查间隔: {interval_minutes}分钟, "
+            f"重试间隔: {retry_wait_minutes}分钟, 低电量阈值: {low_battery_pct}%"
         )
 
         while True:
             try:
-                result = self.auto_charge_pp5_cp6_check()
+                result = self.auto_charge_pp5_cp6_check(low_battery_pct=low_battery_pct)
                 action = result.get("action", "")
                 status = result.get("status", "")
                 logger.info(f"PP5/CP6充电检查结果: {result}")
 
                 if status == "success":
-                    wait_seconds = interval_hours * 3600
-                    logger.info(f"检查成功(action={action}), 等待{interval_hours}小时后进行下次检查...")
+                    wait_seconds = interval_minutes * 60
+                    logger.info(f"检查成功(action={action}), 等待{interval_minutes}分钟后进行下次检查...")
                 else:
                     wait_seconds = retry_wait_minutes * 60
                     logger.info(f"检查未完成(action={action}, status={status}), 等待{retry_wait_minutes}分钟后重试...")
@@ -3147,1686 +3265,3 @@ class AGVController:
             return results
 
 
-def main():
-    """
-    功能:
-        交互式测试AGV控制器功能
-    """
-    # 配置日志输出到控制台
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    print("=" * 60)
-    print("AGV控制器交互式测试程序")
-    print("=" * 60)
-
-    # 初始化控制器, 设置超时时间为3分钟(180000ms)
-    controller = AGVController(timeout=180000)
-
-    # 查询并记录当前站点
-    print("\n正在查询当前站点...")
-    station_info = controller.query_current_station()
-    current_station_display = "未知"
-    if station_info is not None:
-        current_station_display = f"{station_info['station_id']} - {station_info['station_name']} ({station_info['description']})"
-        print(f"当前站点: {current_station_display}")
-    else:
-        print("查询站点失败")
-
-    # 交互式测试循环
-    while True:
-        print("\n" + "=" * 60)
-        print(f"当前站点: {current_station_display}")
-        print("=" * 60)
-        print("请选择要测试的功能:")
-        print("1. 连接机械臂")
-        print("2. 断开机械臂连接")
-        print("3. 机械臂回零")
-        print("4. 查看当前状态")
-        print("5. 上电并使能")
-        print("6. 下使能并下电")
-        print("7. 测试取托盘")
-        print("8. 测试放托盘")
-        print("9. 测试快换控制")
-        print("10. 测试夹爪控制")
-        print("11. 查看夹爪状态")
-        print("12. 查看料盘状态")
-        print("13. 重新加载点位配置")
-        print("14. 工站点位校准")
-        print("15. 查看校准偏移值")
-        print("16. AGV移动到工站")
-        print("17. 查询当前站点")
-        print("18. 运动到抓取点位")
-        print("19. 物料适配转移")
-        print("20. 更换夹爪")
-        print("21. 查看物料/夹爪配置")
-        print("22. 批量物料转运(含AGV移动和校准)")
-        print("23. 托盘点位校准")
-        print("24. 全点位测试")
-        print("25. 工站整体偏差矫正")
-        print("26. 查询电池电量")
-        print("27. 自动充电检查(单次)")
-        print("28. 启动自动充电循环")
-        print("29. 批量物料转运循环测试")
-        print("30. 分析站→货架样品转运")
-        print("31. 查看/管理货架状态")
-        print("32. PP5/CP6自动充电检查(单次)")
-        print("33. 启动PP5/CP6自动充电循环")
-        print("0. 退出程序")
-        print("=" * 60)
-
-        choice = input("请输入选项 (0-33): ").strip()
-
-        if choice == "1":
-            # 连接机械臂
-            print("\n--- 连接机械臂 ---")
-            result = controller.connect()
-            print(f"连接结果: {'成功' if result else '失败'}")
-
-        elif choice == "2":
-            # 断开连接
-            print("\n--- 断开机械臂连接 ---")
-            result = controller.disconnect()
-            print(f"断开结果: {'成功' if result else '失败'}")
-
-        elif choice == "3":
-            # 机械臂回零
-            print("\n--- 机械臂回零 ---")
-            try:
-                result = controller.arm_go_home(block=True)
-                print(f"回零结果: {result}")
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "4":
-            # 查看当前状态
-            print("\n--- 当前状态 ---")
-            try:
-                if not controller._ensure_connected():
-                    print("机械臂未连接")
-                    continue
-
-                state = controller.arm.get_robot_state()
-                print(f"机器人状态: {state}")
-
-                joints = controller.arm.get_joints_position()
-                print(f"当前关节角度: {joints}")
-
-                pose = controller.arm.get_tcp_pose()
-                print(f"当前TCP位姿: {pose}")
-
-                # 显示当前所在工站
-                if controller.current_station is not None:
-                    print(f"当前所在工站: {controller.current_station}")
-
-                    # 计算原始TCP姿态(根据站点偏移量反推)
-                    if controller.current_station in STATION_POSITIONS:
-                        station_info = STATION_POSITIONS[controller.current_station]
-                        station_name = station_info["name"]
-
-                        # 获取该工站的校准偏移值
-                        offset = controller.position_manager.get_calibration_offset(station_name)
-                        if offset is not None:
-                            # 原始TCP姿态 = 当前TCP位姿 - 偏移量
-                            original_pose = [
-                                pose[0] - offset['x'],
-                                pose[1] - offset['y'],
-                                pose[2] - offset['z'],
-                                pose[3] - offset['dx'],
-                                pose[4] - offset['dy'],
-                                pose[5] - offset['dz']
-                            ]
-                            print(f"原始TCP姿态(用于新点位存储): {original_pose}")
-                        else:
-                            print(f"工站 {station_name} 尚未校准, 无法计算原始TCP姿态")
-                else:
-                    print("当前所在工站: 未设置")
-
-                is_moving = controller.arm.is_moving()
-                print(f"是否在运动: {is_moving}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "5":
-            # 上电并使能
-            print("\n--- 上电并使能 ---")
-            try:
-                if not controller._ensure_connected():
-                    print("机械臂连接失败")
-                    continue
-
-                print("正在上电...")
-                result = controller.arm.power_on(block=True)
-                print(f"上电结果: {result}")
-
-                print("正在使能...")
-                result = controller.arm.enable(block=True)
-                print(f"使能结果: {result}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "6":
-            # 下使能并下电
-            print("\n--- 下使能并下电 ---")
-            try:
-                if not controller._ensure_connected():
-                    print("机械臂未连接")
-                    continue
-
-                print("正在下使能...")
-                result = controller.arm.disable(block=True)
-                print(f"下使能结果: {result}")
-
-                print("正在下电...")
-                result = controller.arm.power_off(block=True)
-                print(f"下电结果: {result}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "7":
-            # 测试取托盘
-            print("\n--- 测试取托盘 ---")
-
-            # 从配置文件读取可用的托盘位置
-            try:
-                tray_positions = controller.position_manager.get_category('tray_position')
-                if not tray_positions:
-                    print("错误: 未找到托盘位置配置")
-                    continue
-
-                # 过滤托盘位置: 只显示当前站点的和AGV本身的
-                filtered_tray_list = []
-                if controller.current_station is not None and controller.current_station in STATION_POSITIONS:
-                    station_name = STATION_POSITIONS[controller.current_station]["name"]
-                    for tray_name in tray_positions.keys():
-                        # 显示以当前站点名称开头的托盘或以agv开头的托盘
-                        if tray_name.startswith(station_name) or tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-                else:
-                    # 如果没有当前站点信息, 只显示AGV本身的托盘
-                    for tray_name in tray_positions.keys():
-                        if tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-
-                if not filtered_tray_list:
-                    print("错误: 当前站点没有可用的托盘位置")
-                    continue
-
-                # 显示可用的托盘位置
-                print("可用的托盘位置:")
-                for idx, tray_name in enumerate(filtered_tray_list, 1):
-                    tray_config = tray_positions[tray_name]
-                    description = tray_config.get('description', '无描述')
-                    print(f"  {idx}. {tray_name} - {description}")
-
-                tray_list = filtered_tray_list
-
-                # 用户输入选择
-                choice_input = input(f"请输入托盘编号 (1-{len(tray_list)}): ").strip()
-
-                # 验证输入
-                if not choice_input.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                tray_index = int(choice_input) - 1
-                if tray_index < 0 or tray_index >= len(tray_list):
-                    print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                    continue
-
-                # 获取选中的托盘名称
-                selected_tray = tray_list[tray_index]
-
-                print(f"\n开始执行取托盘流程: {selected_tray}")
-                result = controller.pick_tray(selected_tray, block=True)
-                print(f"取托盘结果: {'成功' if result else '失败'}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "8":
-            # 测试放托盘
-            print("\n--- 测试放托盘 ---")
-
-            # 从配置文件读取可用的托盘位置
-            try:
-                tray_positions = controller.position_manager.get_category('tray_position')
-                if not tray_positions:
-                    print("错误: 未找到托盘位置配置")
-                    continue
-
-                # 过滤托盘位置: 只显示当前站点的和AGV本身的
-                filtered_tray_list = []
-                if controller.current_station is not None and controller.current_station in STATION_POSITIONS:
-                    station_name = STATION_POSITIONS[controller.current_station]["name"]
-                    for tray_name in tray_positions.keys():
-                        # 显示以当前站点名称开头的托盘或以agv开头的托盘
-                        if tray_name.startswith(station_name) or tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-                else:
-                    # 如果没有当前站点信息, 只显示AGV本身的托盘
-                    for tray_name in tray_positions.keys():
-                        if tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-
-                if not filtered_tray_list:
-                    print("错误: 当前站点没有可用的托盘位置")
-                    continue
-
-                # 显示可用的托盘位置
-                print("可用的托盘位置:")
-                for idx, tray_name in enumerate(filtered_tray_list, 1):
-                    tray_config = tray_positions[tray_name]
-                    description = tray_config.get('description', '无描述')
-                    print(f"  {idx}. {tray_name} - {description}")
-
-                tray_list = filtered_tray_list
-
-                # 用户输入选择
-                choice_input = input(f"请输入托盘编号 (1-{len(tray_list)}): ").strip()
-
-                # 验证输入
-                if not choice_input.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                tray_index = int(choice_input) - 1
-                if tray_index < 0 or tray_index >= len(tray_list):
-                    print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                    continue
-
-                # 获取选中的托盘名称
-                selected_tray = tray_list[tray_index]
-
-                print(f"\n开始执行放托盘流程: {selected_tray}")
-                result = controller.put_tray(selected_tray, block=True)
-                print(f"放托盘结果: {'成功' if result else '失败'}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "9":
-            # 测试快换控制
-            print("\n--- 测试快换控制 ---")
-            print("1. 松开快换")
-            print("2. 夹紧快换")
-            sub_choice = input("请选择操作 (1-2): ").strip()
-
-            try:
-                if not controller._ensure_connected():
-                    print("机械臂未连接")
-                    continue
-
-                if sub_choice == "1":
-                    print("正在松开快换...")
-                    result = controller.arm.release_quick_change(block=True)
-                    print(f"松开快换结果: {result}")
-                elif sub_choice == "2":
-                    print("正在夹紧快换...")
-                    result = controller.arm.lock_quick_change(block=True)
-                    print(f"夹紧快换结果: {result}")
-                else:
-                    print("无效的选项")
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "10":
-            # 测试夹爪控制
-            print("\n--- 测试夹爪控制 ---")
-            print("1. 张开夹爪")
-            print("2. 闭合夹爪")
-            sub_choice = input("请选择操作 (1-2): ").strip()
-
-            try:
-                if not controller._ensure_connected():
-                    print("机械臂未连接")
-                    continue
-
-                if sub_choice == "1":
-                    print("正在张开夹爪...")
-                    result = controller.arm.open_gripper(block=True)
-                    print(f"张开夹爪结果: {result}")
-
-                    # 等待并检查状态
-                    import time
-                    time.sleep(1)
-                    if controller.arm.is_gripper_opened():
-                        print("夹爪已张开到位")
-                    else:
-                        print("警告: 夹爪未张开到位")
-
-                elif sub_choice == "2":
-                    print("正在闭合夹爪...")
-                    result = controller.arm.close_gripper(block=True)
-                    print(f"闭合夹爪结果: {result}")
-
-                    # 等待并检查状态
-                    import time
-                    time.sleep(1)
-                    if controller.arm.is_gripper_gripped():
-                        print("夹爪已夹紧到位(夹到物料)")
-                    elif controller.arm.is_gripper_empty():
-                        print("夹爪空夹(未夹到物料)")
-                    else:
-                        print("警告: 夹爪状态未知")
-                else:
-                    print("无效的选项")
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "11":
-            # 查看夹爪状态
-            print("\n--- 夹爪状态 ---")
-            try:
-                if not controller._ensure_connected():
-                    print("机械臂未连接")
-                    continue
-
-                state = controller.arm.get_gripper_state()
-                print(f"夹爪状态: {state}")
-
-                is_opened = controller.arm.is_gripper_opened()
-                print(f"是否张开到位: {is_opened}")
-
-                is_gripped = controller.arm.is_gripper_gripped()
-                print(f"是否夹紧到位(有物料): {is_gripped}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "12":
-            # 查看料盘状态
-            print("\n--- 料盘状态 ---")
-            print("1. 查看所有料位状态")
-            print("2. 查看指定快换料位")
-            print("3. 查看指定托盘料位")
-            sub_choice = input("请选择操作 (1-3): ").strip()
-
-            try:
-                if not controller._ensure_connected():
-                    print("机械臂未连接")
-                    continue
-
-                if sub_choice == "1":
-                    status = controller.arm.get_all_slots_status()
-                    print("\n快换料位状态 (bg1-bg3):")
-                    for i, has_material in enumerate(status["quick_change"], 1):
-                        print(f"  bg{i}: {'有料' if has_material else '无料'}")
-                    print("\n托盘料位状态 (bg4-bg7):")
-                    for i, has_material in enumerate(status["tray"], 4):
-                        print(f"  bg{i}: {'有料' if has_material else '无料'}")
-
-                elif sub_choice == "2":
-                    slot_num_input = input("请输入快换料位编号 (1-3): ").strip()
-                    if not slot_num_input.isdigit():
-                        print("错误: 请输入有效的数字")
-                        continue
-                    slot_num = int(slot_num_input)
-                    has_material = controller.arm.check_quick_change_slot(slot_num)
-                    print(f"快换料位bg{slot_num}: {'有料' if has_material else '无料'}")
-
-                elif sub_choice == "3":
-                    slot_num_input = input("请输入托盘料位编号 (1-4, 对应bg4-bg7): ").strip()
-                    if not slot_num_input.isdigit():
-                        print("错误: 请输入有效的数字")
-                        continue
-                    slot_num = int(slot_num_input)
-                    has_material = controller.arm.check_tray_slot(slot_num)
-                    print(f"托盘料位bg{slot_num + 3}: {'有料' if has_material else '无料'}")
-
-                else:
-                    print("无效的选项")
-            except ValueError:
-                print("错误: 请输入有效的数字")
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "13":
-            # 重新加载点位配置
-            print("\n--- 重新加载点位配置 ---")
-            try:
-                # 重新初始化PositionManager, 会重新读取yaml配置文件
-                controller.position_manager = PositionManager()
-                print("点位配置已重新加载")
-
-                # 显示加载的配置信息
-                print("\n已加载的配置类别:")
-                categories = ['safe_positions', 'tray_position']
-                for category in categories:
-                    positions = controller.position_manager.get_category(category)
-                    if positions:
-                        print(f"\n{category}:")
-                        for name in positions.keys():
-                            print(f"  - {name}")
-                    else:
-                        print(f"\n{category}: 无配置")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "14":
-            # 工站点位校准
-            print("\n--- 工站点位校准 ---")
-            print("说明: 将自动查询当前站点并执行校准")
-            print("支持的工站: shelf(货架), synthesis_station(合成站), analysis_station(分析站)")
-            print(f"当前站点: {current_station_display}")
-
-            try:
-                print("\n警告: 校准程序将运行机械臂, 请确保周围安全!")
-                print("提示: 请确保AGV已移动到需要校准的工站")
-                confirm = input("确认执行校准? (y/n): ").strip().lower()
-
-                if confirm != 'y':
-                    print("已取消校准")
-                    continue
-
-                result = controller.calibrate_station(block=True)
-
-                if result is not None:
-                    print(f"\n校准成功! 偏移值:")
-                    print(f"  位置偏移: x={result['x']:.6f}, y={result['y']:.6f}, z={result['z']:.6f}")
-                    print(f"  姿态偏移: dx={result['dx']:.6f}, dy={result['dy']:.6f}, dz={result['dz']:.6f}")
-                    print(f"偏移值已保存到配置文件")
-                else:
-                    print("校准失败")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "15":
-            # 查看校准偏移值
-            print("\n--- 查看校准偏移值 ---")
-            print("支持的工站:")
-            print("1. shelf (货架)")
-            print("2. synthesis_station (合成站)")
-            print("3. analysis_station (分析站)")
-            print("4. 查看所有工站")
-
-            station_choice = input("请选择工站 (1-4): ").strip()
-
-            try:
-                if station_choice == "4":
-                    # 查看所有工站
-                    print("\n所有工站校准偏移值:")
-                    for station in ["shelf", "synthesis_station", "analysis_station"]:
-                        offset = controller.position_manager.get_calibration_offset(station)
-                        if offset is not None:
-                            print(f"\n{station}:")
-                            print(f"  位置偏移: x={offset['x']:.6f}, y={offset['y']:.6f}, z={offset['z']:.6f}")
-                            print(f"  姿态偏移: dx={offset['dx']:.6f}, dy={offset['dy']:.6f}, dz={offset['dz']:.6f}")
-                        else:
-                            print(f"\n{station}: 未校准")
-                else:
-                    station_map = {
-                        "1": "shelf",
-                        "2": "synthesis_station",
-                        "3": "analysis_station"
-                    }
-
-                    if station_choice not in station_map:
-                        print("错误: 无效的工站选择")
-                        continue
-
-                    station_name = station_map[station_choice]
-                    offset = controller.position_manager.get_calibration_offset(station_name)
-
-                    if offset is not None:
-                        print(f"\n{station_name} 工站校准偏移值:")
-                        print(f"  位置偏移: x={offset['x']:.6f}, y={offset['y']:.6f}, z={offset['z']:.6f}")
-                        print(f"  姿态偏移: dx={offset['dx']:.6f}, dy={offset['dy']:.6f}, dz={offset['dz']:.6f}")
-                    else:
-                        print(f"{station_name} 工站尚未校准")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "16":
-            # AGV移动到工站
-            print("\n--- AGV移动到工站 ---")
-            try:
-                # 显示可用的工站
-                print("可用的工站:")
-                station_list = list(STATION_POSITIONS.keys())
-                for idx, station_id in enumerate(station_list, 1):
-                    station_info = STATION_POSITIONS[station_id]
-                    print(f"  {idx}. {station_id} - {station_info['description']}")
-
-                # 用户输入选择
-                choice_input = input(f"请输入工站编号 (1-{len(station_list)}): ").strip()
-
-                # 验证输入
-                if not choice_input.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                station_index = int(choice_input) - 1
-                if station_index < 0 or station_index >= len(station_list):
-                    print(f"错误: 请输入1到{len(station_list)}之间的数字")
-                    continue
-
-                # 获取选中的工站ID
-                selected_station = station_list[station_index]
-                station_info_selected = STATION_POSITIONS[selected_station]
-
-                print(f"\n开始移动到工站: {selected_station} ({station_info_selected['description']})")
-
-                # 调用安全导航函数(先机械臂回零再移动)
-                result = controller.safe_navigate_to_station(selected_station)
-
-                if result is not None:
-                    print(f"导航指令发送成功")
-                    print(f"响应信息: {result}")
-                    print(f"当前工站已设置为: {selected_station}")
-                    # 更新显示的站点信息
-                    current_station_display = f"{selected_station} - {station_info_selected['name']} ({station_info_selected['description']})"
-                else:
-                    print(f"导航失败, 请查看日志获取详细信息")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "17":
-            # 查询当前站点
-            print("\n--- 查询当前站点 ---")
-            try:
-                station_info = controller.query_current_station()
-                if station_info is not None:
-                    print(f"站点ID: {station_info['station_id']}")
-                    print(f"站点名称: {station_info['station_name']}")
-                    print(f"站点描述: {station_info['description']}")
-                    # 更新显示的站点信息
-                    current_station_display = f"{station_info['station_id']} - {station_info['station_name']} ({station_info['description']})"
-                else:
-                    print("查询站点失败")
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "18":
-            # 显示当前站点和AGV上的位置
-            print("\n--- 显示当前站点和AGV上的位置 ---")
-
-            # 从配置文件读取可用的托盘位置
-            try:
-                tray_positions = controller.position_manager.get_category('tray_position')
-                if not tray_positions:
-                    print("错误: 未找到托盘位置配置")
-                    continue
-
-                # 过滤托盘位置: 只显示当前站点的和AGV本身的
-                filtered_tray_list = []
-                if controller.current_station is not None and controller.current_station in STATION_POSITIONS:
-                    station_name = STATION_POSITIONS[controller.current_station]["name"]
-                    for tray_name in tray_positions.keys():
-                        # 显示以当前站点名称开头的托盘或以agv开头的托盘
-                        if tray_name.startswith(station_name) or tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-                else:
-                    # 如果没有当前站点信息, 只显示AGV本身的托盘
-                    for tray_name in tray_positions.keys():
-                        if tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-
-                if not filtered_tray_list:
-                    print("当前站点没有可用的托盘位置")
-                    continue
-
-                # 显示可用的托盘位置
-                print("\n当前站点和AGV上的托盘位置:")
-                for idx, tray_name in enumerate(filtered_tray_list, 1):
-                    tray_config = tray_positions[tray_name]
-                    description = tray_config.get('description', '无描述')
-                    print(f"  {idx}. {tray_name} - {description}")
-
-                tray_list = filtered_tray_list
-
-                # 用户输入选择
-                choice_input = input(f"请输入托盘编号 (1-{len(tray_list)}): ").strip()
-
-                # 验证输入
-                if not choice_input.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                tray_index = int(choice_input) - 1
-                if tray_index < 0 or tray_index >= len(tray_list):
-                    print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                    continue
-
-                # 获取选中的托盘名称
-                selected_tray = tray_list[tray_index]
-                print(f"\n开始执行运动到抓取点位流程: {selected_tray}")
-                result = controller.move_to_grasp_position(selected_tray, block=True)
-                print(f"运动到抓取点位结果: {'成功' if result else '失败'}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "19":
-            # 物料适配转移
-            print("\n--- 物料适配转移 ---")
-            try:
-                # 显示可用的物料类型
-                materials = controller.position_manager.list_materials()
-                if not materials:
-                    print("错误: 未找到物料类型配置")
-                    continue
-
-                print("可用的物料类型:")
-                for idx, material_name in enumerate(materials, 1):
-                    material = controller.position_manager.get_material(material_name)
-                    print(f"  {idx}. {material_name} - {material.description} (夹爪: {material.gripper})")
-
-                # 选择物料类型
-                material_choice = input(f"请选择物料类型 (1-{len(materials)}, 直接回车跳过): ").strip()
-                selected_material = None
-                if material_choice != "":
-                    if not material_choice.isdigit():
-                        print("错误: 请输入有效的数字")
-                        continue
-                    material_index = int(material_choice) - 1
-                    if material_index < 0 or material_index >= len(materials):
-                        print(f"错误: 请输入1到{len(materials)}之间的数字")
-                        continue
-                    selected_material = materials[material_index]
-
-                # 显示可用的托盘位置
-                tray_positions = controller.position_manager.get_category('tray_position')
-                if not tray_positions:
-                    print("错误: 未找到托盘位置配置")
-                    continue
-
-                # 过滤托盘位置: 只显示当前站点的和AGV本身的
-                filtered_tray_list = []
-                if controller.current_station is not None and controller.current_station in STATION_POSITIONS:
-                    station_name = STATION_POSITIONS[controller.current_station]["name"]
-                    for tray_name in tray_positions.keys():
-                        # 显示以当前站点名称开头的托盘或以agv开头的托盘
-                        if tray_name.startswith(station_name) or tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-                else:
-                    # 如果没有当前站点信息, 只显示AGV本身的托盘
-                    for tray_name in tray_positions.keys():
-                        if tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-
-                if not filtered_tray_list:
-                    print("错误: 当前站点没有可用的托盘位置")
-                    continue
-
-                print("\n可用的托盘位置:")
-                tray_list = filtered_tray_list
-                for idx, tray_name in enumerate(tray_list, 1):
-                    tray_config = tray_positions[tray_name]
-                    description = tray_config.get('description', '无描述')
-                    print(f"  {idx}. {tray_name} - {description}")
-
-                # 选择源托盘
-                source_choice = input(f"请选择源托盘 (1-{len(tray_list)}): ").strip()
-                if not source_choice.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-                source_index = int(source_choice) - 1
-                if source_index < 0 or source_index >= len(tray_list):
-                    print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                    continue
-                source_tray = tray_list[source_index]
-
-                # 选择目标托盘
-                target_choice = input(f"请选择目标托盘 (1-{len(tray_list)}): ").strip()
-                if not target_choice.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-                target_index = int(target_choice) - 1
-                if target_index < 0 or target_index >= len(tray_list):
-                    print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                    continue
-                target_tray = tray_list[target_index]
-
-                # 执行物料转移
-                print(f"\n开始物料转移: {source_tray} -> {target_tray}")
-                if selected_material is not None:
-                    print(f"物料类型: {selected_material}")
-                result = controller.transfer_material(source_tray, target_tray, selected_material, block=True)
-                print(f"物料转移结果: {'成功' if result else '失败'}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "20":
-            # 更换夹爪
-            print("\n--- 更换夹爪 ---")
-            try:
-                # 显示当前夹爪
-                current_gripper = controller.get_current_gripper()
-                print(f"当前夹爪: {current_gripper if current_gripper else '无'}")
-
-                # 显示可用的夹爪
-                grippers = controller.position_manager.list_grippers()
-                if not grippers:
-                    print("错误: 未找到夹爪配置")
-                    continue
-
-                print("\n可用的夹爪:")
-                for idx, gripper_name in enumerate(grippers, 1):
-                    gripper = controller.position_manager.get_gripper(gripper_name)
-                    print(f"  {idx}. {gripper_name} - {gripper.description} (料位: {gripper.slot})")
-
-                # 选择目标夹爪
-                gripper_choice = input(f"请选择目标夹爪 (1-{len(grippers)}): ").strip()
-                if not gripper_choice.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-                gripper_index = int(gripper_choice) - 1
-                if gripper_index < 0 or gripper_index >= len(grippers):
-                    print(f"错误: 请输入1到{len(grippers)}之间的数字")
-                    continue
-                target_gripper = grippers[gripper_index]
-
-                # 确认操作
-                print(f"\n将更换夹爪: {current_gripper if current_gripper else '无'} -> {target_gripper}")
-                confirm = input("确认执行? (y/n): ").strip().lower()
-                if confirm != 'y':
-                    print("已取消")
-                    continue
-
-                # 执行换爪
-                result = controller.change_gripper(target_gripper, block=True)
-                print(f"更换夹爪结果: {'成功' if result else '失败'}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "21":
-            # 查看物料/夹爪配置
-            print("\n--- 物料/夹爪配置 ---")
-            try:
-                # 显示夹爪配置
-                grippers = controller.position_manager.list_grippers()
-                print("\n夹爪配置:")
-                if grippers:
-                    for gripper_name in grippers:
-                        gripper = controller.position_manager.get_gripper(gripper_name)
-                        print(f"  - {gripper_name}: {gripper.description} (料位: {gripper.slot})")
-                else:
-                    print("  无夹爪配置")
-
-                # 显示物料类型配置
-                materials = controller.position_manager.list_materials()
-                print("\n物料类型配置:")
-                if materials:
-                    for material_name in materials:
-                        material = controller.position_manager.get_material(material_name)
-                        print(f"  - {material_name}: {material.description}")
-                        print(f"      夹爪: {material.gripper}")
-                        print(f"      下探偏移: {material.descend_z_offset}mm, 提升偏移: {material.lift_z_offset}mm")
-                else:
-                    print("  无物料类型配置")
-
-                # 显示当前夹爪状态
-                current_gripper = controller.get_current_gripper()
-                print(f"\n当前安装的夹爪: {current_gripper if current_gripper else '无'}")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "22":
-            # 批量物料转运
-            print("\n--- 批量物料转运(含AGV移动和校准) ---")
-            print("说明: 支持一次转运最多4个物料, AGV会自动移动到各站点并进行点位校准")
-
-            try:
-                # 输入任务数量
-                task_count_input = input("请输入要转运的物料数量 (1-4): ").strip()
-                if not task_count_input.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                task_count = int(task_count_input)
-                if task_count < 1 or task_count > 4:
-                    print("错误: 任务数量必须在1-4之间")
-                    continue
-
-                # 获取所有可用的托盘位置
-                tray_positions = controller.position_manager.get_category('tray_position')
-                if not tray_positions:
-                    print("错误: 未找到托盘位置配置")
-                    continue
-
-                # 获取所有可用的物料类型
-                materials = controller.position_manager.list_materials()
-
-                # 构建转运任务列表
-                transfer_tasks = []
-
-                for i in range(task_count):
-                    print(f"\n{'=' * 60}")
-                    print(f"配置任务 {i+1}/{task_count}")
-                    print(f"{'=' * 60}")
-
-                    # 显示所有可用的托盘位置
-                    print("\n可用的托盘位置:")
-                    tray_list = list(tray_positions.keys())
-                    for idx, tray_name in enumerate(tray_list, 1):
-                        tray_config = tray_positions[tray_name]
-                        description = tray_config.get('description', '无描述')
-                        print(f"  {idx}. {tray_name} - {description}")
-
-                    # 选择源托盘
-                    source_choice = input(f"\n请选择源托盘位置 (1-{len(tray_list)}): ").strip()
-                    if not source_choice.isdigit():
-                        print("错误: 请输入有效的数字")
-                        break
-                    source_index = int(source_choice) - 1
-                    if source_index < 0 or source_index >= len(tray_list):
-                        print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                        break
-                    source_tray = tray_list[source_index]
-
-                    # 选择目标托盘
-                    target_choice = input(f"请选择目标托盘位置 (1-{len(tray_list)}): ").strip()
-                    if not target_choice.isdigit():
-                        print("错误: 请输入有效的数字")
-                        break
-                    target_index = int(target_choice) - 1
-                    if target_index < 0 or target_index >= len(tray_list):
-                        print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                        break
-                    target_tray = tray_list[target_index]
-
-                    # 选择物料类型(可选)
-                    selected_material = None
-                    if materials:
-                        print("\n可用的物料类型:")
-                        for idx, material_name in enumerate(materials, 1):
-                            material = controller.position_manager.get_material(material_name)
-                            print(f"  {idx}. {material_name} - {material.description} (夹爪: {material.gripper})")
-
-                        material_choice = input(f"请选择物料类型 (1-{len(materials)}, 直接回车跳过): ").strip()
-                        if material_choice != "":
-                            if not material_choice.isdigit():
-                                print("错误: 请输入有效的数字")
-                                break
-                            material_index = int(material_choice) - 1
-                            if material_index < 0 or material_index >= len(materials):
-                                print(f"错误: 请输入1到{len(materials)}之间的数字")
-                                break
-                            selected_material = materials[material_index]
-
-                    # 添加任务到列表
-                    task = {
-                        "source_tray": source_tray,
-                        "target_tray": target_tray,
-                        "material_type": selected_material
-                    }
-                    transfer_tasks.append(task)
-
-                    print(f"\n任务{i+1}已配置: {source_tray} -> {target_tray}")
-                    if selected_material:
-                        print(f"  物料类型: {selected_material}")
-
-                # 检查是否成功配置了所有任务
-                if len(transfer_tasks) != task_count:
-                    print("\n任务配置未完成, 已取消")
-                    continue
-
-                # 显示任务摘要
-                print(f"\n{'=' * 60}")
-                print("任务摘要:")
-                print(f"{'=' * 60}")
-                for idx, task in enumerate(transfer_tasks, 1):
-                    print(f"任务{idx}: {task['source_tray']} -> {task['target_tray']}")
-                    if task['material_type']:
-                        print(f"       物料类型: {task['material_type']}")
-
-                # 确认执行
-                print(f"\n警告: 此操作将控制AGV移动并执行物料转运, 请确保周围安全!")
-                confirm = input("确认执行批量转运? (y/n): ").strip().lower()
-
-                if confirm != 'y':
-                    print("已取消")
-                    continue
-
-                # 执行批量转运
-                print(f"\n开始执行批量物料转运...")
-                result = controller.batch_transfer_materials(transfer_tasks, block=True)
-
-                if result:
-                    print(f"\n{'=' * 60}")
-                    print("批量物料转运成功!")
-                    print(f"{'=' * 60}")
-                else:
-                    print(f"\n批量物料转运失败, 请查看日志获取详细信息")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "23":
-            # 托盘点位校准
-            print("\n--- 托盘点位校准 ---")
-            print("说明: 选择点位后运动到抓取点位, 手动矫正后确认, 保存当前TCP位姿到配置文件")
-            print("      对于AGV上的点位, 直接保存当前TCP位姿")
-            print("      对于非AGV点位, 会减去站点校准偏移量后存储原始TCP位姿")
-
-            try:
-                # 从配置文件读取可用的托盘位置
-                tray_positions = controller.position_manager.get_category('tray_position')
-                if not tray_positions:
-                    print("错误: 未找到托盘位置配置")
-                    continue
-
-                # 过滤托盘位置: 只显示当前站点的和AGV本身的
-                filtered_tray_list = []
-                if controller.current_station is not None and controller.current_station in STATION_POSITIONS:
-                    station_name = STATION_POSITIONS[controller.current_station]["name"]
-                    for tray_name in tray_positions.keys():
-                        # 显示以当前站点名称开头的托盘或以agv开头的托盘
-                        if tray_name.startswith(station_name) or tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-                else:
-                    # 如果没有当前站点信息, 只显示AGV本身的托盘
-                    for tray_name in tray_positions.keys():
-                        if tray_name.startswith('agv'):
-                            filtered_tray_list.append(tray_name)
-
-                if not filtered_tray_list:
-                    print("错误: 当前站点没有可用的托盘位置")
-                    continue
-
-                # 显示可用的托盘位置
-                print("\n可用的托盘位置:")
-                for idx, tray_name in enumerate(filtered_tray_list, 1):
-                    tray_config = tray_positions[tray_name]
-                    description = tray_config.get('description', '无描述')
-                    print(f"  {idx}. {tray_name} - {description}")
-
-                tray_list = filtered_tray_list
-
-                # 用户输入选择
-                choice_input = input(f"请输入托盘编号 (1-{len(tray_list)}): ").strip()
-
-                # 验证输入
-                if not choice_input.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                tray_index = int(choice_input) - 1
-                if tray_index < 0 or tray_index >= len(tray_list):
-                    print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                    continue
-
-                # 获取选中的托盘名称
-                selected_tray = tray_list[tray_index]
-
-                print(f"\n开始执行托盘点位校准: {selected_tray}")
-                print("警告: 机械臂将运动到抓取点位, 请确保周围安全!")
-                confirm = input("确认执行? (y/n): ").strip().lower()
-
-                if confirm != 'y':
-                    print("已取消")
-                    continue
-
-                # 步骤1: 运动到抓取点位
-                print("\n步骤1: 运动到抓取点位...")
-                result = controller.move_to_grasp_position(selected_tray, block=True)
-                if not result:
-                    print("运动到抓取点位失败")
-                    continue
-
-                print("已到达抓取点位")
-
-                # 步骤2: 等待用户手动矫正
-                print("\n步骤2: 请手动矫正机械臂位置")
-                print("提示: 可以使用示教器或其他方式调整机械臂位置")
-                print("      矫正完成后, 按回车键继续...")
-                input()
-
-                # 步骤3: 获取当前TCP位姿并计算要保存的位姿
-                print("\n步骤3: 获取当前TCP位姿...")
-                current_pose = controller.arm.get_tcp_pose()
-                print(f"当前TCP位姿: {current_pose}")
-
-                # 判断是否为AGV上的点位
-                is_agv_position = selected_tray.startswith('agv')
-
-                if is_agv_position:
-                    # AGV上的点位, 直接保存当前TCP位姿
-                    pose_to_save = current_pose
-                    print(f"\nAGV点位, 将直接保存当前TCP位姿")
-                else:
-                    # 非AGV点位, 需要减去站点校准偏移量
-                    matched_station = None
-                    import yaml
-                    with open(controller.position_manager.config_file, 'r', encoding='utf-8') as f:
-                        config = yaml.safe_load(f)
-
-                    if config is not None and 'station_calibration' in config:
-                        for station_name_key in config['station_calibration'].keys():
-                            if selected_tray.startswith(station_name_key):
-                                matched_station = station_name_key
-                                break
-
-                    if matched_station is not None:
-                        station_offset = controller.position_manager.get_calibration_offset(matched_station)
-                        if station_offset is not None:
-                            # 原始TCP位姿 = 当前TCP位姿 - 偏移量
-                            pose_to_save = [
-                                current_pose[0] - station_offset['x'],
-                                current_pose[1] - station_offset['y'],
-                                current_pose[2] - station_offset['z'],
-                                current_pose[3] - station_offset['dx'],
-                                current_pose[4] - station_offset['dy'],
-                                current_pose[5] - station_offset['dz']
-                            ]
-                            print(f"\n非AGV点位, 匹配站点: {matched_station}")
-                            print(f"站点偏移量: x={station_offset['x']:.3f}, y={station_offset['y']:.3f}, z={station_offset['z']:.3f}")
-                            print(f"原始TCP位姿(减去偏移量后): {pose_to_save}")
-                        else:
-                            pose_to_save = current_pose
-                            print(f"\n警告: 站点 {matched_station} 未校准, 将直接保存当前TCP位姿")
-                    else:
-                        pose_to_save = current_pose
-                        print(f"\n警告: 托盘 {selected_tray} 未匹配到任何站点, 将直接保存当前TCP位姿")
-
-                # 步骤4: 确认保存
-                # 获取原先存储的TCP位姿
-                original_tray_position = controller.position_manager.get_position('tray_position', selected_tray)
-                if original_tray_position is not None and original_tray_position.pose is not None:
-                    print(f"\n原先存储的TCP位姿: {original_tray_position.pose}")
-                else:
-                    print(f"\n原先存储的TCP位姿: 无")
-                print(f"将要保存的TCP位姿: {pose_to_save}")
-                save_confirm = input("确认保存到配置文件? (y/n): ").strip().lower()
-
-                if save_confirm != 'y':
-                    print("已取消保存")
-                    continue
-
-                # 保存到配置文件
-                controller.position_manager.save_tray_position(selected_tray, pose_to_save)
-                print(f"\n托盘位置 {selected_tray} 已成功保存到配置文件!")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "24":
-            # 全点位测试
-            print("\n--- 全点位测试 ---")
-            print("说明: 从agv_tray_1取托盘依次放到当前站点的每个点位再取回, 测试所有点位的准确性")
-            print("流程: 1.提示用户在agv_tray_1放置托盘 -> 2.选择托盘种类 -> 3.点位校准 -> 4.逐点位测试")
-            print(f"当前站点: {current_station_display}")
-
-            try:
-                # 检查当前站点
-                if controller.current_station is None:
-                    print("\n警告: 未设置当前站点, 请先查询或移动到目标站点")
-                    query_confirm = input("是否先查询当前站点? (y/n): ").strip().lower()
-                    if query_confirm == 'y':
-                        station_info = controller.query_current_station()
-                        if station_info is not None:
-                            current_station_display = f"{station_info['station_id']} - {station_info['station_name']} ({station_info['description']})"
-                            print(f"当前站点: {current_station_display}")
-                        else:
-                            print("查询站点失败, 无法继续")
-                            continue
-                    else:
-                        print("已取消")
-                        continue
-
-                # 显示可用的物料类型
-                materials = controller.position_manager.list_materials()
-                if not materials:
-                    print("错误: 未找到物料类型配置")
-                    continue
-
-                print("\n请选择托盘种类:")
-                for idx, material_name in enumerate(materials, 1):
-                    material = controller.position_manager.get_material(material_name)
-                    print(f"  {idx}. {material_name} - {material.description} (夹爪: {material.gripper})")
-
-                material_choice = input(f"请选择托盘种类 (1-{len(materials)}): ").strip()
-                if not material_choice.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                material_index = int(material_choice) - 1
-                if material_index < 0 or material_index >= len(materials):
-                    print(f"错误: 请输入1到{len(materials)}之间的数字")
-                    continue
-
-                selected_material = materials[material_index]
-                material_config = controller.position_manager.get_material(selected_material)
-                print(f"\n已选择托盘种类: {selected_material} - {material_config.description}")
-
-                # 显示待测试的点位
-                tray_positions = controller.position_manager.get_category('tray_position')
-                test_positions = []
-                if controller.current_station is not None and controller.current_station in STATION_POSITIONS:
-                    station_name = STATION_POSITIONS[controller.current_station]["name"]
-                    for tray_name in tray_positions.keys():
-                        if tray_name.startswith(station_name):
-                            test_positions.append(tray_name)
-
-                if len(test_positions) == 0:
-                    print("错误: 当前站点没有可测试的点位")
-                    continue
-
-                print(f"\n待测试点位 ({len(test_positions)} 个):")
-                for idx, pos_name in enumerate(test_positions, 1):
-                    tray_config = tray_positions[pos_name]
-                    description = tray_config.get('description', '无描述')
-                    print(f"  {idx}. {pos_name} - {description}")
-
-                # 提示用户放置托盘
-                print("\n" + "=" * 60)
-                print("请在 agv_tray_1 位置放置托盘!")
-                print("=" * 60)
-                print(f"托盘种类: {selected_material} - {material_config.description}")
-                print("\n警告: 此操作将控制机械臂进行全点位测试, 请确保周围安全!")
-                confirm = input("托盘已放置好, 确认开始测试? (y/n): ").strip().lower()
-
-                if confirm != 'y':
-                    print("已取消")
-                    continue
-
-                # 执行全点位测试
-                print("\n开始执行全点位测试...")
-                results = controller.test_all_positions(selected_material, block=True)
-
-                # 显示测试结果
-                print("\n" + "=" * 60)
-                print("全点位测试结果汇总")
-                print("=" * 60)
-                print(f"成功: {len(results['success'])} 个点位")
-                for pos in results["success"]:
-                    print(f"  [OK] {pos}")
-                print(f"失败: {len(results['failed'])} 个点位")
-                for pos in results["failed"]:
-                    print(f"  [FAIL] {pos}")
-                print(f"跳过: {len(results['skipped'])} 个点位")
-                for pos in results["skipped"]:
-                    print(f"  [SKIP] {pos}")
-
-                total = len(results['success']) + len(results['failed']) + len(results['skipped'])
-                if total > 0:
-                    success_rate = len(results['success']) / total * 100
-                    print(f"\n测试通过率: {success_rate:.1f}%")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "25":
-            # 工站整体偏差矫正
-            print("\n--- 工站整体偏差矫正 ---")
-            print("说明: 通过选择参考点位计算偏移量并应用到工站所有点位")
-            print("流程:")
-            print("  1. 选择要校准的工站(agv或当前所在工站)")
-            print("  2. 如果不是agv, 可选择先进行视觉补偿")
-            print("  3. 选择一个参考点位")
-            print("  4. 可选择运动到该点位")
-            print("  5. 手动微调机械臂位置后按回车确认")
-            print("  6. 计算偏移量并可选择应用到工站所有点位")
-            print(f"当前站点: {current_station_display}")
-
-            try:
-                print("\n警告: 此操作可能会修改配置文件中的点位数据!")
-                confirm = input("确认开始工站偏差矫正? (y/n): ").strip().lower()
-
-                if confirm != 'y':
-                    print("已取消")
-                    continue
-
-                result = controller.calibrate_station_offset(block=True)
-
-                if result is not None:
-                    print(f"\n工站偏差矫正完成!")
-                    print(f"计算得到的偏移量: dx={result['x']:.3f}, dy={result['y']:.3f}, dz={result['z']:.3f}")
-                else:
-                    print("工站偏差矫正失败或已取消")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "26":
-            # 查询电池电量
-            print("\n--- 查询电池电量 ---")
-            try:
-                battery_info = controller.query_battery_status(simple=True)
-
-                if battery_info is not None:
-                    battery_level = battery_info.get("battery_level")
-                    print(f"电池电量: {battery_level * 100:.1f}%")
-
-                    if battery_level < 0.3:
-                        print("警告: 电池电量过低, 建议立即充电!")
-                    elif battery_level < 0.5:
-                        print("提示: 电池电量较低, 建议充电")
-                    else:
-                        print("电池电量充足")
-                else:
-                    print("查询电池电量失败")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "27":
-            # 自动充电检查(单次)
-            print("\n--- 自动充电检查 ---")
-            print("说明: 执行一次充电检查")
-            print("  - 如果不在CP6, 则跳过本次检查")
-            print("  - 如果在CP6, 先查询电池电量")
-            print("  - 如果电量低于50%, 先确认是否已在充电")
-            print("  - 仅在未充电时执行充电循环(CP6->PP5->CP6)")
-
-            try:
-                result = controller.auto_charge_check()
-
-                print(f"\n充电检查结果:")
-                print(f"  状态: {result.get('status')}")
-                print(f"  动作: {result.get('action')}")
-                print(f"  消息: {result.get('message')}")
-
-                if "battery_level" in result:
-                    battery_level = result.get('battery_level')
-                    print(f"  电池电量: {battery_level * 100:.1f}%")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "28":
-            # 启动自动充电循环
-            print("\n--- 启动自动充电循环 ---")
-            print("说明: 启动自动充电循环, 每隔指定时间执行一次充电检查")
-            print("提示: 按Ctrl+C可以中断循环")
-
-            try:
-                interval_input = input("请输入检查间隔时间(小时, 默认1): ").strip()
-
-                if interval_input == "":
-                    interval_hours = 1
-                else:
-                    interval_hours = float(interval_input)
-
-                if interval_hours <= 0:
-                    print("错误: 间隔时间必须大于0")
-                    continue
-
-                print(f"\n启动自动充电循环, 检查间隔: {interval_hours}小时")
-                print("按Ctrl+C可以中断循环\n")
-
-                controller.auto_charge_loop(interval_hours=interval_hours)
-
-            except KeyboardInterrupt:
-                print("\n用户中断自动充电循环")
-            except ValueError:
-                print("错误: 请输入有效的数字")
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "29":
-            # 批量物料转运循环测试
-            print("\n--- 批量物料转运循环测试 ---")
-            print("说明: 执行正向转运->充电站->反向转运->充电站的循环测试")
-            print("      支持一次转运最多4个物料, AGV会自动移动到各站点并进行点位校准")
-
-            try:
-                # 输入循环次数
-                cycle_input = input("请输入循环次数 (默认1): ").strip()
-                if cycle_input == "":
-                    cycle_count = 1
-                else:
-                    if not cycle_input.isdigit():
-                        print("错误: 请输入有效的数字")
-                        continue
-                    cycle_count = int(cycle_input)
-                    if cycle_count < 1:
-                        print("错误: 循环次数必须大于0")
-                        continue
-
-                # 输入任务数量
-                task_count_input = input("请输入要转运的物料数量 (1-4): ").strip()
-                if not task_count_input.isdigit():
-                    print("错误: 请输入有效的数字")
-                    continue
-
-                task_count = int(task_count_input)
-                if task_count < 1 or task_count > 4:
-                    print("错误: 任务数量必须在1-4之间")
-                    continue
-
-                # 获取所有可用的托盘位置
-                tray_positions = controller.position_manager.get_category('tray_position')
-                if not tray_positions:
-                    print("错误: 未找到托盘位置配置")
-                    continue
-
-                # 获取所有可用的物料类型
-                materials = controller.position_manager.list_materials()
-
-                # 构建转运任务列表
-                transfer_tasks = []
-
-                for i in range(task_count):
-                    print(f"\n{'=' * 60}")
-                    print(f"配置任务 {i+1}/{task_count}")
-                    print(f"{'=' * 60}")
-
-                    # 显示所有可用的托盘位置
-                    print("\n可用的托盘位置:")
-                    tray_list = list(tray_positions.keys())
-                    for idx, tray_name in enumerate(tray_list, 1):
-                        tray_config = tray_positions[tray_name]
-                        description = tray_config.get('description', '无描述')
-                        print(f"  {idx}. {tray_name} - {description}")
-
-                    # 选择源托盘
-                    source_choice = input(f"\n请选择源托盘位置 (1-{len(tray_list)}): ").strip()
-                    if not source_choice.isdigit():
-                        print("错误: 请输入有效的数字")
-                        break
-                    source_index = int(source_choice) - 1
-                    if source_index < 0 or source_index >= len(tray_list):
-                        print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                        break
-                    source_tray = tray_list[source_index]
-
-                    # 选择目标托盘
-                    target_choice = input(f"请选择目标托盘位置 (1-{len(tray_list)}): ").strip()
-                    if not target_choice.isdigit():
-                        print("错误: 请输入有效的数字")
-                        break
-                    target_index = int(target_choice) - 1
-                    if target_index < 0 or target_index >= len(tray_list):
-                        print(f"错误: 请输入1到{len(tray_list)}之间的数字")
-                        break
-                    target_tray = tray_list[target_index]
-
-                    # 选择物料类型(可选)
-                    selected_material = None
-                    if materials:
-                        print("\n可用的物料类型:")
-                        for idx, material_name in enumerate(materials, 1):
-                            material = controller.position_manager.get_material(material_name)
-                            print(f"  {idx}. {material_name} - {material.description} (夹爪: {material.gripper})")
-
-                        material_choice = input(f"请选择物料类型 (1-{len(materials)}, 直接回车跳过): ").strip()
-                        if material_choice != "":
-                            if not material_choice.isdigit():
-                                print("错误: 请输入有效的数字")
-                                break
-                            material_index = int(material_choice) - 1
-                            if material_index < 0 or material_index >= len(materials):
-                                print(f"错误: 请输入1到{len(materials)}之间的数字")
-                                break
-                            selected_material = materials[material_index]
-
-                    # 添加任务到列表
-                    task = {
-                        "source_tray": source_tray,
-                        "target_tray": target_tray,
-                        "material_type": selected_material
-                    }
-                    transfer_tasks.append(task)
-
-                    print(f"\n任务{i+1}已配置: {source_tray} <-> {target_tray}")
-                    if selected_material:
-                        print(f"  物料类型: {selected_material}")
-
-                # 检查是否成功配置了所有任务
-                if len(transfer_tasks) != task_count:
-                    print("\n任务配置未完成, 已取消")
-                    continue
-
-                # 显示任务摘要
-                print(f"\n{'=' * 60}")
-                print("循环测试摘要:")
-                print(f"{'=' * 60}")
-                print(f"循环次数: {cycle_count}")
-                print(f"转运任务:")
-                for idx, task in enumerate(transfer_tasks, 1):
-                    print(f"  任务{idx}: {task['source_tray']} <-> {task['target_tray']}")
-                    if task['material_type']:
-                        print(f"         物料类型: {task['material_type']}")
-
-                # 确认执行
-                print(f"\n警告: 此操作将控制AGV移动并执行{cycle_count}轮循环测试, 请确保周围安全!")
-                confirm = input("确认执行循环测试? (y/n): ").strip().lower()
-
-                if confirm != 'y':
-                    print("已取消")
-                    continue
-
-                # 执行循环测试
-                print(f"\n开始执行批量物料转运循环测试...")
-                result = controller.batch_transfer_cycle_test(transfer_tasks, cycle_count=cycle_count, block=True)
-
-                # 显示测试结果
-                print(f"\n{'=' * 60}")
-                print("循环测试结果:")
-                print(f"{'=' * 60}")
-                print(f"测试状态: {'成功' if result['success'] else '失败'}")
-                print(f"完成循环: {result['completed_cycles']}/{result['total_cycles']}")
-                if result['failed_at']:
-                    print(f"失败阶段: {result['failed_at']}")
-                print(f"{'=' * 60}")
-
-                if result['success']:
-                    print(f"\n批量物料转运循环测试全部完成!")
-                else:
-                    print(f"\n批量物料转运循环测试失败, 请查看日志获取详细信息")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "30":
-            # 分析站→货架样品转运
-            print("\n--- 分析站→货架样品转运 ---")
-            print("说明: 轮询智达进样设备状态, 等待空闲后将样品从分析站转运到货架空位")
-
-            try:
-                # 显示当前货架状态
-                controller.shelf_manager.print_status()
-
-                # 询问源托盘
-                print("\n默认源托盘: analysis_station_tray_1-2")
-                source_input = input(
-                    "请输入源托盘(多个用逗号分隔, 直接回车使用默认): "
-                ).strip()
-
-                if source_input == "":
-                    source_trays = ["analysis_station_tray_1-2"]
-                else:
-                    source_trays = [s.strip() for s in source_input.split(",") if s.strip() != ""]
-
-                print(f"源托盘: {source_trays}")
-
-                # 询问轮询间隔
-                interval_input = input("请输入轮询间隔秒数 (默认30): ").strip()
-                try:
-                    poll_interval = float(interval_input) if interval_input != "" else 30.0
-                except ValueError:
-                    print("无效数值, 使用默认30秒")
-                    poll_interval = 30.0
-
-                # 确认执行
-                print(f"\n将执行以下操作:")
-                print(f"  源托盘: {source_trays}")
-                print(f"  轮询间隔: {poll_interval} 秒")
-                confirm = input("确认执行? (y/n): ").strip().lower()
-
-                if confirm != "y":
-                    print("已取消")
-                    continue
-
-                # 执行转运
-                print("\n开始执行分析站→货架样品转运...")
-                result = controller.transfer_analysis_to_shelf(
-                    source_trays=source_trays,
-                    poll_interval=poll_interval,
-                )
-
-                if result:
-                    print("\n分析站→货架样品转运成功!")
-                    controller.shelf_manager.print_status()
-                else:
-                    print("\n分析站→货架样品转运失败, 请查看日志获取详细信息")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "31":
-            # 查看/管理货架状态
-            print("\n--- 查看/管理货架状态 ---")
-
-            while True:
-                print("\n  1. 查看当前状态")
-                print("  2. 手动清除槽位")
-                print("  3. 重置全部槽位")
-                print("  0. 返回上级菜单")
-
-                sub_choice = input("请选择操作: ").strip()
-
-                if sub_choice == "0":
-                    break
-                elif sub_choice == "1":
-                    controller.shelf_manager.print_status()
-                elif sub_choice == "2":
-                    # 列出有物料的槽位
-                    controller.shelf_manager.print_status()
-                    status = controller.shelf_manager.get_all_status()
-                    occupied = [
-                        name for name in status["slots"]
-                        if status["slots"][name] is not None
-                    ]
-
-                    if len(occupied) == 0:
-                        print("所有槽位均为空, 无需清除")
-                        continue
-
-                    print("\n有物料的槽位:")
-                    for idx, name in enumerate(occupied, 1):
-                        info = status["slots"][name]
-                        print(f"  {idx}. {name} - {info.get('material_type', '未知')}")
-
-                    slot_input = input(
-                        f"请选择要清除的槽位 (1-{len(occupied)}): "
-                    ).strip()
-
-                    if not slot_input.isdigit():
-                        print("无效输入")
-                        continue
-
-                    slot_idx = int(slot_input) - 1
-                    if slot_idx < 0 or slot_idx >= len(occupied):
-                        print(f"请输入1到{len(occupied)}之间的数字")
-                        continue
-
-                    slot_name = occupied[slot_idx]
-                    confirm = input(f"确认清除槽位 {slot_name}? (y/n): ").strip().lower()
-                    if confirm == "y":
-                        result = controller.shelf_manager.remove_material(slot_name)
-                        print(f"清除结果: {'成功' if result else '失败'}")
-                    else:
-                        print("已取消")
-
-                elif sub_choice == "3":
-                    confirm = input("确认重置全部槽位? 此操作不可恢复 (y/n): ").strip().lower()
-                    if confirm == "y":
-                        controller.shelf_manager.reset_all()
-                        print("已重置全部槽位")
-                    else:
-                        print("已取消")
-                else:
-                    print("无效选择")
-
-        elif choice == "32":
-            # PP5/CP6自动充电检查
-            print("\n--- PP5/CP6自动充电检查 ---")
-            print("说明: 执行一次PP5/CP6待命充电检查")
-            print("  - 如果在PP5且电量低于50%, 则进入CP6充电")
-            print("  - 如果在CP6且电量高于90%, 则返回PP5待命")
-            print("  - 如果在PP5且电量不低于50%, 则继续在PP5待命")
-            print("  - 如果在CP6且电量不高于90%, 则继续在CP6待命")
-            print("  - 如果不在PP5或CP6, 则视为工作途中并跳过本次检查")
-
-            try:
-                result = controller.auto_charge_pp5_cp6_check()
-
-                print("\n充电检查结果:")
-                print(f"  状态: {result.get('status')}")
-                print(f"  动作: {result.get('action')}")
-                print(f"  消息: {result.get('message')}")
-
-                if "current_station" in result:
-                    print(f"  当前站点: {result.get('current_station')}")
-                if "battery_level" in result:
-                    battery_level = result.get("battery_level")
-                    print(f"  电池电量: {battery_level * 100:.1f}%")
-
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "33":
-            # 启动PP5/CP6自动充电循环
-            print("\n--- 启动PP5/CP6自动充电循环 ---")
-            print("说明: 启动PP5/CP6待命充电循环监控")
-            print("提示: 按Ctrl+C可以中断循环")
-
-            try:
-                interval_input = input("请输入检查间隔时间(小时, 默认1): ").strip()
-                retry_input = input("请输入重试间隔时间(分钟, 默认5): ").strip()
-
-                if interval_input == "":
-                    interval_hours = 1
-                else:
-                    interval_hours = float(interval_input)
-
-                if retry_input == "":
-                    retry_wait_minutes = 5
-                else:
-                    retry_wait_minutes = float(retry_input)
-
-                if interval_hours <= 0:
-                    print("错误: 检查间隔时间必须大于0")
-                    continue
-                if retry_wait_minutes <= 0:
-                    print("错误: 重试间隔时间必须大于0")
-                    continue
-
-                print(
-                    f"\n启动PP5/CP6自动充电循环, 检查间隔: {interval_hours}小时, "
-                    f"重试间隔: {retry_wait_minutes}分钟"
-                )
-                print("按Ctrl+C可以中断循环\n")
-
-                controller.auto_charge_pp5_cp6_loop(
-                    interval_hours=interval_hours,
-                    retry_wait_minutes=retry_wait_minutes
-                )
-
-            except KeyboardInterrupt:
-                print("\n用户中断PP5/CP6自动充电循环")
-            except ValueError:
-                print("错误: 请输入有效的数字")
-            except Exception as e:
-                print(f"错误: {e}")
-
-        elif choice == "0":
-            # 退出程序
-            print("\n正在退出...")
-            if controller.arm.is_connected:
-                controller.disconnect()
-            break
-
-        else:
-            print("无效的选项, 请重新输入")
-
-    print("\n程序已退出")
-
-
-if __name__ == "__main__":
-    main()

@@ -1063,12 +1063,29 @@ class PeakIntegrator:
             if next_prominence <= current_prominence:
                 continue
 
+            curr_peak_idx = int(peak_indices[peak_no])
+            next_peak_idx = int(peak_indices[next_peak_no])
+            current_rt = float(times[curr_peak_idx])
+            next_rt = float(times[next_peak_idx])
+            next_gap_min = float(next_rt - current_rt)
             prominence_ratio = self._safe_ratio(current_prominence, next_prominence)
+            if next_gap_min > self._shoulder_filter_gap_max_min:
+                if prominence_ratio > self._shoulder_filter_relative_prominence_max:
+                    logger.debug(
+                        "RT=%.3f 的峰与后峰 RT=%.3f 间隔 %.4f min 超过前沿假峰最大间隔 %.4f min, "
+                        "且 prominence比值 %.4f 高于超弱肩峰阈值 %.4f, 跳过前沿假峰过滤.",
+                        current_rt,
+                        next_rt,
+                        next_gap_min,
+                        self._shoulder_filter_gap_max_min,
+                        prominence_ratio,
+                        self._shoulder_filter_relative_prominence_max,
+                    )
+                    continue
+
             if prominence_ratio > self._leading_edge_relative_prominence_max:
                 continue
 
-            curr_peak_idx = int(peak_indices[peak_no])
-            next_peak_idx = int(peak_indices[next_peak_no])
             # 至少 4 个数据点, 保证中点后仍有足够统计量
             if next_peak_idx <= curr_peak_idx + 3:
                 continue
@@ -1088,13 +1105,12 @@ class PeakIntegrator:
 
             # 判定为前沿假峰, 直接丢弃
             keep_mask[peak_no] = False
-            current_rt = float(times[curr_peak_idx])
-            next_rt = float(times[next_peak_idx])
             logger.info(
                 "RT=%.3f 的峰判定为后峰前沿假峰, 已丢弃. 后峰RT=%.3f, "
-                "上升步占比=%.4f (阈值=%.4f), prominence比值=%.4f",
+                "峰间隔=%.4f min, 上升步占比=%.4f (阈值=%.4f), prominence比值=%.4f",
                 current_rt,
                 next_rt,
+                next_gap_min,
                 rising_ratio,
                 self._leading_edge_monotonic_ratio_min,
                 prominence_ratio,

@@ -674,16 +674,23 @@ class NISTMatcher:
         peak_results: List["PeakResult"],
         reader: "GCMSDataReader",
         avg_scans: int = 3,
+        bg_subtract: bool = False,
+        bg_height_pct: float = 0.0,
+        bg_avg_scans: Optional[int] = None,
     ) -> Dict[float, List[CompoundMatch]]:
         """
         功能:
             对 .D 目录中指定峰逐一提取 apex 质谱并通过 NIST 搜索.
             使用峰边界范围内 TIC 最大的扫描, 并平均周围扫描以提升信噪比.
+            可选启用背景扣除以去除柱流失和溶剂干扰.
         参数:
             d_dir: .D 目录路径.
             peak_results: 峰检测积分结果列表 (含 start_time/end_time/retention_time).
             reader: GCMSDataReader 实例.
             avg_scans: 以 apex 为中心的平均扫描数.
+            bg_subtract: 是否启用背景扣除.
+            bg_height_pct: 背景采样高度百分比 (0=边界, >0=百分比高度).
+            bg_avg_scans: 背景平均扫描数, None 则跟随 avg_scans.
         返回:
             Dict[float, List[CompoundMatch]]: 保留时间 -> 按 max_hits 裁剪后的匹配结果列表.
         """
@@ -698,7 +705,10 @@ class NISTMatcher:
         for peak in peak_results:
             try:
                 mz_values, intensities = reader.read_ms_spectra_at_peak(
-                    d_dir, peak.start_time, peak.end_time, avg_scans
+                    d_dir, peak.start_time, peak.end_time, avg_scans,
+                    bg_subtract=bg_subtract,
+                    bg_height_pct=bg_height_pct,
+                    bg_avg_scans=bg_avg_scans,
                 )
                 if len(mz_values) == 0:
                     continue

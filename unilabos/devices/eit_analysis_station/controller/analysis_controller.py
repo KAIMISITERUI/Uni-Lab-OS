@@ -1398,6 +1398,9 @@ class AnalysisStationController:
                 result.compound_matches = nist.match_peaks_with_nist(
                     d_dir, result.tic_peaks, reader,
                     avg_scans=self._settings.nist_avg_scans,
+                    bg_subtract=self._settings.ms_bg_subtract,
+                    bg_height_pct=self._settings.ms_bg_height_pct,
+                    bg_avg_scans=self._settings.ms_bg_avg_scans,
                 )
                 if result.compound_matches:
                     self._logger.info(
@@ -1423,6 +1426,9 @@ class AnalysisStationController:
                     mz_values, ms_intensities = reader.read_ms_spectra_at_peak(
                         d_dir, peak.start_time, peak.end_time,
                         avg_scans=self._settings.nist_avg_scans,
+                        bg_subtract=self._settings.ms_bg_subtract,
+                        bg_height_pct=self._settings.ms_bg_height_pct,
+                        bg_avg_scans=self._settings.ms_bg_avg_scans,
                     )
                     peak_ms_cache[peak_num] = (mz_values, ms_intensities)
                 except Exception as e:
@@ -1545,6 +1551,9 @@ class AnalysisStationController:
                             mz, ms_intensities = reader.read_ms_spectra_at_peak(
                                 d_dir, peak.start_time, peak.end_time,
                                 avg_scans=self._settings.nist_avg_scans,
+                                bg_subtract=self._settings.ms_bg_subtract,
+                                bg_height_pct=self._settings.ms_bg_height_pct,
+                                bg_avg_scans=self._settings.ms_bg_avg_scans,
                             )
                         else:
                             mz, ms_intensities = cached_spectrum
@@ -2809,244 +2818,4 @@ class AnalysisStationController:
             self._logger.error("归档失败: %s", exc, exc_info=True)
             return {"success": False, "return_info": f"归档失败: {exc}"}
 
-
-# ------------------------------------------------------------------
-# 交互式测试入口
-# ------------------------------------------------------------------
-
-def _print_result(result: Dict) -> None:
-    """
-    功能:
-        格式化打印函数返回结果.
-    参数:
-        result: 函数返回的字典.
-    返回:
-        无.
-    """
-    print("\n========== 执行结果 ==========")
-    for key, value in result.items():
-        print(f"  {key}: {value}")
-    print("==============================\n")
-
-
-def main() -> None:
-    """
-    功能:
-        交互式菜单, 用于手动测试 run_analysis / process_gc_ms_results /
-        poll_analysis_run / get_status / get_methods / calculate_yields /
-        submit_by_csv_path / aggregate_task_data.
-        用户可选择功能并输入 task_id, 输入 q 退出.
-    参数:
-        无.
-    返回:
-        无.
-    """
-    configure_logging("DEBUG")
-    logger = logging.getLogger("main")
-    logger.info("初始化分析站控制器...")
-
-    controller = AnalysisStationController()
-
-    menu = (
-        "\n===== 分析站交互式测试菜单 =====\n"
-        "  1. run_analysis          - 统一分析入口(生成CSV并提交至仪器)\n"
-        "  2. process_gc_ms_results - GC-MS结果处理(积分+定性+报告)\n"
-        "  3. poll_analysis_run     - 轮询GC-MS分析任务状态并自动处理结果\n"
-        "  4. get_status            - 获取GC-MS设备当前状态\n"
-        "  5. get_methods           - 获取当前Project的方法列表\n"
-        "  6. calculate_yields      - 产率计算\n"
-        "  7. submit_by_csv_path    - 选择仪器并按CSV路径直接提交任务\n"
-        "  8. aggregate_task_data   - 实验数据归档汇总\n"
-        "  9. transfer_to_shelf   - 分析完成样品→货架转运(等待空闲后自动执行)\n"
-        "  0. 退出\n"
-        "================================"
-    )
-
-    while True:
-        print(menu)
-        choice = input("请选择功能编号: ").strip()
-
-        if choice == "0":
-            print("已退出测试.")
-            break
-
-        if choice not in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
-            print("无效选择, 请输入 0/1/2/3/4/5/6/7/8/9.")
-            continue
-
-        # 选项 4/5 直接操作设备驱动, 不需要 task_id
-        if choice in ("4", "5"):
-            settings = controller._settings
-            client = ZhidaClient(
-                host=settings.gc_ms_host,
-                port=settings.gc_ms_port,
-                timeout=settings.gc_ms_timeout,
-            )
-            try:
-                client.connect()
-                if choice == "4":
-                    print("\n>>> 调用 ZhidaClient.get_status_detail()")
-                    status_detail = client.get_status_detail()
-                    raw_status = status_detail["raw_status"] or "(空)"
-                    sub_status = status_detail["sub_status"] or "(无)"
-                    print(
-                        "\n"
-                        f"  原始状态: {raw_status}\n"
-                        f"  主状态: {status_detail['base_status']}\n"
-                        f"  子状态: {sub_status}\n"
-                    )
-                else:
-                    print("\n>>> 调用 ZhidaClient.get_methods()")
-                    methods = client.get_methods()
-                    _print_result(methods)
-            except Exception as exc:
-                logger.error("设备操作失败: %s", exc)
-                print(f"\n  操作失败: {exc}\n")
-            finally:
-                client.close()
-            continue
-
-        if choice == "7":
-            instrument_options = {
-                "1": ("gc_ms", "GC-MS"),
-                "2": ("uplc_qtof", "UPLC_QTOF"),
-                "3": ("hplc", "HPLC"),
-            }
-            print("\n请选择仪器:")
-            for option, (_, instrument_name) in instrument_options.items():
-                print(f"  {option}. {instrument_name}")
-
-            instrument_choice = input("请输入仪器编号(1/2/3): ").strip()
-            if instrument_choice not in instrument_options:
-                print("无效选择, 请输入 1/2/3.")
-                continue
-
-            instrument = instrument_options[instrument_choice][0]
-            csv_file_path = input("请输入CSV文件路径: ").strip()
-            print(
-                f"\n>>> 调用 submit_by_csv_path("
-                f"instrument={instrument!r}, csv_file_path={csv_file_path!r})"
-            )
-            result = controller.submit_by_csv_path(
-                instrument=instrument, csv_file_path=csv_file_path
-            )
-            _print_result(result)
-            continue
-
-        # 获取 task_id, 空字符串视为 None(自动选取最新任务)
-        task_id_input = input("请输入 task_id (留空则自动选取最新任务): ").strip()
-        task_id = task_id_input if task_id_input else None
-
-        if choice == "1":
-            print(f"\n>>> 调用 run_analysis(task_id={task_id!r})")
-            result = controller.run_analysis(task_id=task_id)
-            _print_result(result)
-
-        elif choice == "2":
-            print(f"\n>>> 调用 process_gc_ms_results(task_id={task_id!r})")
-            result = controller.process_gc_ms_results(task_id=task_id)
-            _print_result(result)
-
-        elif choice == "3":
-            # poll_analysis_run 额外支持配置轮询间隔
-            interval_input = input("请输入轮询间隔秒数 (留空默认30): ").strip()
-            try:
-                interval = float(interval_input) if interval_input else 30.0
-            except ValueError:
-                print("无效数值, 使用默认30秒.")
-                interval = 30.0
-
-            print(
-                f"\n>>> 调用 poll_analysis_run(task_id={task_id!r}, "
-                f"poll_interval={interval})"
-            )
-            result = controller.poll_analysis_run(
-                task_id=task_id, poll_interval=interval
-            )
-            _print_result(result)
-
-        elif choice == "6":
-            print(f"\n>>> 调用 calculate_yields(task_id={task_id!r})")
-            result = controller.calculate_yields(task_id=task_id)
-            _print_result(result)
-
-        elif choice == "8":
-            default_copy = controller._settings.archive_copy_raw_data
-            hint = "Y/n" if default_copy is True else "y/N"
-            copy_raw_input = input(
-                f"是否复制原始数据(.D目录)? ({hint}, 留空使用配置默认值): "
-            ).strip().lower()
-            if copy_raw_input == "":
-                copy_raw: Optional[bool] = None  # 使用配置默认值
-            else:
-                copy_raw = copy_raw_input in ("y", "yes")
-            print(
-                f"\n>>> 调用 aggregate_task_data("
-                f"task_id={task_id!r}, copy_raw_data={copy_raw})"
-            )
-            result = controller.aggregate_task_data(
-                task_id=task_id, copy_raw_data=copy_raw
-            )
-            _print_result(result)
-
-        elif choice == "9":
-            # 分析完成样品→货架转运
-            print("\n>>> 分析完成样品→货架转运")
-            print("说明: 轮询智达进样设备状态, 等待空闲后将样品从分析站转运到货架空位\n")
-
-            try:
-                from unilabos.devices.eit_agv.controller.agv_controller import AGVController
-
-                agv = AGVController(timeout=180000)
-
-                # 显示当前货架状态
-                agv.shelf_manager.print_status()
-
-                # 询问源托盘
-                print("默认源托盘: analysis_station_tray_1-2")
-                source_input = input(
-                    "请输入源托盘(多个用逗号分隔, 直接回车使用默认): "
-                ).strip()
-
-                if source_input == "":
-                    source_trays = ["analysis_station_tray_1-2"]
-                else:
-                    source_trays = [
-                        s.strip() for s in source_input.split(",") if s.strip() != ""
-                    ]
-
-                # 询问轮询间隔
-                interval_input = input("请输入轮询间隔秒数 (留空默认30): ").strip()
-                try:
-                    interval = float(interval_input) if interval_input else 30.0
-                except ValueError:
-                    print("无效数值, 使用默认30秒.")
-                    interval = 30.0
-
-                print(f"\n源托盘: {source_trays}")
-                print(f"轮询间隔: {interval} 秒")
-
-                # 执行转运
-                print("\n开始执行分析站→货架样品转运...")
-                success = agv.transfer_analysis_to_shelf(
-                    source_trays=source_trays,
-                    poll_interval=interval,
-                )
-
-                _print_result({
-                    "success": success,
-                    "source_trays": source_trays,
-                    "poll_interval": interval,
-                })
-
-                if success:
-                    agv.shelf_manager.print_status()
-
-            except Exception as exc:
-                logger.error("分析站→货架转运失败: %s", exc)
-                print(f"\n  操作失败: {exc}\n")
-
-
-if __name__ == "__main__":
-    main()
 

@@ -61,6 +61,10 @@ AGV_MAX_WACC = 0.5  # 最大角加速度, 单位rad/s^2
 AGV_QUERY_MAX_RETRIES = 3       # 查询最大重试次数
 AGV_QUERY_RETRY_DELAY = 1.0    # 首次重试等待时间, 单位秒, 后续翻倍(指数退避)
 
+# PP5/CP6自动充电配置
+AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES = 30  # 正常检查间隔, 单位分钟
+AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT = 50  # 低电量阈值, 低于该值触发充电
+
 # 工站位置配置
 STATION_POSITIONS = {
     "LM1": {

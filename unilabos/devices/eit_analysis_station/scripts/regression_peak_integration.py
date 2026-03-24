@@ -437,6 +437,7 @@ def _run_real_case(
     min_distance: int,
     required_rts: List[float],
     forbidden_window: Optional[tuple] = None,
+    expected_peak_count: Optional[int] = None,
 ) -> bool:
     """
     功能:
@@ -449,6 +450,7 @@ def _run_real_case(
         min_distance: 峰最小间距.
         required_rts: 必须保留的 RT 列表.
         forbidden_window: 禁止出现峰的 RT 窗口.
+        expected_peak_count: 期望峰数, None 表示不校验总峰数.
     返回:
         bool, True 表示通过.
     """
@@ -467,6 +469,18 @@ def _run_real_case(
     if len(peaks) == 0:
         logger.error("样本 %s %s 回归失败: 4-10 min 未检出峰.", d_dir.name, detector.upper())
         return False
+
+    if expected_peak_count is not None:
+        if len(peaks) != expected_peak_count:
+            logger.error(
+                "样本 %s %s 回归失败: 峰数=%d, 期望=%d. peaks=%s",
+                d_dir.name,
+                detector.upper(),
+                len(peaks),
+                expected_peak_count,
+                _rounded_rts(peaks),
+            )
+            return False
 
     for target_rt in required_rts:
         if _has_peak(peaks, target_rt, 0.03) is False:
@@ -511,13 +525,14 @@ def _run_real_case(
 def run_real_sample_regression(data_root: Path) -> bool:
     """
     功能:
-        对 725/760 真实样本执行 TIC 和 FID 回归检查.
+        对 725/760 真实样本以及本地 787 fixture 执行 TIC 和 FID 回归检查.
     参数:
         data_root: 样本根目录.
     返回:
         bool, True 表示通过.
     """
     reader = GCMSDataReader()
+    fixture_root = PROJECT_ROOT / "eit_analysis_station" / "fixtures" / "peak_integration"
     cases = [
         {
             "d_dir": data_root / "760" / "760-2.D",
@@ -550,6 +565,16 @@ def run_real_sample_regression(data_root: Path) -> bool:
             "min_distance": 50,
             "required_rts": [6.8427, 6.9723],
             "forbidden_window": None,
+            "expected_peak_count": None,
+        },
+        {
+            "d_dir": fixture_root / "787-2.D",
+            "detector": "tic",
+            "prominence": 20000.0,
+            "min_distance": 3,
+            "required_rts": [6.8387, 6.9793, 7.4814, 7.6220],
+            "forbidden_window": None,
+            "expected_peak_count": 4,
         },
     ]
 
@@ -567,6 +592,7 @@ def run_real_sample_regression(data_root: Path) -> bool:
             min_distance=case["min_distance"],
             required_rts=case["required_rts"],
             forbidden_window=case["forbidden_window"],
+            expected_peak_count=case.get("expected_peak_count"),
         )
         if case_ok is False:
             all_ok = False
