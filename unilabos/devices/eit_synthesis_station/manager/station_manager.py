@@ -293,35 +293,38 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             None
         """
         wb = load_workbook(file_path)
-        ws = wb.active
-        MAX_WIDTH = 60  # 列宽上限
+        try:
+            ws = wb.active
+            MAX_WIDTH = 60  # 列宽上限
 
-        align_center = Alignment(horizontal="center", vertical="center")
+            align_center = Alignment(horizontal="center", vertical="center")
 
-        def _is_chinese(text: str) -> bool:
-            return re.search(r"[\u4e00-\u9fff]", text) is not None
+            def _is_chinese(text: str) -> bool:
+                return re.search(r"[\u4e00-\u9fff]", text) is not None
 
-        # 遍历列计算列宽并设置字体/对齐
-        for col_cells in ws.iter_cols():
-            max_len = 0
-            for idx, cell in enumerate(col_cells):
-                val_str = "" if cell.value is None else str(cell.value)
-                max_len = max(max_len, len(val_str))
+            # 遍历列计算列宽并设置字体/对齐
+            for col_cells in ws.iter_cols():
+                max_len = 0
+                for idx, cell in enumerate(col_cells):
+                    val_str = "" if cell.value is None else str(cell.value)
+                    max_len = max(max_len, len(val_str))
 
-                # 按内容切换字体，表头加粗
-                if idx == 0:
-                    cell.font = Font(name="微软雅黑", bold=True)
-                else:
-                    cell.font = Font(name="微软雅黑")
+                    # 按内容切换字体, 表头加粗
+                    if idx == 0:
+                        cell.font = Font(name="微软雅黑", bold=True)
+                    else:
+                        cell.font = Font(name="微软雅黑")
 
-                cell.alignment = align_center
+                    cell.alignment = align_center
 
-            # 列宽留一点边距，最小 10，最大 40
-            col_width = max(10, max_len + 2)
-            col_width = min(col_width, MAX_WIDTH)
-            ws.column_dimensions[col_cells[0].column_letter].width = col_width
+                # 列宽留一点边距, 最小 10, 最大 40
+                col_width = max(10, max_len + 2)
+                col_width = min(col_width, MAX_WIDTH)
+                ws.column_dimensions[col_cells[0].column_letter].width = col_width
 
-        safe_workbook_save(wb, file_path)
+            safe_workbook_save(wb, file_path)
+        finally:
+            wb.close()
 
     def align_chemicals_with_file(self, file_path: str, auto_delete: bool = True) -> None:
         """
@@ -533,6 +536,144 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         return None
 
+    def search_chemical_in_library(
+        self,
+        query: str,
+        query_type: str,
+        excel_path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        功能:
+            在化学品库 Excel 文件中按 CAS / 名称 / SMILES 查询已有药品,
+            返回所有匹配行. SMILES 先在线解析为 CAS 再查库.
+        参数:
+            query: str, 查询字符串.
+            query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
+            excel_path: Optional[str], 化学品库文件路径.
+        返回:
+            List[Dict[str, Any]], 每项包含 row_index 和 row_data,
+            无匹配时返回空列表.
+        """
+        from ..chem_tools.chemical_lookup import _contains_cjk, lookup_chemical_by_smiles
+
+        normalized_query = str(query or "").strip()
+        if normalized_query == "":
+            return []
+
+        if query_type not in {"cas", "name", "smiles"}:
+            logger.warning("化学品库查询不支持的类型: %s", query_type)
+            return []
+
+        # SMILES 需要先在线解析为 CAS / 英文名
+        if query_type == "smiles":
+            info = lookup_chemical_by_smiles(normalized_query)
+            if info is None:
+                logger.warning("SMILES 解析失败, 无法在库中查询: %s", normalized_query)
+                return []
+            resolved_cas = str(info.cas_number or "").strip()
+            resolved_en_name = str(info.substance_english_name or "").strip()
+            # 用解析出的 CAS 查库, CAS 为空时用英文名
+            if resolved_cas != "":
+                return self._search_library_by_cas(resolved_cas, excel_path)
+            if resolved_en_name != "":
+                return self._search_library_by_name(resolved_en_name, is_cjk=False, excel_path=excel_path)
+            return []
+
+        if query_type == "cas":
+            return self._search_library_by_cas(normalized_query, excel_path)
+
+        # 名称查询, 自动检测中英文
+        is_cjk = _contains_cjk(normalized_query)
+        return self._search_library_by_name(normalized_query, is_cjk=is_cjk, excel_path=excel_path)
+
+    def _search_library_by_cas(
+        self,
+        cas: str,
+        excel_path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        功能:
+            按 CAS 号精确匹配化学品库中的所有行.
+        参数:
+            cas: str, CAS 号.
+            excel_path: Optional[str], 化学品库文件路径.
+        返回:
+            List[Dict[str, Any]], 匹配行列表.
+        """
+        path = self._resolve_append_excel_path(excel_path)
+        wb = load_workbook(path, data_only=True)
+        try:
+            ws = wb.active
+            header_map = self._build_append_header_map(ws)
+            if "cas_number" not in header_map:
+                return []
+            col_idx = header_map["cas_number"]
+            results: List[Dict[str, Any]] = []
+            for row_idx in range(2, ws.max_row + 1):
+                cell_val = str(ws.cell(row=row_idx, column=col_idx).value or "").strip()
+                if cell_val == cas:
+                    results.append({
+                        "row_index": row_idx,
+                        "row_data": self._build_append_row_snapshot(ws, header_map, row_idx),
+                    })
+            return results
+        finally:
+            wb.close()
+
+    def _search_library_by_name(
+        self,
+        name: str,
+        is_cjk: bool,
+        excel_path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        功能:
+            按名称模糊匹配化学品库中的所有行.
+            中文名匹配 substance / substance_chinese_name 列,
+            英文名匹配 substance_english_name 列(忽略大小写).
+        参数:
+            name: str, 查询名称.
+            is_cjk: bool, True 表示中文名称.
+            excel_path: Optional[str], 化学品库文件路径.
+        返回:
+            List[Dict[str, Any]], 匹配行列表.
+        """
+        path = self._resolve_append_excel_path(excel_path)
+        wb = load_workbook(path, data_only=True)
+        try:
+            ws = wb.active
+            header_map = self._build_append_header_map(ws)
+
+            if is_cjk is True:
+                target_columns = [cn for cn in ("substance", "substance_chinese_name") if cn in header_map]
+            else:
+                target_columns = [cn for cn in ("substance_english_name",) if cn in header_map]
+
+            if len(target_columns) == 0:
+                return []
+
+            results: List[Dict[str, Any]] = []
+            seen_rows: set = set()
+            query_lower = name.lower()
+
+            for row_idx in range(2, ws.max_row + 1):
+                if row_idx in seen_rows:
+                    continue
+                for col_name in target_columns:
+                    cell_val = str(ws.cell(row=row_idx, column=header_map[col_name]).value or "").strip()
+                    if cell_val == "":
+                        continue
+                    if query_lower in cell_val.lower():
+                        results.append({
+                            "row_index": row_idx,
+                            "row_data": self._build_append_row_snapshot(ws, header_map, row_idx),
+                        })
+                        seen_rows.add(row_idx)
+                        break
+            return results
+        finally:
+            wb.close()
+
     @staticmethod
     def _parse_positive_float(value: Any, field_name: str) -> float:
         """
@@ -696,8 +837,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 existing_result["chemicalbook_record_path"] = ""
                 return existing_result
 
-            append_result = self.lookup_and_append_chemical(normalized_identifier, excel_path)
-            if append_result is None:
+            append_result = self.lookup_and_append_chemical_unified(normalized_identifier, "cas", excel_path)
+            if append_result is None or append_result.get("duplicate") is True:
                 return None
             append_result["base_created"] = True
             return append_result
@@ -718,8 +859,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             existing_result["chemicalbook_record_path"] = ""
             return existing_result
 
-        append_result = self.lookup_and_append_chemical_by_smiles(normalized_identifier, excel_path)
-        if append_result is None:
+        append_result = self.lookup_and_append_chemical_unified(normalized_identifier, "smiles", excel_path)
+        if append_result is None or append_result.get("duplicate") is True:
             return None
         append_result["base_created"] = True
         return append_result
@@ -764,7 +905,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         self,
         row_data: Dict[str, Any],
         excel_path: Optional[str] = None,
-    ) -> Optional[int]:
+    ) -> Tuple[Optional[int], str]:
         """
         功能:
             将单条化学品行数据追加到 Excel 末尾, 并执行重复检查.
@@ -772,7 +913,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             row_data: Dict[str, Any], 准备写入的行数据.
             excel_path: Optional[str], 目标 Excel 文件路径.
         返回:
-            Optional[int], 成功时返回新行行号, 命中重复时返回 None.
+            Tuple[Optional[int], str], 成功时返回 (新行行号, ""),
+            命中重复时返回 (None, 已有行的 substance 名称).
         """
         path = self._resolve_append_excel_path(excel_path)
 
@@ -788,16 +930,26 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             duplicate_result = self._find_duplicate_append_row(ws, header_map, row_data)
             if duplicate_result is not None:
                 label_text, target_value, column_name, row_idx = duplicate_result
-                summary_text = self._format_append_row_summary(row_data)
+                # 从已有行读取 substance 名称
+                existing_substance = ""
+                for cn in ("substance", "substance_chinese_name"):
+                    if cn in header_map:
+                        val = str(ws.cell(row=row_idx, column=header_map[cn]).value or "").strip()
+                        if val != "":
+                            existing_substance = val
+                            break
+                existing_summary = self._format_append_row_summary(
+                    self._build_append_row_snapshot(ws, header_map, row_idx),
+                )
                 logger.warning(
                     "化合物已存在, %s=%s, 表头=%s, 行号=%d, %s, 跳过添加",
                     label_text,
                     target_value,
                     column_name,
                     row_idx,
-                    summary_text,
+                    existing_summary,
                 )
-                return None
+                return None, existing_substance
 
             # 仅写入有值字段, 并设置与已有数据行一致的字体和对齐格式.
             data_font = Font(name="微软雅黑")
@@ -815,7 +967,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 cell.alignment = data_alignment
 
             safe_workbook_save(wb, path)
-            return new_row
+            return new_row, ""
         finally:
             wb.close()
 
@@ -856,122 +1008,86 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         return chemicalbook_record, chemicalbook_status, chemicalbook_record_path
 
-    def lookup_and_append_chemical(
-        self, query: str, excel_path: Optional[str] = None,
+    _VALID_QUERY_TYPES = {"cas", "name", "smiles"}
+
+    def lookup_and_append_chemical_unified(
+        self,
+        query: str,
+        query_type: str,
+        excel_path: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         功能:
-            在线查询化合物信息并追加到化学品库 Excel 文件末尾.
-            查询分为两层: 先用多源核心查询获取可用基础信息, 再用 ChemicalBook
-            结构化抓取补充全量数据, 并将原始结果保存为 sidecar JSON.
+            统一化学品在线查询并追加到化学品库 Excel 文件的入口.
+            根据 query_type 路由到对应查询逻辑, 查询完成后补充 ChemicalBook
+            数据并追加到 Excel. 重复时返回已有条目的 substance 名称.
         参数:
-            query: str, CAS 号或化合物中英文名称.
+            query: str, 查询字符串 (CAS / 名称 / SMILES).
+            query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
             excel_path: Optional[str], 目标 Excel 文件路径, 默认为 sheet/chemical_list.xlsx.
         返回:
-            Optional[Dict[str, Any]], 成功返回稳定结果字典, 包含 row_data, row_index,
-            chemicalbook_status, chemicalbook_record_path. 查询失败或重复时返回 None.
+            Optional[Dict[str, Any]], 成功返回包含 row_data, row_index,
+            chemicalbook_status, chemicalbook_record_path 的结果字典.
+            重复时返回包含 duplicate, duplicate_substance 的结果字典.
+            查询失败时返回 None.
         """
-        from ..chem_tools.chemical_lookup import is_cas_number, lookup_chemical
+        from ..chem_tools.chemical_lookup import is_cas_number, lookup_chemical_unified
 
         normalized_query = str(query or "").strip()
         if normalized_query == "":
             logger.warning("化学品追加失败, 查询参数为空")
             return None
 
-        # 先获取多源核心字段 (PubChem + Common Chemistry)
-        info = lookup_chemical(normalized_query)
+        if query_type not in self._VALID_QUERY_TYPES:
+            logger.warning("不支持的查询类型: %s", query_type)
+            return None
 
+        info = lookup_chemical_unified(normalized_query, query_type)
+
+        # 提取 CAS
         resolved_cas = ""
         if info is not None and str(info.cas_number or "").strip() != "":
             resolved_cas = str(info.cas_number).strip()
-        elif is_cas_number(normalized_query) is True:
+        elif query_type == "cas" and is_cas_number(normalized_query) is True:
             resolved_cas = normalized_query
 
+        # 补充 ChemicalBook 数据
         chemicalbook_record, chemicalbook_status, chemicalbook_record_path = self._fetch_chemicalbook_append_artifacts(
             resolved_cas,
         )
 
         if info is None and chemicalbook_record is None:
-            logger.warning("在线查询未找到化合物: %s", normalized_query)
+            logger.warning("在线查询未找到化合物: query=%s, type=%s", normalized_query, query_type)
             return None
 
-        row_data = build_append_row_data(
-            query=resolved_cas,
-            lookup_info=info,
-            chemicalbook_record=chemicalbook_record,
-        )
+        # SMILES 使用专用行数据构建, 其余统一使用通用构建
+        if query_type == "smiles":
+            row_data = build_append_row_data_for_smiles(
+                lookup_info=info,
+                chemicalbook_record=chemicalbook_record,
+            )
+        else:
+            row_data = build_append_row_data(
+                query=resolved_cas,
+                lookup_info=info,
+                chemicalbook_record=chemicalbook_record,
+            )
+
         if self._has_any_append_core_value(row_data) is False:
-            logger.warning("化学品追加失败, 未获取到可用核心字段: %s", normalized_query)
+            logger.warning("化学品追加失败, 未获取到可用核心字段: query=%s, type=%s", normalized_query, query_type)
             return None
 
-        new_row = self._append_chemical_row_to_excel(row_data=row_data, excel_path=excel_path)
+        new_row, duplicate_substance = self._append_chemical_row_to_excel(row_data=row_data, excel_path=excel_path)
         if new_row is None:
+            if duplicate_substance != "":
+                return {"duplicate": True, "duplicate_substance": duplicate_substance}
             return None
 
         summary_text = self._format_append_row_summary(row_data)
         logger.info(
-            "已追加化合物到 Excel: CAS=%s, 英文名=%s, %s, 行号=%d",
-            row_data.get("cas_number"),
-            row_data.get("substance_english_name"),
-            summary_text,
-            new_row,
-        )
-
-        return {
-            "row_data": row_data,
-            "row_index": new_row,
-            "chemicalbook_status": chemicalbook_status,
-            "chemicalbook_record_path": chemicalbook_record_path,
-        }
-
-    def lookup_and_append_chemical_by_smiles(
-        self, smiles: str, excel_path: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        功能:
-            根据单个完整 SMILES 在线查询化合物信息, 并追加到化学品库 Excel 文件末尾.
-            查询顺序固定为 PubChem 结构查询, 拿到 CAS 后再补 Common Chemistry
-            与 ChemicalBook.
-        参数:
-            smiles: str, 单个完整 SMILES 结构式.
-            excel_path: Optional[str], 目标 Excel 文件路径, 默认为 sheet/chemical_list.xlsx.
-        返回:
-            Optional[Dict[str, Any]], 成功返回稳定结果字典, 包含 row_data, row_index,
-            chemicalbook_status, chemicalbook_record_path. 查询失败或重复时返回 None.
-        """
-        from ..chem_tools.chemical_lookup import lookup_chemical_by_smiles
-
-        normalized_smiles = str(smiles or "").strip()
-        if normalized_smiles == "":
-            logger.warning("SMILES 化学品追加失败, 查询参数为空")
-            return None
-
-        info = lookup_chemical_by_smiles(normalized_smiles)
-        if info is None:
-            logger.warning("SMILES 在线查询未找到化合物: %s", normalized_smiles)
-            return None
-
-        resolved_cas = str(info.cas_number or "").strip()
-        chemicalbook_record, chemicalbook_status, chemicalbook_record_path = self._fetch_chemicalbook_append_artifacts(
-            resolved_cas,
-        )
-
-        row_data = build_append_row_data_for_smiles(
-            lookup_info=info,
-            chemicalbook_record=chemicalbook_record,
-        )
-        if self._has_any_append_core_value(row_data) is False:
-            logger.warning("SMILES 化学品追加失败, 未获取到可用核心字段: %s", normalized_smiles)
-            return None
-
-        new_row = self._append_chemical_row_to_excel(row_data=row_data, excel_path=excel_path)
-        if new_row is None:
-            return None
-
-        summary_text = self._format_append_row_summary(row_data)
-        logger.info(
-            "已通过 SMILES 追加化合物到 Excel: SMILES=%s, CAS=%s, 英文名=%s, %s, 行号=%d",
-            normalized_smiles,
+            "已追加化合物到 Excel: query=%s, type=%s, CAS=%s, 英文名=%s, %s, 行号=%d",
+            normalized_query,
+            query_type,
             row_data.get("cas_number"),
             row_data.get("substance_english_name"),
             summary_text,
@@ -1062,7 +1178,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 target_active_mmol=normalized_target_active_mmol,
             )
 
-        derived_row_index = self._append_chemical_row_to_excel(
+        derived_row_index, duplicate_substance = self._append_chemical_row_to_excel(
             row_data=derived_row_data,
             excel_path=excel_path,
         )
@@ -1072,6 +1188,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 identifier,
                 derived_row_data.get("substance"),
             )
+            if duplicate_substance != "":
+                return {"duplicate": True, "duplicate_substance": duplicate_substance}
             return None
 
         summary_text = self._format_append_row_summary(derived_row_data)
@@ -1479,82 +1597,85 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             None
         """
         wb = Workbook()
-        ws = wb.active
-        ws.title = "batch_in_tray"
-        ws.append(["position", "tray_type", "content", "shelf_position", "storage"])
-        ws.column_dimensions["B"].width = 60
-        ws.column_dimensions["C"].width = 80
-        ws.column_dimensions["D"].width = 15
-        ws.column_dimensions["E"].width = 50
+        try:
+            ws = wb.active
+            ws.title = "batch_in_tray"
+            ws.append(["position", "tray_type", "content", "shelf_position", "storage"])
+            ws.column_dimensions["B"].width = 60
+            ws.column_dimensions["C"].width = 80
+            ws.column_dimensions["D"].width = 15
+            ws.column_dimensions["E"].width = 50
 
-        # 位置下拉，包含 TB 列与 W-1-1~W-1-8 货位
-        positions_tb = [f"TB-{row}-{col}" for row in (1, 2) for col in range(1, 5)]
-        positions_w = [f"W-1-{index}" for index in range(1, 9)]
-        positions = positions_tb + positions_w
-        dv_pos = DataValidation(type="list", formula1=f"\"{','.join(positions)}\"")
-        ws.add_data_validation(dv_pos)
-        dv_pos.add("A2:A101")
+            # 位置下拉, 包含 TB 列与 W-1-1~W-1-8 货位
+            positions_tb = [f"TB-{row}-{col}" for row in (1, 2) for col in range(1, 5)]
+            positions_w = [f"W-1-{index}" for index in range(1, 9)]
+            positions = positions_tb + positions_w
+            dv_pos = DataValidation(type="list", formula1=f"\"{','.join(positions)}\"")
+            ws.add_data_validation(dv_pos)
+            dv_pos.add("A2:A101")
 
-        # 托盘下拉，耗材显示数量范围，带物质显示点位范围
-        consumable_trays = {
-            int(ResourceCode.TIP_TRAY_50UL),
-            int(ResourceCode.TIP_TRAY_1ML),
-            int(ResourceCode.TIP_TRAY_5ML),
-            int(ResourceCode.REACTION_SEAL_CAP_TRAY),
-            int(ResourceCode.FLASH_FILTER_INNER_BOTTLE_TRAY),
-            int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY),
-            int(ResourceCode.REACTION_TUBE_TRAY_2ML),
-            int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML),
-        }
-        tray_display: List[str] = []
-        for code, name in TRAY_CODE_DISPLAY_NAME.items():
-            base_text = f"{name}({code})"
-            try:
-                enum_name = ResourceCode(code).name
-                spec = getattr(TraySpec, enum_name, None)
-            except Exception:
-                spec = None
+            # 托盘下拉, 耗材显示数量范围, 带物质显示点位范围
+            consumable_trays = {
+                int(ResourceCode.TIP_TRAY_50UL),
+                int(ResourceCode.TIP_TRAY_1ML),
+                int(ResourceCode.TIP_TRAY_5ML),
+                int(ResourceCode.REACTION_SEAL_CAP_TRAY),
+                int(ResourceCode.FLASH_FILTER_INNER_BOTTLE_TRAY),
+                int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY),
+                int(ResourceCode.REACTION_TUBE_TRAY_2ML),
+                int(ResourceCode.TEST_TUBE_MAGNET_TRAY_2ML),
+            }
+            tray_display: List[str] = []
+            for code, name in TRAY_CODE_DISPLAY_NAME.items():
+                base_text = f"{name}({code})"
+                try:
+                    enum_name = ResourceCode(code).name
+                    spec = getattr(TraySpec, enum_name, None)
+                except Exception:
+                    spec = None
 
-            if spec is None:
-                tray_display.append(base_text)
-                continue
+                if spec is None:
+                    tray_display.append(base_text)
+                    continue
 
-            col_count, row_count = spec
-            if col_count <= 0 or row_count <= 0:
-                tray_display.append(base_text)
-                continue
+                col_count, row_count = spec
+                if col_count <= 0 or row_count <= 0:
+                    tray_display.append(base_text)
+                    continue
 
-            if code in consumable_trays:
-                capacity = col_count * row_count
-                tray_display.append(f"{base_text} [1-{capacity}]")
-            else:
-                end_row_char = chr(ord("A") + row_count - 1)
-                tray_display.append(f"{base_text} [A1-{end_row_char}{col_count}]")
+                if code in consumable_trays:
+                    capacity = col_count * row_count
+                    tray_display.append(f"{base_text} [1-{capacity}]")
+                else:
+                    end_row_char = chr(ord("A") + row_count - 1)
+                    tray_display.append(f"{base_text} [A1-{end_row_char}{col_count}]")
 
-        # 用隐藏sheet作为数据源，避免下拉字符串过长
-        tray_sheet = wb.create_sheet("validation_meta")
-        for idx, option in enumerate(tray_display, start=1):
-            tray_sheet.cell(row=idx, column=1).value = option
-        tray_sheet.sheet_state = "hidden"
+            # 用隐藏 sheet 作为数据源, 避免下拉字符串过长
+            tray_sheet = wb.create_sheet("validation_meta")
+            for idx, option in enumerate(tray_display, start=1):
+                tray_sheet.cell(row=idx, column=1).value = option
+            tray_sheet.sheet_state = "hidden"
 
-        # 定义命名区域, 避免跨 sheet 验证被 Excel 写成 x14 扩展
-        options_name = "tray_type_options"
-        options_ref  = f"validation_meta!$A$1:$A${len(tray_display)}"
-        wb.defined_names.add(DefinedName(options_name, attr_text=options_ref))
+            # 定义命名区域, 避免跨 sheet 验证被 Excel 写成 x14 扩展
+            options_name = "tray_type_options"
+            options_ref  = f"validation_meta!$A$1:$A${len(tray_display)}"
+            wb.defined_names.add(DefinedName(options_name, attr_text=options_ref))
 
-        dv_tray = DataValidation(
-            type="list",
-            formula1=f"={options_name}",
-            showInputMessage=True,
-        )
-        ws.add_data_validation(dv_tray)
-        dv_tray.add("B2:B101")
+            dv_tray = DataValidation(
+                type="list",
+                formula1=f"={options_name}",
+                showInputMessage=True,
+            )
+            ws.add_data_validation(dv_tray)
+            dv_tray.add("B2:B101")
 
-        ws["C1"] = "content(耗材填数量; 物质填: A1|名称|2mL; B2|名称|5mg)"
-        ws["D1"] = "shelf_position"
-        ws["E1"] = "storage(格式: 物质|位置; 多个用;隔开)"
-        safe_workbook_save(wb, file_path)
-        logger.info(f"已生成上料模板: {file_path}")
+            ws["C1"] = "content(耗材填数量; 物质填: A1|名称|2mL; B2|名称|5mg)"
+            ws["D1"] = "shelf_position"
+            ws["E1"] = "storage(格式: 物质|位置; 多个用;隔开)"
+            safe_workbook_save(wb, file_path)
+            logger.info(f"已生成上料模板: {file_path}")
+        finally:
+            wb.close()
 
     def _find_header_in_sheet(self, worksheet: Any, header_keyword: str) -> Tuple[Optional[int], Optional[int]]:
         """
@@ -1678,146 +1799,149 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         # 3. 读取任务模板 -> params(Dict), headers(List), data_rows(List[List])
         wb = load_workbook(t_path, data_only=True)
-        ws, header_row, exp_no_col = self._select_task_template_sheet(wb, header_keyword="实验编号")
-        if ws is None or header_row is None or exp_no_col is None:
-            raise ValueError(f"模板中未找到'实验编号'表头, 可用工作表: {wb.sheetnames}")
+        try:
+            ws, header_row, exp_no_col = self._select_task_template_sheet(wb, header_keyword="实验编号")
+            if ws is None or header_row is None or exp_no_col is None:
+                raise ValueError(f"模板中未找到'实验编号'表头, 可用工作表: {wb.sheetnames}")
 
-        # 3.2 提取全局参数（左侧 A/B）
-        # - 实验名称：A1是标签，用户通常填在 B1
-        params: Dict[str, Any] = {}
-        exp_name = ws.cell(1, 2).value  # B1
-        if exp_name is not None and str(exp_name).strip() != "":
-            params["实验名称"] = str(exp_name).strip()
+            # 3.2 提取全局参数(左侧 A/B)
+            # - 实验名称: A1是标签, 用户通常填在 B1
+            params: Dict[str, Any] = {}
+            exp_name = ws.cell(1, 2).value  # B1
+            if exp_name is not None and str(exp_name).strip() != "":
+                params["实验名称"] = str(exp_name).strip()
 
-        # 扫描 A/B（从第2行开始，遇到“注：”不停止也可以；这里仅跳过“注：”本行）
-        for r in range(2, ws.max_row + 1):
-            key = ws.cell(r, 1).value
-            val = ws.cell(r, 2).value
+            # 扫描 A/B(从第2行开始, 遇到"注:"不停止也可以; 这里仅跳过"注:"本行)
+            for r in range(2, ws.max_row + 1):
+                key = ws.cell(r, 1).value
+                val = ws.cell(r, 2).value
 
-            if key is None:
-                continue
-            key_str = str(key).strip()
-            if not key_str:
-                continue
-
-            # 跳过注释行（不写入 params；否则会污染）
-            if key_str.startswith("注：") or key_str.startswith("注:"):
-                continue
-
-            # 分类标题行通常是合并单元格，B 为空；这类不要写入 params
-            if val is None or (isinstance(val, str) and val.strip() == ""):
-                continue
-
-            params[key_str] = val
-
-        # 3.3 生成 headers（从 “实验编号”列开始往右：C..M）
-        # 同时把 “试剂_1” -> “试剂名称_1”，让 build_task_payload 能识别
-        raw_headers: List[Any] = []
-        for c in range(exp_no_col, ws.max_column + 1):
-            raw_headers.append(ws.cell(header_row, c).value)
-
-        headers: List[str] = []
-        reagent_idx = 0
-        for h in raw_headers:
-            s = "" if h is None else str(h).strip()
-
-            # 规范化：试剂_1/试剂1 -> 试剂名称_1
-            if s.startswith("试剂") and "量" not in s and s != "试剂名称":
-                reagent_idx += 1
-                headers.append(f"试剂名称_{reagent_idx}")
-                continue
-
-            # 规范化：试剂量 -> 试剂量_1/2/...
-            if "试剂量" in s:
-                # 若前面还没遇到试剂列，给个兜底编号
-                idx = reagent_idx if reagent_idx > 0 else (len([x for x in headers if "试剂量" in x]) + 1)
-                headers.append(f"试剂量_{idx}")
-                continue
-
-            headers.append(s)
-
-        # 3.4 生成 data_rows：从表头下一行开始，按实验编号列读取到最后一列（C..M）
-        data_rows: List[List[Any]] = []
-        for r in range(header_row + 1, ws.max_row + 1):
-            exp_no = ws.cell(r, exp_no_col).value
-
-            # 实验编号为空：认为实验区结束（模板一般后面都是空）
-            if exp_no is None or (isinstance(exp_no, str) and exp_no.strip() == ""):
-                # 只有在已经读到至少一行实验后才 break，避免中间空行误判
-                if data_rows:
-                    break
-                else:
+                if key is None:
+                    continue
+                key_str = str(key).strip()
+                if not key_str:
                     continue
 
-            row_vals: List[Any] = []
+                # 跳过注释行(不写入 params; 否则会污染)
+                if key_str.startswith("注：") or key_str.startswith("注:"):
+                    continue
+
+                # 分类标题行通常是合并单元格, B 为空; 这类不要写入 params
+                if val is None or (isinstance(val, str) and val.strip() == ""):
+                    continue
+
+                params[key_str] = val
+
+            # 3.3 生成 headers(从 "实验编号"列开始往右: C..M)
+            # 同时把 "试剂_1" -> "试剂名称_1", 让 build_task_payload 能识别
+            raw_headers: List[Any] = []
             for c in range(exp_no_col, ws.max_column + 1):
-                v = ws.cell(r, c).value
-                # 这里不要强制 str 化，build_task_payload 内部会 str()；但 None 要变成 ""
-                row_vals.append("" if v is None else v)
+                raw_headers.append(ws.cell(header_row, c).value)
 
-            data_rows.append(row_vals)
+            headers: List[str] = []
+            reagent_idx = 0
+            for h in raw_headers:
+                s = "" if h is None else str(h).strip()
 
-        # 4. 调用父类纯逻辑生成 Payload
-        task_payload = self.build_task_payload(params, headers, data_rows, chemical_db)
-
-        # 5. 提交任务信息到工站
-        try:
-            resp = self.add_task(task_payload)
-        except ApiError as exc:
-            if getattr(exc, "code", None) == 409:
-                # 自动重命名: 在任务名称后添加当前日期时间(精确到秒)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-                task_name = task_payload.get("task_name") or params.get("实验名称")
-                new_task_name = f"{task_name}_{timestamp}"
-
-                task_payload["task_name"] = new_task_name
-                logger.info(f"任务名称重复, 自动重命名为: {new_task_name}")
-
-                # 重试提交
-                try:
-                    resp = self.add_task(task_payload)
-                except ApiError as retry_exc:
-                    logger.error(f"重命名后任务提交仍失败: {retry_exc}")
-                    raise
-            else:
-                raise
-
-        # 6. 提交任务信息到工站
-        task_id = resp.get("task_id")
-
-        # 7. 回写任务ID和任务名称到模板
-        try:
-            task_id_int = int(task_id)
-            id_updated = False
-            name_updated = False
-            # 获取实际提交的任务名称(可能经过重命名)
-            final_task_name = task_payload.get("task_name")
-
-            for r in range(1, ws.max_row + 1):
-                key_val = ws.cell(r, 1).value
-                if key_val is None:
+                # 规范化: 试剂_1/试剂1 -> 试剂名称_1
+                if s.startswith("试剂") and "量" not in s and s != "试剂名称":
+                    reagent_idx += 1
+                    headers.append(f"试剂名称_{reagent_idx}")
                     continue
-                key_str = str(key_val).strip()
-                # 回写实验ID
-                if key_str == "实验ID":
-                    ws.cell(r, 2, value=task_id_int)
-                    id_updated = True
-                # 回写任务名称(重命名后同步更新模板)
-                if key_str == "实验名称" and final_task_name is not None:
-                    ws.cell(r, 2, value=final_task_name)
-                    name_updated = True
 
-            if id_updated or name_updated:
-                safe_workbook_save(wb, t_path)
-                if id_updated:
-                    logger.info("已将任务ID写入模板文件: %s", t_path)
-                if name_updated:
-                    logger.info("已将任务名称同步写入模板文件: %s", final_task_name)
-            else:
-                logger.warning("未找到'实验ID'位置, 未回写任务ID")
-        except Exception as exc:
-            logger.warning("任务ID回写失败: %s", exc)
+                # 规范化: 试剂量 -> 试剂量_1/2/...
+                if "试剂量" in s:
+                    # 若前面还没遇到试剂列, 给个兜底编号
+                    idx = reagent_idx if reagent_idx > 0 else (len([x for x in headers if "试剂量" in x]) + 1)
+                    headers.append(f"试剂量_{idx}")
+                    continue
+
+                headers.append(s)
+
+            # 3.4 生成 data_rows: 从表头下一行开始, 按实验编号列读取到最后一列(C..M)
+            data_rows: List[List[Any]] = []
+            for r in range(header_row + 1, ws.max_row + 1):
+                exp_no = ws.cell(r, exp_no_col).value
+
+                # 实验编号为空: 认为实验区结束(模板一般后面都是空)
+                if exp_no is None or (isinstance(exp_no, str) and exp_no.strip() == ""):
+                    # 只有在已经读到至少一行实验后才 break, 避免中间空行误判
+                    if data_rows:
+                        break
+                    else:
+                        continue
+
+                row_vals: List[Any] = []
+                for c in range(exp_no_col, ws.max_column + 1):
+                    v = ws.cell(r, c).value
+                    # 这里不要强制 str 化, build_task_payload 内部会 str(); 但 None 要变成 ""
+                    row_vals.append("" if v is None else v)
+
+                data_rows.append(row_vals)
+
+            # 4. 调用父类纯逻辑生成 Payload
+            task_payload = self.build_task_payload(params, headers, data_rows, chemical_db)
+
+            # 5. 提交任务信息到工站
+            try:
+                resp = self.add_task(task_payload)
+            except ApiError as exc:
+                if getattr(exc, "code", None) == 409:
+                    # 自动重命名: 在任务名称后添加当前日期时间(精确到秒)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+                    task_name = task_payload.get("task_name") or params.get("实验名称")
+                    new_task_name = f"{task_name}_{timestamp}"
+
+                    task_payload["task_name"] = new_task_name
+                    logger.info(f"任务名称重复, 自动重命名为: {new_task_name}")
+
+                    # 重试提交
+                    try:
+                        resp = self.add_task(task_payload)
+                    except ApiError as retry_exc:
+                        logger.error(f"重命名后任务提交仍失败: {retry_exc}")
+                        raise
+                else:
+                    raise
+
+            # 6. 提取任务ID
+            task_id = resp.get("task_id")
+
+            # 7. 回写任务ID和任务名称到模板
+            try:
+                task_id_int = int(task_id)
+                id_updated = False
+                name_updated = False
+                # 获取实际提交的任务名称(可能经过重命名)
+                final_task_name = task_payload.get("task_name")
+
+                for r in range(1, ws.max_row + 1):
+                    key_val = ws.cell(r, 1).value
+                    if key_val is None:
+                        continue
+                    key_str = str(key_val).strip()
+                    # 回写实验ID
+                    if key_str == "实验ID":
+                        ws.cell(r, 2, value=task_id_int)
+                        id_updated = True
+                    # 回写任务名称(重命名后同步更新模板)
+                    if key_str == "实验名称" and final_task_name is not None:
+                        ws.cell(r, 2, value=final_task_name)
+                        name_updated = True
+
+                if id_updated or name_updated:
+                    safe_workbook_save(wb, t_path)
+                    if id_updated:
+                        logger.info("已将任务ID写入模板文件: %s", t_path)
+                    if name_updated:
+                        logger.info("已将任务名称同步写入模板文件: %s", final_task_name)
+                else:
+                    logger.warning("未找到'实验ID'位置, 未回写任务ID")
+            except Exception as exc:
+                logger.warning("任务ID回写失败: %s", exc)
+        finally:
+            wb.close()
 
         # 8. 将模板文件拷贝到 data/tasks/<task_id>/ 并重命名为任务ID
         try:
@@ -1837,156 +1961,159 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         结构：左侧为参数配置区，右侧为实验试剂填报区
         """
         wb = Workbook()
-        ws = wb.active
-        ws.title = "Sheet1"
+        try:
+            ws = wb.active
+            ws.title = "Sheet1"
 
-        # 模板默认字体：等线 11
-        base_font = Font(name="Microsoft YaHei", charset=134, family=2, scheme="minor", sz=11)
-        title_font = Font(name="Microsoft YaHei", charset=134, family=2, scheme="minor", sz=11, bold=True)
-        center = Alignment(horizontal="center", vertical="center")
+            # 模板默认字体: 等线 11
+            base_font = Font(name="Microsoft YaHei", charset=134, family=2, scheme="minor", sz=11)
+            title_font = Font(name="Microsoft YaHei", charset=134, family=2, scheme="minor", sz=11, bold=True)
+            center = Alignment(horizontal="center", vertical="center")
 
-        # 覆盖默认 Normal 样式，保证空白单元格也用微软雅黑
-        for style in getattr(wb, "_named_styles", []):
-            if getattr(style, "name", "").lower() == "normal":
-                style.font = base_font
-                break
+            # 覆盖默认 Normal 样式, 保证空白单元格也用微软雅黑
+            for style in getattr(wb, "_named_styles", []):
+                if getattr(style, "name", "").lower() == "normal":
+                    style.font = base_font
+                    break
 
-        # --- 1. 定义左侧参数配置数据 (行2开始, A列和B列) ---
-        left_params = [
-            ("实验设定", ""),
-            ("实验名称", "Auto_task"),
-            ("实验ID", 0),
-            ("反应设定", ""),
-            ("反应规模(mmol)", "0.2"),
-            ("反应器类型", "heat"),
-            ("反应时间(min/h)", "8h"),
-            ("反应温度(°C)", 40),
-            ("转速(rpm)", 500),
-            ("搅拌后⽬标温度(°C)", 30),
-            ("等待目标温度", "否"),
-            ("称量设定", ""),
-            ("称量误差(%)", 3),
-            ("最大称量误差(mg)", 1),
-            ("加料设定", ""),
-            ("固定加料顺序", "否"),
-            ("自动加磁子", "是"),
-            ("内标设定", ""),
-            ("内标种类", "1,3,5-三异丙基苯(溶液,1mol/L in MeCN)"),
-            ("内标用量(μL/mg)", 100),
-            ("加入内标后搅拌时间(min)", 5),
-            ("稀释设定", ""),
-            ("稀释液种类", "乙腈"),
-            ("稀释量(μL)", 500),
-            ("闪滤设定", ""),
-            ("闪滤液种类", "乙腈"),
-            ("闪滤液用量(μL)", 500),
-            ("取样量(μL)", 1),
-            ("闪滤实验编号", "全部"),   # 空/"全部"=全部实验闪滤; 支持 "1-12,24,28" 格式
-            ("", ""),  # 空行
-        ]
-        left_param_rows = len(left_params)
+            # --- 1. 定义左侧参数配置数据 (行2开始, A列和B列) ---
+            left_params = [
+                ("实验设定", ""),
+                ("实验名称", "Auto_task"),
+                ("实验ID", 0),
+                ("反应设定", ""),
+                ("反应规模(mmol)", "0.2"),
+                ("反应器类型", "heat"),
+                ("反应时间(min/h)", "8h"),
+                ("反应温度(°C)", 40),
+                ("转速(rpm)", 500),
+                ("搅拌后⽬标温度(°C)", 30),
+                ("等待目标温度", "否"),
+                ("称量设定", ""),
+                ("称量误差(%)", 3),
+                ("最大称量误差(mg)", 1),
+                ("加料设定", ""),
+                ("固定加料顺序", "否"),
+                ("自动加磁子", "是"),
+                ("内标设定", ""),
+                ("内标种类", "1,3,5-三异丙基苯(溶液,1mol/L in MeCN)"),
+                ("内标用量(μL/mg)", 100),
+                ("加入内标后搅拌时间(min)", 5),
+                ("稀释设定", ""),
+                ("稀释液种类", "乙腈"),
+                ("稀释量(μL)", 500),
+                ("闪滤设定", ""),
+                ("闪滤液种类", "乙腈"),
+                ("闪滤液用量(μL)", 500),
+                ("取样量(μL)", 1),
+                ("闪滤实验编号", "全部"),   # 空/"全部"=全部实验闪滤; 支持 "1-12,24,28" 格式
+                ("", ""),  # 空行
+            ]
+            left_param_rows = len(left_params)
 
-        # --- 2. 设置第一行表头 (Row 1) ---
-        ws.cell(row=1, column=3, value="实验编号").font = base_font
-        
-        reagent_count = 5
-        current_col = 4
-        for i in range(1, reagent_count + 1):
-            ws.cell(row=1, column=current_col, value=f"试剂").font = base_font
-            ws.cell(row=1, column=current_col + 1, value="试剂量").font = base_font
-            current_col += 2
+            # --- 2. 设置第一行表头 (Row 1) ---
+            ws.cell(row=1, column=3, value="实验编号").font = base_font
 
-        # --- 3. 填充左侧参数区 (Row 2 ~ Row 22) ---
-        for idx, (param_name, default_val) in enumerate(left_params):
-            row_idx = idx + 1  # 从第2行开始
+            reagent_count = 5
+            current_col = 4
+            for i in range(1, reagent_count + 1):
+                ws.cell(row=1, column=current_col, value=f"试剂").font = base_font
+                ws.cell(row=1, column=current_col + 1, value="试剂量").font = base_font
+                current_col += 2
 
-            # 分类标题：模板是 A:B 合并，只写 A 列，且加粗
-            if param_name and default_val == "":
-                ws.cell(row=row_idx, column=1, value=param_name).font = title_font
-                ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=2)
-                continue
+            # --- 3. 填充左侧参数区 (Row 2 ~ Row 22) ---
+            for idx, (param_name, default_val) in enumerate(left_params):
+                row_idx = idx + 1  # 从第2行开始
 
-            # 空行：保持空
-            if param_name == "" and default_val == "":
-                continue
-
-            # 普通参数行
-            ws.cell(row=row_idx, column=1, value=param_name).font = base_font
-            ws.cell(row=row_idx, column=2, value=default_val).font = base_font
-
-        # --- 4. 填充右侧实验编号 (Row 2 ~ Row 25) ---
-        for i in range(1, 25):  # 1~24
-            row_idx = i + 1
-            ws.cell(row=row_idx, column=3, value=i).font = base_font
-
-        # --- 5. 底部注释 (跟随参数行, 预留一行空白) ---
-        note_row = left_param_rows + 2
-        note_text = "注：试剂量支持单位：(eq,mmol,g,mg,μL,mL）"
-        ws.cell(row=note_row, column=1, value=note_text).font = base_font
-        ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=2)
-        ws.cell(row=note_row, column=1).alignment = center  # 合并后的单元格居中
-
-        max_template_row = max(note_row, 25)
-
-        # --- 6. 字体铺满 (A1:M*)  ---
-        for r in range(1, max_template_row + 1):
-            for c in range(1, 14):  # A..M
-                cell = ws.cell(r, c)
-                # 标题行的粗体不要覆盖
-                if cell.font and cell.font.bold:
+                # 分类标题: 模板是 A:B 合并, 只写 A 列, 且加粗
+                if param_name and default_val == "":
+                    ws.cell(row=row_idx, column=1, value=param_name).font = title_font
+                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=2)
                     continue
-                cell.font = base_font
 
-        # --- 7. 对齐 ---
-        # C~L 整块都居中（含空白）
-        for r in range(1, max_template_row + 1):
-            for c in range(3, 13):  # C..L
-                ws.cell(r, c).alignment = center
+                # 空行: 保持空
+                if param_name == "" and default_val == "":
+                    continue
 
-        # A 列：参数行和注释行居中
-        a_rows = []
-        b_rows = []
-        for idx, (param_name, default_val) in enumerate(left_params):
-            row_idx = idx + 1
-            if param_name != "":
-                a_rows.append(row_idx)
-            if param_name != "" and default_val != "":
-                b_rows.append(row_idx)
-        for r in a_rows + [note_row]:
-            ws.cell(r, 1).alignment = center
+                # 普通参数行
+                ws.cell(row=row_idx, column=1, value=param_name).font = base_font
+                ws.cell(row=row_idx, column=2, value=default_val).font = base_font
 
-        # B 列：只有有值的参数行居中（标题行/空白行/合并后的 B 不处理）
-        for r in b_rows:
-            ws.cell(r, 2).alignment = center
+            # --- 4. 填充右侧实验编号 (Row 2 ~ Row 25) ---
+            for i in range(1, 25):  # 1~24
+                row_idx = i + 1
+                ws.cell(row=row_idx, column=3, value=i).font = base_font
 
-        # M 列：只有表头 M1 居中
-        ws.cell(1, 13).alignment = center
+            # --- 5. 底部注释 (跟随参数行, 预留一行空白) ---
+            note_row = left_param_rows + 2
+            note_text = "注：试剂量支持单位：(eq,mmol,g,mg,μL,mL）"
+            ws.cell(row=note_row, column=1, value=note_text).font = base_font
+            ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=2)
+            ws.cell(row=note_row, column=1).alignment = center  # 合并后的单元格居中
 
-        # 表头 A1/C1 也居中（模板如此）
-        ws.cell(1, 1).alignment = center
-        ws.cell(1, 3).alignment = center
+            max_template_row = max(note_row, 25)
 
-        # --- 8. 列宽： ---
-        widths_map = {
-            "A": 26.0,
-            "B": 38.0,
-            "C": 15.0,
-            "D": 14.0,
-            "E": 14.0,
-            "F": 14.0,
-            "G": 14.0,
-            "H": 14.0,
-            "I": 14.0,
-            "J": 14.0,
-            "K": 14.0,
-            "L": 14.0,
-            "M": 14.0,
-        }
-        for col_letter, w in widths_map.items():
-            ws.column_dimensions[col_letter].width = w
+            # --- 6. 字体铺满 (A1:M*)  ---
+            for r in range(1, max_template_row + 1):
+                for c in range(1, 14):  # A..M
+                    cell = ws.cell(r, c)
+                    # 标题行的粗体不要覆盖
+                    if cell.font and cell.font.bold:
+                        continue
+                    cell.font = base_font
 
-        safe_workbook_save(wb, path)
-        logger.info(f"已生成任务模板: {path}")
+            # --- 7. 对齐 ---
+            # C~L 整块都居中(含空白)
+            for r in range(1, max_template_row + 1):
+                for c in range(3, 13):  # C..L
+                    ws.cell(r, c).alignment = center
+
+            # A 列: 参数行和注释行居中
+            a_rows = []
+            b_rows = []
+            for idx, (param_name, default_val) in enumerate(left_params):
+                row_idx = idx + 1
+                if param_name != "":
+                    a_rows.append(row_idx)
+                if param_name != "" and default_val != "":
+                    b_rows.append(row_idx)
+            for r in a_rows + [note_row]:
+                ws.cell(r, 1).alignment = center
+
+            # B 列: 只有有值的参数行居中(标题行/空白行/合并后的 B 不处理)
+            for r in b_rows:
+                ws.cell(r, 2).alignment = center
+
+            # M 列: 只有表头 M1 居中
+            ws.cell(1, 13).alignment = center
+
+            # 表头 A1/C1 也居中(模板如此)
+            ws.cell(1, 1).alignment = center
+            ws.cell(1, 3).alignment = center
+
+            # --- 8. 列宽 ---
+            widths_map = {
+                "A": 26.0,
+                "B": 38.0,
+                "C": 15.0,
+                "D": 14.0,
+                "E": 14.0,
+                "F": 14.0,
+                "G": 14.0,
+                "H": 14.0,
+                "I": 14.0,
+                "J": 14.0,
+                "K": 14.0,
+                "L": 14.0,
+                "M": 14.0,
+            }
+            for col_letter, w in widths_map.items():
+                ws.column_dimensions[col_letter].width = w
+
+            safe_workbook_save(wb, path)
+            logger.info(f"已生成任务模板: {path}")
+        finally:
+            wb.close()
 
     # ---------- 4. 物料核算 ----------
     def check_resource_for_task(self, template_path: str, chemical_db_path: str, auto_generate_batch_file: bool = True) -> JsonDict:
@@ -2965,7 +3092,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
     ) -> JsonDict:
         """
         功能:
-            提交 Unilab 流程编排任务, 按行数据动态生成表头, 兼容包含“加磁子”的列.
+            提交 Unilab 流程编排任务, 按行数据动态生成表头, 兼容包含"加磁子"的列.
         参数:
             chemical_db_path: str, 化学品库文件路径.
             task_name: str, 任务名称.
@@ -2979,7 +3106,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             internal_std_name: str, 内标名称.
             stir_time_after_std: str, 内标加入后搅拌时间(min).
             diluent_name: str, 稀释液名称.
-            rows: List[List[Any]], 行数据矩阵, 第1列为实验编号, 其余列为试剂或“加磁子”.
+            rows: List[List[Any]], 行数据矩阵, 第1列为实验编号, 其余列为试剂或"加磁子".
         返回:
             Dict[str, Any], 提交成功后返回的任务 ID.
         """

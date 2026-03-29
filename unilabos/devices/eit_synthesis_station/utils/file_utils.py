@@ -297,9 +297,13 @@ def _try_close_excel_workbook(path: Path) -> bool:
             logger.info("已通过 COM 保存并关闭 Excel 工作簿: %s", path.name)
             return True
 
-        if _close_target_workbook_from_iterable(_iter_excel_workbooks_from_active_instance(), target_path):
-            logger.info("已通过活动 Excel 实例保存并关闭工作簿: %s", path.name)
-            return True
+        # 活动实例查找可能因无活动实例而抛出异常, 单独捕获以保证第3层回退可达.
+        try:
+            if _close_target_workbook_from_iterable(_iter_excel_workbooks_from_active_instance(), target_path):
+                logger.info("已通过活动 Excel 实例保存并关闭工作簿: %s", path.name)
+                return True
+        except Exception as active_exc:
+            logger.debug("活动 Excel 实例查找失败, 将尝试窗口句柄枚举 | 文件: %s | 错误: %s", path.name, active_exc)
 
         if _close_target_workbook_from_iterable(_iter_excel_workbooks_from_all_instances(), target_path):
             logger.info("已通过窗口句柄枚举保存并关闭工作簿: %s", path.name)

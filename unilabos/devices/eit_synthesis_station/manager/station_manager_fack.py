@@ -405,7 +405,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         self,
         row_data: Dict[str, Any],
         excel_path: Optional[str] = None,
-    ) -> Optional[int]:
+    ) -> Tuple[Optional[int], str]:
         """
         功能:
             将单条化学品行数据追加到 Excel 末尾, 并执行重复检查.
@@ -413,10 +413,12 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             row_data: Dict[str, Any], 准备写入的行数据.
             excel_path: Optional[str], 目标 Excel 文件路径.
         返回:
-            Optional[int], 成功时返回新行行号, 命中重复时返回 None.
+            Tuple[Optional[int], str], 成功时返回 (新行行号, ""),
+            命中重复时返回 (None, 已有行的 substance 名称).
         """
         logger.info("虚假执行 _append_chemical_row_to_excel")
         time.sleep(5)
+        return 2, ""
 
     def _fetch_chemicalbook_append_artifacts(
         self,
@@ -435,43 +437,44 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         time.sleep(5)
         return {}
 
-    def lookup_and_append_chemical(
-        self, query: str, excel_path: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+    def search_chemical_in_library(
+        self,
+        query: str,
+        query_type: str,
+        excel_path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         功能:
-            在线查询化合物信息并追加到化学品库 Excel 文件末尾.
-            查询分为两层: 先用多源核心查询获取可用基础信息, 再用 ChemicalBook
-            结构化抓取补充全量数据, 并将原始结果保存为 sidecar JSON.
+            在化学品库中查询已有药品.
         参数:
-            query: str, CAS 号或化合物中英文名称.
-            excel_path: Optional[str], 目标 Excel 文件路径, 默认为 sheet/chemical_list.xlsx.
+            query: str, 查询字符串.
+            query_type: str, 查询类型.
+            excel_path: Optional[str], 化学品库文件路径.
         返回:
-            Optional[Dict[str, Any]], 成功返回稳定结果字典, 包含 row_data, row_index,
-            chemicalbook_status, chemicalbook_record_path. 查询失败或重复时返回 None.
+            List[Dict[str, Any]], 虚假执行返回空列表.
         """
-        logger.info("虚假执行 lookup_and_append_chemical")
-        time.sleep(5)
-        return {"success": True, "message": "虚假找测并追加完成"}
+        logger.info("虚假执行 search_chemical_in_library: query=%s, type=%s", query, query_type)
+        return []
 
-    def lookup_and_append_chemical_by_smiles(
-        self, smiles: str, excel_path: Optional[str] = None,
+    def lookup_and_append_chemical_unified(
+        self,
+        query: str,
+        query_type: str,
+        excel_path: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         功能:
-            根据单个完整 SMILES 在线查询化合物信息, 并追加到化学品库 Excel 文件末尾.
-            查询顺序固定为 PubChem 结构查询, 拿到 CAS 后再补 Common Chemistry
-            与 ChemicalBook.
+            统一化学品在线查询并追加到化学品库 Excel 文件的入口.
         参数:
-            smiles: str, 单个完整 SMILES 结构式.
-            excel_path: Optional[str], 目标 Excel 文件路径, 默认为 sheet/chemical_list.xlsx.
+            query: str, 查询字符串 (CAS / 名称 / SMILES).
+            query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
+            excel_path: Optional[str], 目标 Excel 文件路径.
         返回:
-            Optional[Dict[str, Any]], 成功返回稳定结果字典, 包含 row_data, row_index,
-            chemicalbook_status, chemicalbook_record_path. 查询失败或重复时返回 None.
+            Optional[Dict[str, Any]], 虚假执行结果.
         """
-        logger.info("虚假执行 lookup_and_append_chemical_by_smiles")
+        logger.info("虚假执行 lookup_and_append_chemical_unified: query=%s, type=%s", query, query_type)
         time.sleep(5)
-        return {"success": True, "message": "虚假 SMILES 追加完成"}
+        return {"success": True, "message": "虚假查询并追加完成"}
 
     def prepare_solution_or_beads(
         self,

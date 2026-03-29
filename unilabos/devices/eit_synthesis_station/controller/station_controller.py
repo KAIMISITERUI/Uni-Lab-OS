@@ -3339,18 +3339,23 @@ class SynthesisStationController:
         return self._call_with_relogin(self._client.clear_tray_shelf)
 
     # ---------- 开关外舱门 ----------
-    def open_close_door(self, op: str, *, station: str = "FSY", door_num: int = 0) -> JsonDict:
+    def open_close_door(
+        self, op: str, *, station: str = "FSY", door_num: int = 0, timeout_s: float = 120.0
+    ) -> JsonDict:
         """
         功能:
             打开/关闭过渡舱门
         参数:
             op: "open" 或 "close".
-            station: 站点编码，默认 "FSY".
-            door_num: 门编号，默认 0.
+            station: 站点编码, 默认 "FSY".
+            door_num: 门编号, 默认 0.
+            timeout_s: 超时时间(秒), 默认120s. 该接口服务端会等待物理操作完成才返回.
         返回:
             Dict, 接口响应.
         """
-        return self._call_with_relogin(self._client.open_close_door, station, op, door_num)
+        return self._call_with_relogin(
+            self._client.open_close_door, station, op, door_num, timeout_s=timeout_s
+        )
 
     # ---------- 控制W1货架 ----------
     def control_w1_shelf(self, position: str, action: str, *, station: str = "FSY") -> JsonDict:
@@ -3452,31 +3457,22 @@ class SynthesisStationController:
 
         target_task_id = task_id
         if target_task_id is None:
-            # 通过任务列表取task_id最大的一条
-            first_resp = self.get_task_list(sort="desc", offset=0, limit=1)
-            task_sums = self._extract_task_sums(first_resp)
-            if task_sums is None:
-                task_sums = 50  # 回退拉取最近任务, 避免列表为空
-            tasks_resp = self.get_task_list(sort="desc", offset=0, limit=task_sums)
+            # sort=desc 时第一条即为 task_id 最大的任务, 无需全量拉取
+            resp = self.get_task_list(sort="desc", offset=0, limit=1)
             task_list = (
-                tasks_resp.get("task_list")
-                or tasks_resp.get("result", {}).get("task_list")
-                or tasks_resp.get("data", {}).get("task_list")
+                resp.get("task_list")
+                or resp.get("result", {}).get("task_list")
+                or resp.get("data", {}).get("task_list")
             )
             if task_list is None or len(task_list) == 0:
                 raise ValidationError("未找到任务记录, 请先创建任务")
 
-            valid_tasks: List[JsonDict] = []
-            for item in task_list:
-                cur_id = item.get("task_id")
-                if isinstance(cur_id, int):
-                    valid_tasks.append(item)
-
-            if len(valid_tasks) == 0:
+            latest_task = task_list[0]
+            cur_id = latest_task.get("task_id")
+            if not isinstance(cur_id, int):
                 raise ValidationError("任务列表缺少有效的task_id字段")
 
-            latest_task = max(valid_tasks, key=lambda x: x.get("task_id", -1))
-            target_task_id = int(latest_task["task_id"])
+            target_task_id = int(cur_id)
 
             def _parse_status(value: Any) -> Optional[int]:
                 if isinstance(value, int):
@@ -4834,7 +4830,181 @@ class SynthesisStationController:
             raise ValidationError(f"无法解析 task_template_id, item={items[0]}")
         return self.get_method_detail(int(tid))
 
-    #---------- 资源核实 ---------- 
+    #---------- 资源核实(备用新接口) ----------
+    def analyze_resource_readiness_backup(
+        self,
+        task_payload: JsonDict,
+        resource_rows: List[JsonDict],
+        chemical_db: Dict[str, Dict[str, Any]],
+        task_id: Optional[int] = None,
+    ) -> JsonDict:
+        """
+        功能:
+            调用 BatchCheckTask API 查询任务资源就绪状态, 将后端响应转换为标准报告格式.
+        参数:
+            task_payload: Dict, build_task_payload 生成的任务数据(当前版本未使用, 保留接口兼容).
+            resource_rows: List[Dict], get_resource_info 的返回值(当前版本未使用, 保留接口兼容).
+            chemical_db: Dict[str, Dict[str, Any]], 化学品密度与物态数据(当前版本未使用, 保留接口兼容).
+            task_id: int, 实验ID, 用于调用 BatchCheckTask API, 不可为空.
+        返回:
+            Dict[str, Any], 包含耗材需求、药品需求、库存差值、缺失与冗余列表.
+        """
+        if task_id is None:
+            raise ValidationError("task_id 不能为空, 请在模板中填写实验ID")
+
+        # 调用 BatchCheckTask API
+        resp = self._client.batch_check_task([task_id])
+        self._logger.debug("BatchCheckTask 原始响应: %s", resp)
+
+        # code=1200 短路: API 直接返回第一个不足项, 无完整明细
+        resp_code = resp.get("code")
+        if resp_code == 1200:
+            prompt_msg = resp.get("prompt_msg") or {}
+            resource_type = prompt_msg.get("resource_type", "未知资源")
+            number = prompt_msg.get("number", 0)
+            missing_text = f"{resource_type}:{number}件"
+            self._logger.warning("BatchCheckTask 返回 code=1200, 资源不足: %s", missing_text)
+            return {
+                "ready": False,
+                "reagents": [],
+                "consumables": [],
+                "need_reagents": [],
+                "need_consumables": [],
+                "missing": [missing_text],
+                "redundant": [],
+            }
+
+        task_data_list = resp.get("data") or resp.get("result") or []
+        if len(task_data_list) == 0:
+            self._logger.error("BatchCheckTask 响应中无 data/result, 完整响应: %s", resp)
+            raise ValidationError(f"BatchCheckTask 未返回任务 {task_id} 的数据")
+        task_data = task_data_list[0]
+        details = task_data.get("details") or []
+        error_code = task_data.get("error_code")
+        self._logger.info("BatchCheckTask 返回 error_code=%s, 共 %d 项资源明细", error_code, len(details))
+
+        # 单位归一化辅助
+        def _normalize(amount: float, unit: str):
+            """将 API 返回的 amount + unit 拆分到 mg / ml 维度"""
+            unit_l = (unit or "").lower().strip()
+            if unit_l in ("mg",):
+                return amount, 0.0
+            if unit_l in ("g",):
+                return amount * 1000, 0.0
+            if unit_l in ("ml",):
+                return 0.0, amount
+            if unit_l in ("l",):
+                return 0.0, amount * 1000
+            if unit_l in ("ul", "μl", "µl"):
+                return 0.0, amount / 1000
+            # 默认按 ml
+            return 0.0, amount
+
+        reagent_report: List[JsonDict] = []
+        consumable_report: List[JsonDict] = []
+        need_reagents: List[JsonDict] = []
+        need_consumables: List[JsonDict] = []
+        missing_items: List[str] = []
+        redundant_items: List[str] = []
+
+        for detail in details:
+            name = str(detail.get("name") or "").strip()
+            add_amount = float(detail.get("add_amount") or 0)
+            cur_amount = float(detail.get("cur_amount") or 0)
+            resource_type = str(detail.get("resource_type") or "").strip()
+            unit = str(detail.get("unit") or "").strip()
+
+            if resource_type == "":
+                # 试剂类
+                need_mg, need_ml = _normalize(add_amount, unit)
+                avail_mg, avail_ml = _normalize(cur_amount, unit)
+
+                # 判断缺口
+                status_text = "冗余满足"
+                diff_text = ""
+                if need_ml > 0:
+                    diff_val = avail_ml - need_ml
+                    diff_text = f"{diff_val:.3f}mL"
+                    if diff_val < 0:
+                        status_text = "缺少"
+                        missing_items.append(f"{name}:{abs(diff_val):.3f}mL")
+                    else:
+                        redundant_items.append(f"{name}:{diff_val:.3f}mL")
+                elif need_mg > 0:
+                    diff_val = avail_mg - need_mg
+                    diff_text = f"{diff_val:.1f}mg"
+                    if diff_val < 0:
+                        status_text = "缺少"
+                        missing_items.append(f"{name}:{abs(diff_val):.1f}mg")
+                    else:
+                        redundant_items.append(f"{name}:{diff_val:.1f}mg")
+
+                reagent_report.append({
+                    "substance": name,
+                    "need_mg": round(need_mg, 1),
+                    "need_ml": round(need_ml, 3),
+                    "available_mg": round(avail_mg, 1),
+                    "available_ml": round(avail_ml, 3),
+                    "status": status_text,
+                    "diff": diff_text,
+                    "base_need_mg": round(need_mg, 1),
+                    "base_need_ml": round(need_ml, 3),
+                })
+                need_reagents.append({
+                    "substance": name,
+                    "need_mg": round(need_mg, 1),
+                    "need_ml": round(need_ml, 3),
+                    "base_need_mg": round(need_mg, 1),
+                    "base_need_ml": round(need_ml, 3),
+                })
+            else:
+                # 耗材类
+                code = int(resource_type)
+                display_name = CONSUMABLE_CODE_DISPLAY_NAME.get(code, name)
+                need_cnt = int(add_amount)
+                avail_cnt = int(cur_amount)
+                diff_cnt = avail_cnt - need_cnt
+
+                if diff_cnt < 0:
+                    missing_items.append(f"{display_name}:{abs(diff_cnt)}件")
+                    status = "lack"
+                else:
+                    status = "satisfy"
+                    redundant_items.append(f"{display_name}:{diff_cnt}件")
+
+                consumable_report.append({
+                    "code": code,
+                    "name": display_name,
+                    "need": need_cnt,
+                    "available": avail_cnt,
+                    "diff": diff_cnt,
+                    "status": status,
+                })
+                need_consumables.append({
+                    "code": code,
+                    "name": display_name,
+                    "need": need_cnt,
+                })
+
+        ready_flag = len([item for item in missing_items if item]) == 0
+        result = {
+            "ready": ready_flag,
+            "reagents": reagent_report,
+            "consumables": consumable_report,
+            "need_reagents": need_reagents,
+            "need_consumables": need_consumables,
+            "missing": missing_items,
+            "redundant": redundant_items,
+        }
+
+        if ready_flag:
+            self._logger.info("资源核查通过 (BatchCheckTask)")
+        else:
+            self._logger.warning("资源核查未通过, 缺失项 %s", missing_items)
+
+        return result
+
+    # ---------- 资源核实 ----------
     def analyze_resource_readiness(
         self,
         task_payload: JsonDict,
@@ -4968,7 +5138,7 @@ class SynthesisStationController:
             int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE): 0,
         }
         magnet_from_unit = 0
-        pipetting_tip_plan: Dict[Tuple[Optional[int], str], float] = {}
+        pipetting_tip_volumes: List[float] = []
         filtering_rows = set()
         filtering_diluent_tip_plan: Dict[str, float] = {}
 
@@ -4991,10 +5161,7 @@ class SynthesisStationController:
                 reagent_need[substance]["ml"] += add_volume
                 reagent_kind[substance] = "liquid"
                 if add_volume > 0:
-                    tip_key = (row_index, substance)
-                    current_max = pipetting_tip_plan.get(tip_key, 0.0)
-                    if add_volume > current_max:
-                        pipetting_tip_plan[tip_key] = add_volume
+                    pipetting_tip_volumes.append(add_volume)
                 continue
 
             if utype == "exp_add_magnet":
@@ -5018,12 +5185,10 @@ class SynthesisStationController:
         if magnet_from_unit > consumable_need[int(ResourceCode.TEST_TUBE_MAGNET_2ML)]:
             consumable_need[int(ResourceCode.TEST_TUBE_MAGNET_2ML)] = magnet_from_unit
 
-        for max_volume in pipetting_tip_plan.values():
-            if max_volume <= 0:
-                continue
-            tip_dict = _tip_usage(max_volume)
-            for code in tip_dict.keys():
-                consumable_need[code] = consumable_need.get(code, 0) + 1
+        for volume in pipetting_tip_volumes:
+            tip_dict = _tip_usage(volume)
+            for code, count in tip_dict.items():
+                consumable_need[code] = consumable_need.get(code, 0) + count
 
         if len(filtering_rows) > 0 and experiment_num > 0:
             sample_tip_need = len(filtering_rows) * experiment_num

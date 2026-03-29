@@ -577,14 +577,15 @@ class ApiClient:
         return self._request("POST", "/api/ClearTrayShelf", json_body={})
     
     # 30.打开/关闭过渡舱外门 (OpenCloseDoor)
-    def open_close_door(self, station: str, op: str, door_num: int) -> JsonDict:
+    def open_close_door(self, station: str, op: str, door_num: int, *, timeout_s: float = 300.0) -> JsonDict:
         """
         功能:
-            打开/关闭过渡舱外门。
+            打开/关闭过渡舱外门.
         参数:
             station: 站点编码, 例如 "FSY".
-            op: "open" 或 "close". 注意关门会自动置换气体！
+            op: "open" 或 "close". 注意关门会自动置换气体!
             door_num: 门编号, 例如 0.
+            timeout_s: 超时时间(秒), 默认120s. 该接口服务端会等待物理操作完成才返回.
         返回:
             Dict.
         """
@@ -594,6 +595,7 @@ class ApiClient:
             "/api/OpenCloseDoor",
             json_body=body,
             params={"station": station},
+            timeout_s=timeout_s,
         )
     
     # 31. 批量查询设备运行状态
@@ -656,7 +658,27 @@ class ApiClient:
                 # 其他错误码继续抛出异常
                 raise
 
-    # 35. 导出任务报告
+    # 35. 批量检查任务资源
+    def batch_check_task(self, task_ids: List[int]) -> JsonDict:
+        """
+        功能:
+            批量检查任务资源, 对应 BatchCheckTask.
+        参数:
+            task_ids: List[int], 任务id列表.
+        返回:
+            Dict, 接口响应, 包含 data 列表, 每项含 details 和 error_code.
+        """
+        if not task_ids:
+            raise ValidationError("task_ids 不能为空")
+        try:
+            return self._request("POST", "/api/BatchCheckTask", json_body={"task_ids": task_ids})
+        except ApiError as e:
+            # code=1200 表示资源不足, 属于正常业务结果, 返回完整响应供调用方解析
+            if e.code == 1200:
+                return e.payload if e.payload else {"code": e.code, "msg": e.msg}
+            raise
+
+    # 36. 导出任务报告
     def export_task_report(
         self,
         task_ids: List[int],

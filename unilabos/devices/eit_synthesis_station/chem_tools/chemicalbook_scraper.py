@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from urllib.parse import quote
+
 import requests
 
 from . import storage
@@ -67,6 +69,7 @@ MAX_RETRIES = 3
 
 CHEMICALBOOK_CN_URL = "https://www.chemicalbook.com/CAS_{cas}.htm"
 CHEMICALBOOK_EN_URL = "https://www.chemicalbook.com/CASEN_{cas}.htm"
+CHEMICALBOOK_SEARCH_URL = "https://www.chemicalbook.com/Search.aspx?keyword={keyword}"
 
 DEFAULT_SECTIONS = (
     "基本信息",
@@ -228,6 +231,7 @@ FIELD_SECTION_MAP = {
 
 PAGE_TYPES = ("cn", "en")
 _LAST_REQUEST_AT_BY_CAS: Dict[str, float] = {}
+_LAST_SEARCH_REQUEST_AT: float = 0.0
 
 
 @dataclass
@@ -350,6 +354,108 @@ def fetch_chemicalbook_by_cas(
     record = normalize_chemicalbook_record(record)
     record["status"] = _determine_record_status(record=record, page_results=page_results)
     return record
+
+
+def search_chemicalbook_cas_by_name(
+    name: str,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Optional[str]:
+    """
+    功能:
+        根据化学品中文名称在 ChemicalBook 搜索页查找对应 CAS 号.
+        使用与 CAS 页面相同的抓取策略: requests + 503 退避重试 + Playwright 回退.
+        仅取第一条匹配结果, 不做全量解析.
+    参数:
+        name: str, 化学品中文名称.
+        timeout: float, 请求超时秒数.
+    返回:
+        Optional[str], 搜索命中时返回 CAS 号, 未找到或请求失败时返回 None.
+    """
+    global _LAST_SEARCH_REQUEST_AT
+
+    normalized_name = str(name or "").strip()
+    if normalized_name == "":
+        logger.warning("ChemicalBook 名称搜索失败, 输入为空")
+        return None
+
+    if BeautifulSoup is None:
+        logger.warning("未安装 beautifulsoup4, 无法执行 ChemicalBook 名称搜索")
+        return None
+
+    # 限速
+    elapsed = time.time() - _LAST_SEARCH_REQUEST_AT
+    if elapsed < DEFAULT_MIN_INTERVAL_S:
+        wait_seconds = DEFAULT_MIN_INTERVAL_S - elapsed
+        logger.info("ChemicalBook 搜索限速生效, 等待 %.2f 秒", wait_seconds)
+        time.sleep(wait_seconds)
+
+    _LAST_SEARCH_REQUEST_AT = time.time()
+    url = CHEMICALBOOK_SEARCH_URL.format(keyword=quote(normalized_name))
+    session = _build_session()
+
+    # 使用与 CAS 页面相同的抓取策略 (重试 + Playwright 回退)
+    page_result = _fetch_page_with_playwright_direct(
+        session=session,
+        page_type="cn",
+        url=url,
+        timeout=timeout,
+    )
+
+    # 如果 requests 路径完全失败 (html=None 且非 blocked), 直接尝试 Playwright
+    if page_result.html is None and page_result.blocked is False:
+        logger.info("ChemicalBook 名称搜索 requests 路径失败, 尝试 Playwright: name=%s", normalized_name)
+        page_result = _fetch_page_with_playwright(
+            page_type="cn",
+            url=url,
+            timeout=timeout,
+        )
+
+    if page_result.html is None:
+        logger.warning(
+            "ChemicalBook 名称搜索页面获取失败: name=%s, status=%s, err=%s",
+            normalized_name, page_result.status_code, page_result.error_message,
+        )
+        return None
+
+    if page_result.blocked is True:
+        logger.warning("ChemicalBook 名称搜索被拦截: name=%s, reason=%s", normalized_name, page_result.blocked_reason)
+        return None
+
+    return _extract_cas_from_search_html(page_result.html, normalized_name)
+
+
+def _extract_cas_from_search_html(html: str, name: str) -> Optional[str]:
+    """
+    功能:
+        从 ChemicalBook 搜索结果页 HTML 中提取第一个匹配的 CAS 号.
+    参数:
+        html: str, 搜索结果页 HTML.
+        name: str, 原始搜索名称, 仅用于日志.
+    返回:
+        Optional[str], 提取到的 CAS 号, 未找到时返回 None.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 策略 1: 从搜索结果链接中提取 CAS, 匹配 href 含 /CAS_ 的链接
+    cas_href_re = re.compile(r"/CAS[_EN]*_(\d{2,7}-\d{2}-\d)\.htm", re.IGNORECASE)
+    for link in soup.find_all("a", href=True):
+        match = cas_href_re.search(str(link["href"]))
+        if match is not None:
+            cas = match.group(1)
+            logger.info("ChemicalBook 名称搜索命中: name=%s, CAS=%s", name, cas)
+            return cas
+
+    # 策略 2: 扫描页面文本中的 CAS 号 (无锚点模式)
+    _cas_in_text_re = re.compile(r"\b(\d{2,7}-\d{2}-\d)\b")
+    page_text = soup.get_text(separator=" ")
+    text_match = _cas_in_text_re.search(page_text)
+    if text_match is not None:
+        cas = text_match.group(1)
+        logger.info("ChemicalBook 名称搜索文本命中: name=%s, CAS=%s", name, cas)
+        return cas
+
+    logger.info("ChemicalBook 名称搜索未找到结果: name=%s", name)
+    return None
 
 
 def normalize_chemicalbook_record(record: Dict[str, Any]) -> Dict[str, Any]:

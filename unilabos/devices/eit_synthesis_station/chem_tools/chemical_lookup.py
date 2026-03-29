@@ -132,6 +132,21 @@ def is_cas_number(query: str) -> bool:
     return CAS_PATTERN.match(query.strip()) is not None
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _contains_cjk(text: str) -> bool:
+    """
+    功能:
+        判断文本是否包含 CJK 统一汉字.
+    参数:
+        text: str, 输入文本.
+    返回:
+        bool, True 表示包含至少一个 CJK 字符.
+    """
+    return _CJK_RE.search(text) is not None
+
+
 def _fahrenheit_to_celsius(f: float) -> float:
     """华氏度转摄氏度"""
     return round((f - 32) * 5 / 9, 2)
@@ -760,6 +775,71 @@ def _query_chemicalbook(cas: str) -> Optional[ChemicalInfo]:
     return chemical_info
 
 
+# ===================== 中文名称查询 =====================
+
+def lookup_chemical_by_name_cn(name: str) -> Optional[ChemicalInfo]:
+    """
+    功能:
+        根据中文名称查询化合物信息, 仅通过 ChemicalBook 搜索获取 CAS,
+        再用 CAS 补充 PubChem / Common Chemistry 数据.
+        PubChem 和 Common Chemistry 不支持中文名称, 因此不做回退.
+    参数:
+        name: str, 化学品中文名称.
+    返回:
+        Optional[ChemicalInfo], 合并后的化合物信息, ChemicalBook 搜索失败则返回 None.
+    """
+    normalized_name = str(name or "").strip()
+    if normalized_name == "":
+        logger.warning("中文名称查询字符串为空")
+        return None
+
+    logger.info("开始中文名称化合物查询: name=%s", normalized_name)
+
+    # 通过 ChemicalBook 搜索获取 CAS
+    resolved_cas = None
+    try:
+        resolved_cas = chemicalbook_scraper.search_chemicalbook_cas_by_name(normalized_name)
+    except Exception as exc:
+        logger.warning("ChemicalBook 名称搜索异常: %s", exc)
+
+    if resolved_cas is None:
+        logger.warning("ChemicalBook 名称搜索未命中, 中文名称无法解析: name=%s", normalized_name)
+        return None
+
+    logger.info("ChemicalBook 名称搜索获取 CAS=%s, 补充查询其他数据源", resolved_cas)
+    # 用 CAS 查询 ChemicalBook 完整记录
+    chemicalbook_info = _query_chemicalbook(resolved_cas)
+
+    # 用 CAS 查询 PubChem + Common Chemistry 补充数据
+    pubchem_result = None
+    common_chem_result = None
+    try:
+        pubchem_result = _query_pubchem(resolved_cas)
+    except Exception as exc:
+        logger.warning("中文名称查询 PubChem 异常: %s", exc)
+    try:
+        common_chem_result = _query_common_chemistry(resolved_cas)
+    except Exception as exc:
+        logger.warning("中文名称查询 Common Chemistry 异常: %s", exc)
+
+    merged = None
+    if pubchem_result is not None or common_chem_result is not None:
+        merged = _merge_results(pubchem_result, common_chem_result)
+
+    if merged is None:
+        merged = chemicalbook_info
+    elif chemicalbook_info is not None:
+        merged = _merge_chemicalbook_result(merged, chemicalbook_info)
+
+    if merged is not None:
+        merged.physical_state = _determine_physical_state(merged.melting_point)
+        logger.info(
+            "中文名称查询完成: CAS=%s, 中文名=%s, 英文名=%s",
+            merged.cas_number, merged.substance, merged.substance_english_name,
+        )
+    return merged
+
+
 # ===================== 对外统一入口 =====================
 
 def lookup_chemical(query: str) -> Optional[ChemicalInfo]:
@@ -959,3 +1039,38 @@ def lookup_chemical_by_smiles(smiles: str) -> Optional[ChemicalInfo]:
         merged.physical_state,
     )
     return merged
+
+
+_VALID_QUERY_TYPES = {"cas", "name", "smiles"}
+
+
+def lookup_chemical_unified(query: str, query_type: str) -> Optional[ChemicalInfo]:
+    """
+    功能:
+        统一化合物查询入口, 根据查询类型路由到对应的查询逻辑.
+        名称类型自动检测中英文: 含 CJK 字符走 ChemicalBook 搜索,
+        纯英文走 PubChem + Common Chemistry.
+    参数:
+        query: str, 查询字符串 (CAS / 名称 / SMILES).
+        query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
+    返回:
+        Optional[ChemicalInfo], 合并后的化合物信息, 查询失败时返回 None.
+    """
+    normalized_query = str(query or "").strip()
+    if normalized_query == "":
+        logger.warning("统一查询参数为空")
+        return None
+
+    if query_type not in _VALID_QUERY_TYPES:
+        logger.warning("不支持的查询类型: %s", query_type)
+        return None
+
+    if query_type == "cas":
+        return lookup_chemical(normalized_query)
+    elif query_type == "smiles":
+        return lookup_chemical_by_smiles(normalized_query)
+    else:
+        # 名称类型, 自动检测中英文
+        if _contains_cjk(normalized_query) is True:
+            return lookup_chemical_by_name_cn(normalized_query)
+        return lookup_chemical(normalized_query)
