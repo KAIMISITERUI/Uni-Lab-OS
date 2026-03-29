@@ -141,7 +141,7 @@ class Settings:
     robust_v3_tail_artifact_relative_prominence_max: float = 0.15  # 拖尾假峰相对显著性上限, 调大将合并更强的尾部小峰.
     robust_v3_tail_artifact_half_width_asymmetry_min: float = 2.0  # 拖尾假峰右/左半高宽不对称下限, 调大将减少误合并.
     robust_v3_tail_monotonic_filter_enable: bool = True  # robust_v3 是否启用平滑信号单调下降拖尾过滤, 关闭后仅使用三条件拖尾过滤.
-    robust_v3_tail_monotonic_ratio_max: float = 0.25  # 单调下降拖尾判定时上升步占比上限, 调大会放松判定.
+    robust_v3_tail_monotonic_ratio_max: float = 0.20  # 单调下降拖尾判定时上升步占比上限, 调大会放松判定.
     robust_v3_max_peak_width_min: float = 1.0  # robust_v3 峰最大边界宽度(min), 配合自适应逻辑放宽基准值. 超过自适应上限视为基线抬升假峰. 设0关闭.
     robust_v3_leading_edge_filter_enable: bool = True  # robust_v3 是否启用前沿假峰过滤, 检测强峰上升沿上的假峰并丢弃.
     robust_v3_leading_edge_relative_prominence_max: float = 0.25  # 前沿假峰相对后峰显著性上限, 调大将丢弃更强的前沿假峰.
