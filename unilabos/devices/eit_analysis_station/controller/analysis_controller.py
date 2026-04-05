@@ -33,6 +33,13 @@ from ..processor.molecular_mass_predictor import PIMPredictor
 from ..processor.mspepsearch_predictor import MSPepSearchPredictor
 from ..processor.nist_library_reader import NistLibraryReader
 from ..processor.peak_integrator import PeakIntegrator, PeakResult
+from ..processor.peak_boundary_detector import (
+    FIDPeakBoundaryDetector,
+    GCMSPeakBoundaryDetector,
+    PeakBoundaryDetectorConfig,
+    PeakBoundaryDetectorFactory,
+    PeakDetectionInput,
+)
 from ..processor.nist_matcher import NISTMatcher
 from ..processor.report_generator import (
     PIMPrediction, SSHMPrediction, iHSHMPrediction,
@@ -78,9 +85,6 @@ class AnalysisStationController:
 
     # 默认 Rack 编号
     _DEFAULT_RACK_CODE: str = "Rack 6"
-
-    # 默认进样量
-    _DEFAULT_INJ_VOL: int = 1
 
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self._settings = settings or Settings.from_env()
@@ -730,6 +734,27 @@ class AnalysisStationController:
         vial_pos = (6 - row) * 8 + (9 - col)
         return vial_pos
 
+    def _resolve_rack_code(self, rack_code: Optional[str] = None) -> str:
+        """
+        功能:
+            解析并校验分析任务使用的 RackCode.
+            未显式传入时, 返回默认 Rack 6.
+        参数:
+            rack_code: 可选 RackCode, 合法值为 "Rack 1" 到 "Rack 6".
+        返回:
+            str, 最终写入 CSV 的 RackCode.
+        """
+        if rack_code is None:
+            return self._DEFAULT_RACK_CODE
+
+        normalized_rack_code = rack_code.strip()
+        allowed_rack_codes = {f"Rack {index}" for index in range(1, 7)}
+        if normalized_rack_code not in allowed_rack_codes:
+            raise ValueError(
+                f"RackCode 无效: {rack_code}, 仅支持 Rack 1 到 Rack 6."
+            )
+        return normalized_rack_code
+
     # ------------------------------------------------------------------
     # CSV 生成
     # ------------------------------------------------------------------
@@ -739,7 +764,9 @@ class AnalysisStationController:
         task_id: str,
         exp_count: int,
         method: str,
+        injection_volume: int,
         exp_nums: Optional[List[int]] = None,
+        rack_code: Optional[str] = None,
     ) -> str:
         """
         功能:
@@ -750,12 +777,14 @@ class AnalysisStationController:
             task_id: 任务 ID, 用于拼接 SampleName/OutputFile.
             exp_count: 实验数量.
             method: GC_MS 方法名称.
+            injection_volume: 进样量, 写入 CSV 的 SmplInjVol 列.
             exp_nums: 可选实验编号列表, None 表示 1..exp_count 全量提交.
         返回:
             str: CSV 文本内容(含列头).
         """
         output = io.StringIO()
         writer = csv.writer(output, lineterminator="\n")
+        resolved_rack_code = self._resolve_rack_code(rack_code)
 
         # 写入列头
         writer.writerow(self._CSV_HEADERS)
@@ -768,13 +797,49 @@ class AnalysisStationController:
             writer.writerow([
                 sample_name,                               # SampleName
                 method,                                    # AcqMethod
-                self._DEFAULT_RACK_CODE,                   # RackCode
+                resolved_rack_code,                        # RackCode
                 vial_pos,                                  # VialPos
-                self._DEFAULT_INJ_VOL,                     # SmplInjVol
+                injection_volume,                          # SmplInjVol
                 sample_name,                               # OutputFile(与 SampleName 相同)
             ])
 
         return output.getvalue()
+
+    def _build_uplc_qtof_wash_stop_row(
+        self,
+        exp_count: int,
+        exp_nums: Optional[List[int]] = None,
+        rack_code: Optional[str] = None,
+    ) -> List[Any]:
+        """
+        功能:
+            生成 UPLC_QTOF 的 wash_stop 行.
+            该行复用最后一个样品的 RackCode 和 VialPos, 并将进样量固定为 0.
+
+        参数:
+            exp_count: 任务内实验总数.
+            exp_nums: UPLC_QTOF 实际提交的实验编号列表, None 表示使用 1 到 exp_count.
+            rack_code: 可选盘位编号, 用于写入 RackCode.
+
+        返回:
+            List[Any], 按 CSV 列顺序生成的 wash_stop 单行数据.
+        """
+        target_exp_nums = exp_nums if exp_nums is not None else list(range(1, exp_count + 1))
+        if len(target_exp_nums) == 0:
+            raise ValueError("UPLC_QTOF 未找到可用于生成 wash_stop 的样品编号")
+
+        last_exp_num = target_exp_nums[-1]
+        resolved_rack_code = self._resolve_rack_code(rack_code)
+        last_vial_pos = self._calc_vial_pos(last_exp_num)
+
+        return [
+            "wash_stop",
+            "wash_stop",
+            resolved_rack_code,
+            last_vial_pos,
+            0,
+            "wash_stop",
+        ]
 
     # ------------------------------------------------------------------
     # CSV 保存
@@ -820,7 +885,12 @@ class AnalysisStationController:
     # GC_MS 提交流程
     # ------------------------------------------------------------------
 
-    def _do_submit_gc_ms(self, resolved_id: str, task_info: Dict) -> Dict:
+    def _do_submit_gc_ms(
+        self,
+        resolved_id: str,
+        task_info: Dict,
+        rack_code: Optional[str] = None,
+    ) -> Dict:
         """
         功能:
             GC_MS 提交核心逻辑(内部方法), 接收已解析的任务信息直接执行,
@@ -842,7 +912,12 @@ class AnalysisStationController:
 
         # 步骤1: 生成并保存 CSV
         csv_content = self._generate_gc_ms_csv(
-            resolved_id, task_info["exp_count"], gc_ms_method, gc_ms_exp_nums
+            resolved_id,
+            task_info["exp_count"],
+            gc_ms_method,
+            self._settings.gc_ms_inj_vol,
+            gc_ms_exp_nums,
+            rack_code=rack_code,
         )
         saved_paths = self._save_csv(csv_content, resolved_id, "gc_ms")
 
@@ -902,7 +977,12 @@ class AnalysisStationController:
     # UPLC_QTOF 提交流程
     # ------------------------------------------------------------------
 
-    def _do_submit_uplc_qtof(self, resolved_id: str, task_info: Dict) -> Dict:
+    def _do_submit_uplc_qtof(
+        self,
+        resolved_id: str,
+        task_info: Dict,
+        rack_code: Optional[str] = None,
+    ) -> Dict:
         """
         功能:
             UPLC_QTOF 提交核心逻辑(内部方法), 接收已解析的任务信息直接执行.
@@ -924,14 +1004,24 @@ class AnalysisStationController:
 
         # UPLC_QTOF 与 GC_MS 使用一致的 CSV 协议格式.
         csv_content = self._generate_gc_ms_csv(
-            resolved_id, task_info["exp_count"], uplc_qtof_method, uplc_qtof_exp_nums
+            resolved_id,
+            task_info["exp_count"],
+            uplc_qtof_method,
+            self._settings.uplc_qtof_inj_vol,
+            uplc_qtof_exp_nums,
+            rack_code=rack_code,
         )
 
         if self._settings.uplc_qtof_append_wash_stop is True:
             # 末尾追加 wash_stop 行, 仅写方法名, 不填进样信息.
             wash_buf = io.StringIO()
             wash_writer = csv.writer(wash_buf, lineterminator="\n")
-            wash_writer.writerow(["", "wash_stop", "", "", "", ""])
+            wash_stop_row = self._build_uplc_qtof_wash_stop_row(
+                task_info["exp_count"],
+                uplc_qtof_exp_nums,
+                rack_code=rack_code,
+            )
+            wash_writer.writerow(wash_stop_row)
             csv_content += wash_buf.getvalue()
             self._logger.info("UPLC_QTOF 已追加停止方法行: wash_stop")
         else:
@@ -1043,7 +1133,11 @@ class AnalysisStationController:
     # 统一分析入口
     # ------------------------------------------------------------------
 
-    def run_analysis(self, task_id: Optional[str] = None) -> Dict:
+    def run_analysis(
+        self,
+        task_id: Optional[str] = None,
+        rack_code: Optional[str] = None,
+    ) -> Dict:
         """
         功能:
             统一分析入口, 依据 xlsx 中各仪器方法配置依次处理.
@@ -1059,6 +1153,7 @@ class AnalysisStationController:
         results: Dict = {}
 
         try:
+            resolved_rack_code = self._resolve_rack_code(rack_code)
             # 定位任务目录并解析 xlsx(仅执行一次)
             task_dir, resolved_id = self._find_task_dir(task_id)
             self._check_task_status(task_dir)
@@ -1068,12 +1163,18 @@ class AnalysisStationController:
             self._logger.error(msg)
             return {"error": msg}
 
+        self._logger.info("分析任务 %s 使用 RackCode: %s", resolved_id, resolved_rack_code)
+
         # ---------- GC_MS ----------
         if task_info["gc_ms_method"] is not None:
             self._logger.info("开始提交 GC_MS 分析任务...")
             try:
                 # 直接调用核心方法，跳过重复的定位+解析步骤
-                results["gc_ms"] = self._do_submit_gc_ms(resolved_id, task_info)
+                results["gc_ms"] = self._do_submit_gc_ms(
+                    resolved_id,
+                    task_info,
+                    rack_code=resolved_rack_code,
+                )
             except Exception as exc:
                 results["gc_ms"] = {"success": False, "return_info": f"GC_MS 提交失败: {exc}"}
         else:
@@ -1083,7 +1184,11 @@ class AnalysisStationController:
         if task_info["uplc_qtof_method"] is not None:
             self._logger.info("开始提交 UPLC_QTOF 分析任务...")
             try:
-                results["uplc_qtof"] = self._do_submit_uplc_qtof(resolved_id, task_info)
+                results["uplc_qtof"] = self._do_submit_uplc_qtof(
+                    resolved_id,
+                    task_info,
+                    rack_code=resolved_rack_code,
+                )
             except Exception as exc:
                 results["uplc_qtof"] = {"success": False, "return_info": f"UPLC_QTOF 提交失败: {exc}"}
         else:
@@ -1285,111 +1390,182 @@ class AnalysisStationController:
             except Exception as e:
                 self._logger.error("样品 %s PIM 预测器初始化失败: %s", sample_name, e)
 
-        # TIC 积分
-        try:
-            tic_times, tic_intensities = reader.read_tic(d_dir)
-            tic_integrator = PeakIntegrator(
-                smoothing_window=self._settings.peak_smoothing_window,
-                prominence=self._settings.peak_prominence,
-                min_distance=self._settings.peak_min_distance,
-                width_rel_height=self._settings.peak_width_rel_height,
-                use_als_baseline=self._settings.use_als_baseline,
-                als_lambda=self._settings.als_lambda,
-                als_p=self._settings.als_p,
-                use_valley_boundary=self._settings.use_valley_boundary,
-                integration_mode=self._settings.integration_mode,
-                baseline_method=self._settings.baseline_method,
-                baseline_quantile=self._settings.baseline_quantile,
-                baseline_window_min=self._settings.baseline_window_min,
-                boundary_sigma_factor=self._settings.boundary_sigma_factor,
-                boundary_edge_ratio=self._settings.boundary_edge_ratio,
-                boundary_expand_factor=self._settings.boundary_expand_factor,
-                boundary_min_span_min=self._settings.boundary_min_span_min,
-                boundary_max_span_min=self._settings.boundary_max_span_min,
-                shoulder_filter_enable=self._settings.robust_v3_shoulder_filter_enable,
-                shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
-                shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
-                shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
-                tail_artifact_filter_enable=self._settings.robust_v3_tail_artifact_filter_enable,
-                tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
-                tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
-                tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
-                tail_monotonic_filter_enable=self._settings.robust_v3_tail_monotonic_filter_enable,
-                tail_monotonic_ratio_max=self._settings.robust_v3_tail_monotonic_ratio_max,
-                max_peak_width_min=self._settings.robust_v3_max_peak_width_min,
-                leading_edge_filter_enable=self._settings.robust_v3_leading_edge_filter_enable,
-                leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
-                leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
-                gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
-                use_cwt_detection=self._settings.use_cwt_detection,
-                cwt_min_width_min=self._settings.cwt_min_width_min,
-                cwt_max_width_min=self._settings.cwt_max_width_min,
-                cwt_min_snr=self._settings.cwt_min_snr,
-                cwt_noise_perc=self._settings.cwt_noise_perc,
-            )
-            result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
-            tic_baseline = tic_integrator.last_baseline
-            result.tic_peaks = self._filter_peaks(
-                result.tic_peaks,
-                area_min=self._settings.tic_area_min,
-                area_max=self._settings.tic_area_max,
-            )
-            self._logger.info("样品 %s TIC 积分: %d 个峰", sample_name, len(result.tic_peaks))
-        except Exception as e:
-            self._logger.error("样品 %s TIC 积分失败: %s", sample_name, e)
+        # TIC / FID 积分
+        _mode = self._settings.integration_mode.strip().lower()
 
-        # FID 积分
-        try:
-            fid_times, fid_intensities = reader.read_fid(d_dir)
-            fid_integrator = PeakIntegrator(
-                smoothing_window=self._settings.peak_smoothing_window,
-                prominence=self._settings.fid_peak_prominence,
-                min_distance=self._settings.fid_peak_min_distance,
-                width_rel_height=self._settings.peak_width_rel_height,
-                use_als_baseline=self._settings.use_als_baseline,
-                als_lambda=self._settings.als_lambda,
-                als_p=self._settings.als_p,
-                use_valley_boundary=self._settings.use_valley_boundary,
-                integration_mode=self._settings.integration_mode,
-                baseline_method=self._settings.baseline_method,
-                baseline_quantile=self._settings.baseline_quantile,
-                baseline_window_min=self._settings.baseline_window_min,
-                boundary_sigma_factor=self._settings.boundary_sigma_factor,
-                boundary_edge_ratio=self._settings.boundary_edge_ratio,
-                boundary_expand_factor=self._settings.boundary_expand_factor,
-                boundary_min_span_min=self._settings.boundary_min_span_min,
-                boundary_max_span_min=self._settings.boundary_max_span_min,
-                shoulder_filter_enable=self._settings.robust_v3_shoulder_filter_enable,
-                shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
-                shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
-                shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
-                tail_artifact_filter_enable=self._settings.robust_v3_tail_artifact_filter_enable,
-                tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
-                tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
-                tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
-                tail_monotonic_filter_enable=self._settings.robust_v3_tail_monotonic_filter_enable,
-                tail_monotonic_ratio_max=self._settings.robust_v3_tail_monotonic_ratio_max,
-                max_peak_width_min=self._settings.robust_v3_max_peak_width_min,
-                leading_edge_filter_enable=self._settings.robust_v3_leading_edge_filter_enable,
-                leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
-                leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
-                gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
-                use_cwt_detection=self._settings.use_cwt_detection,
-                cwt_min_width_min=self._settings.cwt_min_width_min,
-                cwt_max_width_min=self._settings.cwt_max_width_min,
-                cwt_min_snr=self._settings.cwt_min_snr,
-                cwt_noise_perc=self._settings.cwt_noise_perc,
+        if _mode == "boundary_v1":
+            # ---- boundary_v1 分支 ----
+            bd_config = PeakBoundaryDetectorConfig(
+                smoothing_window=self._settings.boundary_v1_smoothing_window,
+                gcms_seed_prominence=self._settings.boundary_v1_gcms_seed_prominence,
+                gcms_seed_min_distance=self._settings.boundary_v1_gcms_seed_min_distance,
+                fid_candidate_prominence=self._settings.boundary_v1_fid_candidate_prominence,
+                fid_candidate_min_distance=self._settings.boundary_v1_fid_candidate_min_distance,
+                fid_fit_max_components=self._settings.boundary_v1_fid_fit_max_components,
+                fid_baseline_method=self._settings.boundary_v1_fid_baseline_method,
             )
-            result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
-            fid_baseline = fid_integrator.last_baseline
-            result.fid_peaks = self._filter_peaks(
-                result.fid_peaks,
-                area_min=self._settings.fid_area_min,
-                area_max=self._settings.fid_area_max,
-            )
-            self._logger.info("样品 %s FID 积分: %d 个峰", sample_name, len(result.fid_peaks))
-        except Exception as e:
-            self._logger.error("样品 %s FID 积分失败: %s", sample_name, e)
+            factory = PeakBoundaryDetectorFactory(bd_config)
+
+            # TIC: GCMSPeakBoundaryDetector
+            try:
+                tic_times, tic_intensities = reader.read_tic(d_dir)
+
+                # 尝试读取 MS 矩阵用于多维分析
+                ms_matrix = None
+                mz_axis = None
+                try:
+                    _, mz_axis, ms_matrix = reader.read_ms_matrix(d_dir)
+                except Exception as e:
+                    self._logger.warning("样品 %s 无法读取 ms_matrix, 降级为 TIC-only: %s", sample_name, e)
+
+                gcms_detector = factory.build("gcms_tic")
+                tic_input = PeakDetectionInput(
+                    detector="gcms_tic",
+                    times=tic_times,
+                    signal=tic_intensities,
+                    ms_matrix=ms_matrix,
+                    mz_axis=mz_axis,
+                )
+                tic_detection = gcms_detector.detect(tic_input)
+                result.tic_peaks = tic_detection.to_peak_results()
+                tic_baseline = tic_detection.trace.baseline if len(tic_detection.trace.baseline) > 0 else None
+                result.tic_peaks = self._filter_peaks(
+                    result.tic_peaks,
+                    area_min=self._settings.tic_area_min,
+                    area_max=self._settings.tic_area_max,
+                )
+                self._logger.info("样品 %s boundary_v1 TIC 积分: %d 个峰", sample_name, len(result.tic_peaks))
+            except Exception as e:
+                self._logger.error("样品 %s boundary_v1 TIC 积分失败: %s", sample_name, e)
+
+            # FID: FIDPeakBoundaryDetector
+            try:
+                fid_times, fid_intensities = reader.read_fid(d_dir)
+                fid_detector = factory.build("fid")
+                fid_input = PeakDetectionInput(
+                    detector="fid",
+                    times=fid_times,
+                    signal=fid_intensities,
+                )
+                fid_detection = fid_detector.detect(fid_input)
+                result.fid_peaks = fid_detection.to_peak_results()
+                fid_baseline = fid_detection.trace.baseline if len(fid_detection.trace.baseline) > 0 else None
+                result.fid_peaks = self._filter_peaks(
+                    result.fid_peaks,
+                    area_min=self._settings.fid_area_min,
+                    area_max=self._settings.fid_area_max,
+                )
+                self._logger.info("样品 %s boundary_v1 FID 积分: %d 个峰", sample_name, len(result.fid_peaks))
+            except Exception as e:
+                self._logger.error("样品 %s boundary_v1 FID 积分失败: %s", sample_name, e)
+
+        else:
+            # ---- 现有模式 (legacy / robust_v2 / robust_v3 / gcpy) ----
+            # TIC 积分
+            try:
+                tic_times, tic_intensities = reader.read_tic(d_dir)
+                tic_integrator = PeakIntegrator(
+                    smoothing_window=self._settings.peak_smoothing_window,
+                    prominence=self._settings.peak_prominence,
+                    min_distance=self._settings.peak_min_distance,
+                    width_rel_height=self._settings.peak_width_rel_height,
+                    use_als_baseline=self._settings.use_als_baseline,
+                    als_lambda=self._settings.als_lambda,
+                    als_p=self._settings.als_p,
+                    use_valley_boundary=self._settings.use_valley_boundary,
+                    integration_mode=self._settings.integration_mode,
+                    baseline_method=self._settings.baseline_method,
+                    baseline_quantile=self._settings.baseline_quantile,
+                    baseline_window_min=self._settings.baseline_window_min,
+                    boundary_sigma_factor=self._settings.boundary_sigma_factor,
+                    boundary_edge_ratio=self._settings.boundary_edge_ratio,
+                    boundary_expand_factor=self._settings.boundary_expand_factor,
+                    boundary_min_span_min=self._settings.boundary_min_span_min,
+                    boundary_max_span_min=self._settings.boundary_max_span_min,
+                    shoulder_filter_enable=self._settings.robust_v3_shoulder_filter_enable,
+                    shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
+                    shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
+                    shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
+                    tail_artifact_filter_enable=self._settings.robust_v3_tail_artifact_filter_enable,
+                    tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
+                    tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
+                    tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
+                    tail_monotonic_filter_enable=self._settings.robust_v3_tail_monotonic_filter_enable,
+                    tail_monotonic_ratio_max=self._settings.robust_v3_tail_monotonic_ratio_max,
+                    max_peak_width_min=self._settings.robust_v3_max_peak_width_min,
+                    leading_edge_filter_enable=self._settings.robust_v3_leading_edge_filter_enable,
+                    leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
+                    leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
+                    gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
+                    use_cwt_detection=self._settings.use_cwt_detection,
+                    cwt_min_width_min=self._settings.cwt_min_width_min,
+                    cwt_max_width_min=self._settings.cwt_max_width_min,
+                    cwt_min_snr=self._settings.cwt_min_snr,
+                    cwt_noise_perc=self._settings.cwt_noise_perc,
+                )
+                result.tic_peaks = tic_integrator.integrate(tic_times, tic_intensities)
+                tic_baseline = tic_integrator.last_baseline
+                result.tic_peaks = self._filter_peaks(
+                    result.tic_peaks,
+                    area_min=self._settings.tic_area_min,
+                    area_max=self._settings.tic_area_max,
+                )
+                self._logger.info("样品 %s TIC 积分: %d 个峰", sample_name, len(result.tic_peaks))
+            except Exception as e:
+                self._logger.error("样品 %s TIC 积分失败: %s", sample_name, e)
+
+            # FID 积分
+            try:
+                fid_times, fid_intensities = reader.read_fid(d_dir)
+                fid_integrator = PeakIntegrator(
+                    smoothing_window=self._settings.peak_smoothing_window,
+                    prominence=self._settings.fid_peak_prominence,
+                    min_distance=self._settings.fid_peak_min_distance,
+                    width_rel_height=self._settings.peak_width_rel_height,
+                    use_als_baseline=self._settings.use_als_baseline,
+                    als_lambda=self._settings.als_lambda,
+                    als_p=self._settings.als_p,
+                    use_valley_boundary=self._settings.use_valley_boundary,
+                    integration_mode=self._settings.integration_mode,
+                    baseline_method=self._settings.baseline_method,
+                    baseline_quantile=self._settings.baseline_quantile,
+                    baseline_window_min=self._settings.baseline_window_min,
+                    boundary_sigma_factor=self._settings.boundary_sigma_factor,
+                    boundary_edge_ratio=self._settings.boundary_edge_ratio,
+                    boundary_expand_factor=self._settings.boundary_expand_factor,
+                    boundary_min_span_min=self._settings.boundary_min_span_min,
+                    boundary_max_span_min=self._settings.boundary_max_span_min,
+                    shoulder_filter_enable=self._settings.robust_v3_shoulder_filter_enable,
+                    shoulder_filter_width_max_min=self._settings.robust_v3_shoulder_width_max_min,
+                    shoulder_filter_gap_max_min=self._settings.robust_v3_shoulder_gap_max_min,
+                    shoulder_filter_relative_prominence_max=self._settings.robust_v3_shoulder_relative_prominence_max,
+                    tail_artifact_filter_enable=self._settings.robust_v3_tail_artifact_filter_enable,
+                    tail_artifact_gap_max_min=self._settings.robust_v3_tail_artifact_gap_max_min,
+                    tail_artifact_relative_prominence_max=self._settings.robust_v3_tail_artifact_relative_prominence_max,
+                    tail_artifact_half_width_asymmetry_min=self._settings.robust_v3_tail_artifact_half_width_asymmetry_min,
+                    tail_monotonic_filter_enable=self._settings.robust_v3_tail_monotonic_filter_enable,
+                    tail_monotonic_ratio_max=self._settings.robust_v3_tail_monotonic_ratio_max,
+                    max_peak_width_min=self._settings.robust_v3_max_peak_width_min,
+                    leading_edge_filter_enable=self._settings.robust_v3_leading_edge_filter_enable,
+                    leading_edge_relative_prominence_max=self._settings.robust_v3_leading_edge_relative_prominence_max,
+                    leading_edge_monotonic_ratio_min=self._settings.robust_v3_leading_edge_monotonic_ratio_min,
+                    gcpy_whittaker_lmbd=self._settings.gcpy_whittaker_lmbd,
+                    use_cwt_detection=self._settings.use_cwt_detection,
+                    cwt_min_width_min=self._settings.cwt_min_width_min,
+                    cwt_max_width_min=self._settings.cwt_max_width_min,
+                    cwt_min_snr=self._settings.cwt_min_snr,
+                    cwt_noise_perc=self._settings.cwt_noise_perc,
+                )
+                result.fid_peaks = fid_integrator.integrate(fid_times, fid_intensities)
+                fid_baseline = fid_integrator.last_baseline
+                result.fid_peaks = self._filter_peaks(
+                    result.fid_peaks,
+                    area_min=self._settings.fid_area_min,
+                    area_max=self._settings.fid_area_max,
+                )
+                self._logger.info("样品 %s FID 积分: %d 个峰", sample_name, len(result.fid_peaks))
+            except Exception as e:
+                self._logger.error("样品 %s FID 积分失败: %s", sample_name, e)
 
         # NIST 化合物匹配 (优先使用 NIST MS Search 自动化)
         try:
@@ -1496,7 +1672,7 @@ class AnalysisStationController:
 
             # 根据积分模式决定填充基线方式, 使绘图区域与实际积分一致
             mode = self._settings.integration_mode.strip().lower()
-            if mode == "gcpy" or mode == "robust_v3":
+            if mode == "gcpy" or mode == "robust_v3" or mode == "boundary_v1":
                 fill_mode = "global"
             elif mode == "legacy" and self._settings.use_als_baseline is True:
                 fill_mode = "global"

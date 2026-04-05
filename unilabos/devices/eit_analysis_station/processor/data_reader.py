@@ -407,3 +407,48 @@ class GCMSDataReader:
 
         logger.info("样品信息: %s", result.get("sample_name", "未知"))
         return result
+
+    def read_ms_matrix(self, d_dir: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        功能:
+            读取完整的 scan x mz 强度矩阵, 供多维峰边界识别使用.
+
+        参数:
+            d_dir: .D 目录路径.
+
+        返回:
+            Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                scan_times (n_scans,), mz_axis (n_mz,), ms_matrix (n_scans, n_mz).
+        """
+        import rainbow as rb
+
+        datadir = rb.read(str(d_dir))
+        ms_file = datadir.get_file("data.ms")
+        if ms_file is None:
+            raise FileNotFoundError(f"未找到 data.ms: {d_dir}")
+
+        scan_times = ms_file.xlabels   # (n_scans,)
+        mz_axis = ms_file.ylabels      # (n_mz,)
+        ms_matrix = ms_file.data        # (n_scans, n_mz)
+
+        logger.info(
+            "从 data.ms 读取 MS 矩阵: %d scans x %d mz, 时间范围 %.2f - %.2f min",
+            ms_matrix.shape[0], ms_matrix.shape[1],
+            scan_times[0], scan_times[-1],
+        )
+        return scan_times, mz_axis, ms_matrix
+
+    @staticmethod
+    def extract_xic_batch(ms_matrix: np.ndarray, mz_indices: np.ndarray) -> np.ndarray:
+        """
+        功能:
+            批量提取指定 m/z 通道的提取离子色谱 (XIC).
+
+        参数:
+            ms_matrix: 强度矩阵 (n_scans, n_mz).
+            mz_indices: 目标 m/z 索引数组 (k,).
+
+        返回:
+            np.ndarray, 形状 (n_scans, k) 的 XIC 矩阵.
+        """
+        return ms_matrix[:, mz_indices]

@@ -31,12 +31,14 @@ class Settings:
     gc_ms_host: str = "10.40.6.101"  # GC-MS 控制端地址, 修改后切换仪器目标主机.
     gc_ms_port: int = 5792  # GC-MS 控制端端口, 修改后切换连接端口.
     gc_ms_timeout: float = 10.0  # GC-MS 通信超时秒数, 调大可降低慢响应误判.
+    gc_ms_inj_vol: int = 1  # GC-MS 进样量, 对应 CSV 的 SmplInjVol 列.
 
     # ---------- UPLC_QTOF 设备 ----------
-    uplc_qtof_host: str = "10.40.8.69"  # UPLC_QTOF 控制端地址, 修改后流程切换主机.
+    uplc_qtof_host: str = "10.40.10.143"  # UPLC_QTOF 控制端地址, 修改后流程切换主机.
     uplc_qtof_port: int = 5792  # UPLC_QTOF 控制端端口, 修改后流程切换端口.
     uplc_qtof_timeout: float = 10.0  # UPLC_QTOF 通信超时秒数, 调大可降低超时告警.
-    uplc_qtof_append_wash_stop: bool = False  # 是否追加 Wash stop 方法, 打开后序列会追加停机步骤.
+    uplc_qtof_inj_vol: int = 1  # UPLC_QTOF 进样量, 对应 CSV 的 SmplInjVol 列.
+    uplc_qtof_append_wash_stop: bool = True  # 是否追加 Wash stop 方法, 打开后序列会追加停机步骤.
 
     # ---------- HPLC 设备(预留) ----------
     hplc_host: str = "192.168.3.186"  # HPLC 控制端地址, 预留流程切换主机.
@@ -109,7 +111,7 @@ class Settings:
     mspepsearch_timeout: float = 120.0  # MSPepSearch 超时秒数, 调大可降低复杂谱图超时失败.
 
     # ---------- 峰检测与积分参数 ----------
-    integration_mode: str = "robust_v3"  # 处理模式, 可选 robust_v3 / legacy / gcpy, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "boundary_v1"  # 处理模式, 可选 robust_v3 / legacy / gcpy/ boundary_v1, 切换后改变峰检测与边界算法路径.
     peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
     peak_prominence: float = 20000.0  # TIC 最小峰显著性阈值, 小幅调高以抑制平基线弱假峰.
     peak_min_distance: int = 3  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.
@@ -157,6 +159,16 @@ class Settings:
     # ---------- gcpy 参数 ----------
     gcpy_whittaker_lmbd: float = 10.0  # gcpy 模式 Whittaker 平滑参数, 调大可使信号更平滑.
 
+    # ---------- boundary_v1 参数 ----------
+    boundary_v1_smoothing_window: int = 11  # boundary_v1 预处理平滑窗口, 调大可抑制噪声.
+    boundary_v1_gcms_seed_prominence: float = 30000.0  # GC-MS TIC 候选种子最小 prominence.
+    boundary_v1_gcms_seed_min_distance: int = 15  # GC-MS TIC 候选种子最小间距.
+    boundary_v1_fid_candidate_prominence: float = 0.5  # FID 候选峰最小 prominence.
+    boundary_v1_fid_candidate_min_distance: int = 50  # FID 候选峰最小间距.
+    boundary_v1_fid_fit_max_components: int = 4  # FID 局部拟合最大组分数.
+    boundary_v1_fid_baseline_method: str = "arpls"  # FID 基线方法, 可选 arpls/asls.
+    boundary_v1_quality_manual_review_threshold: float = 0.5  # 质量分数低于此阈值时标记 manual_review.
+
     # ---------- 峰过滤参数 ----------
     peak_rt_min: Optional[float] = 4.0  # 峰保留时间下限(min), 调大可忽略前段溶剂峰.
     peak_rt_max: Optional[float] = 12.0  # 峰保留时间上限(min), 调小可限制后段噪声峰.
@@ -166,7 +178,7 @@ class Settings:
     fid_area_max: Optional[float] = None  # FID 峰面积上限, 设置后可过滤异常大峰.
 
     # ---------- TIC-FID 峰对齐参数 ----------
-    alignment_tolerance: float = 0.2  # FID 与 TIC 峰保留时间对齐容差(min), 调大可提高配对成功率.
+    alignment_tolerance: float = 0.1  # FID 与 TIC 峰保留时间对齐容差(min), 调大可提高配对成功率.
     alignment_include_tic_only: bool = False  # 是否输出仅 TIC 有峰行, 打开后对照表会增加 TIC-only 记录.
     alignment_include_fid_only: bool = True  # 是否输出仅 FID 有峰行, 关闭后对照表会隐藏 FID-only 记录.
 
@@ -215,7 +227,9 @@ class Settings:
             Settings.
         环境变量:
             ANALYSIS_GC_MS_HOST, ANALYSIS_GC_MS_PORT, ANALYSIS_GC_MS_TIMEOUT,
+            ANALYSIS_GC_MS_INJ_VOL,
             ANALYSIS_UPLC_QTOF_HOST, ANALYSIS_UPLC_QTOF_PORT, ANALYSIS_UPLC_QTOF_TIMEOUT,
+            ANALYSIS_UPLC_QTOF_INJ_VOL,
             ANALYSIS_UPLC_QTOF_APPEND_WASH_STOP,
             ANALYSIS_HPLC_HOST, ANALYSIS_HPLC_PORT, ANALYSIS_HPLC_TIMEOUT,
             ANALYSIS_GC_MS_DATA_DIR, ANALYSIS_UPLC_QTOF_DATA_DIR, ANALYSIS_HPLC_DATA_DIR,
@@ -310,9 +324,11 @@ class Settings:
             gc_ms_host=_str("ANALYSIS_GC_MS_HOST", defaults.gc_ms_host),
             gc_ms_port=_int("ANALYSIS_GC_MS_PORT", defaults.gc_ms_port),
             gc_ms_timeout=_float("ANALYSIS_GC_MS_TIMEOUT", defaults.gc_ms_timeout),
+            gc_ms_inj_vol=_int("ANALYSIS_GC_MS_INJ_VOL", defaults.gc_ms_inj_vol),
             uplc_qtof_host=_str("ANALYSIS_UPLC_QTOF_HOST", defaults.uplc_qtof_host),
             uplc_qtof_port=_int("ANALYSIS_UPLC_QTOF_PORT", defaults.uplc_qtof_port),
             uplc_qtof_timeout=_float("ANALYSIS_UPLC_QTOF_TIMEOUT", defaults.uplc_qtof_timeout),
+            uplc_qtof_inj_vol=_int("ANALYSIS_UPLC_QTOF_INJ_VOL", defaults.uplc_qtof_inj_vol),
             uplc_qtof_append_wash_stop=_bool(
                 "ANALYSIS_UPLC_QTOF_APPEND_WASH_STOP", defaults.uplc_qtof_append_wash_stop
             ),
@@ -462,6 +478,14 @@ class Settings:
             yield_rt_tolerance=_float("ANALYSIS_YIELD_RT_TOLERANCE", defaults.yield_rt_tolerance),
             archive_dir=_path("ANALYSIS_ARCHIVE_DIR", defaults.archive_dir),
             archive_copy_raw_data=_bool("ANALYSIS_ARCHIVE_COPY_RAW_DATA", defaults.archive_copy_raw_data),
+            boundary_v1_smoothing_window=_int("ANALYSIS_BOUNDARY_V1_SMOOTHING_WINDOW", defaults.boundary_v1_smoothing_window),
+            boundary_v1_gcms_seed_prominence=_float("ANALYSIS_BOUNDARY_V1_GCMS_SEED_PROMINENCE", defaults.boundary_v1_gcms_seed_prominence),
+            boundary_v1_gcms_seed_min_distance=_int("ANALYSIS_BOUNDARY_V1_GCMS_SEED_MIN_DISTANCE", defaults.boundary_v1_gcms_seed_min_distance),
+            boundary_v1_fid_candidate_prominence=_float("ANALYSIS_BOUNDARY_V1_FID_CANDIDATE_PROMINENCE", defaults.boundary_v1_fid_candidate_prominence),
+            boundary_v1_fid_candidate_min_distance=_int("ANALYSIS_BOUNDARY_V1_FID_CANDIDATE_MIN_DISTANCE", defaults.boundary_v1_fid_candidate_min_distance),
+            boundary_v1_fid_fit_max_components=_int("ANALYSIS_BOUNDARY_V1_FID_FIT_MAX_COMPONENTS", defaults.boundary_v1_fid_fit_max_components),
+            boundary_v1_fid_baseline_method=_str("ANALYSIS_BOUNDARY_V1_FID_BASELINE_METHOD", defaults.boundary_v1_fid_baseline_method),
+            boundary_v1_quality_manual_review_threshold=_float("ANALYSIS_BOUNDARY_V1_QUALITY_MANUAL_REVIEW_THRESHOLD", defaults.boundary_v1_quality_manual_review_threshold),
         )
 
 

@@ -207,23 +207,38 @@ class ChromatogramPlotter:
             label_items.append((peak, label_text))
 
         # 第一遍: 绘制所有标注, 默认正上方
-        fig.canvas.draw()  # 需要先渲染才能获取文字 bbox
+        fig.canvas.draw()  # 需要先渲染才能获取 display bbox
         placed_bboxes = []  # 已放置标注的 display 坐标 bbox 列表
+        signal_display_points = self._collect_signal_display_points(ax, x_lo, x_hi)
 
         for peak, label_text in label_items:
             # 计算偏移: 检查是否与已有标注重叠
-            offset_x, offset_y = self._compute_offset(
-                ax, fig, peak, placed_bboxes, label_text,
+            offset_x, offset_y, horizontal_align = self._compute_offset(
+                ax=ax,
+                fig=fig,
+                peak=peak,
+                placed_bboxes=placed_bboxes,
+                label_text=label_text,
+                signal_display_points=signal_display_points,
             )
+
+            # 引线样式: 标签紧贴峰顶用实线, 较远时用虚线降低视觉噪声
+            if offset_y <= 32:
+                arrow_props = dict(arrowstyle="-", color="gray", lw=0.5)
+            else:
+                arrow_props = dict(
+                    arrowstyle="-", color="gray", lw=0.4,
+                    linestyle=(0, (3, 3)),
+                )
 
             ann = ax.annotate(
                 label_text,
                 xy=(peak.retention_time, peak.height),
                 xytext=(offset_x, offset_y),
                 textcoords="offset points",
-                ha="center", va="bottom",
+                ha=horizontal_align, va="bottom",
                 fontsize=6,
-                arrowprops=dict(arrowstyle="-", color="gray", lw=0.5),
+                arrowprops=arrow_props,
             )
 
             # 记录已放置标注的 bbox
@@ -238,62 +253,169 @@ class ChromatogramPlotter:
         peak: PeakResult,
         placed_bboxes: list,
         label_text: str,
-    ) -> Tuple[float, float]:
+        signal_display_points: np.ndarray,
+    ) -> Tuple[float, float, str]:
         """
         功能:
-            计算标注的 (x_offset, y_offset) 偏移量 (单位: points).
-            若正上方位置与已有标注重叠, 则交替向左/右偏移, 直到不重叠.
+            计算标注的 y_offset 偏移量 (单位: points).
+            标签始终居中于峰正上方, 仅通过逐步上移避免与已有标注和曲线重叠.
         参数:
             ax: 坐标轴.
             fig: 图形.
             peak: 当前峰.
             placed_bboxes: 已放置标注的 display bbox 列表.
             label_text: 标注文本.
+            signal_display_points: 色谱曲线的 display 坐标数组.
         返回:
-            Tuple[float, float]: (x_offset, y_offset) 偏移量, 单位 points.
+            Tuple[float, float, str]: (x_offset, y_offset, ha) 偏移量与对齐方式.
         """
-        if not placed_bboxes:
-            return (0, 8)
-
         renderer = fig.canvas.get_renderer()
-        # 创建临时标注来获取文字尺寸
+        # 标签始终居中于峰正上方, 仅通过上移避免重叠
+        base_y = 14
+        y_step = 18
+        max_levels = 8
+
+        for level in range(max_levels):
+            offset_y = base_y + level * y_step
+            bbox = self._measure_annotation_bbox(
+                ax=ax, fig=fig, renderer=renderer,
+                peak=peak, label_text=label_text,
+                offset_x=0, offset_y=offset_y,
+                horizontal_align="center",
+            )
+            overlaps_label = self._has_overlap(bbox, placed_bboxes)
+            # 局部碰撞检测: 仅避让标签水平邻域内的曲线
+            local_x_margin = bbox.width * 0.5
+            overlaps_signal = self._bbox_overlaps_signal(
+                bbox, signal_display_points, local_x_margin=local_x_margin,
+            )
+
+            if overlaps_label is False and overlaps_signal is False:
+                return (0, offset_y, "center")
+
+        # 所有候选位置均有重叠, 使用最高位置
+        return (0, base_y + (max_levels - 1) * y_step, "center")
+
+    @staticmethod
+    def _collect_signal_display_points(
+        ax: plt.Axes,
+        x_lo: float,
+        x_hi: float,
+    ) -> np.ndarray:
+        """
+        功能:
+            提取可见 chromatogram 曲线的 display 坐标, 用于标签避让.
+
+        参数:
+            ax: matplotlib 坐标轴.
+            x_lo: 可见区间下界.
+            x_hi: 可见区间上界.
+
+        返回:
+            np.ndarray, shape=(n_points, 2) 的 display 坐标数组.
+        """
+        if len(ax.lines) == 0:
+            return np.empty((0, 2), dtype=float)
+
+        signal_line = ax.lines[0]
+        x_data = np.asarray(signal_line.get_xdata(), dtype=float)
+        y_data = np.asarray(signal_line.get_ydata(), dtype=float)
+        visible_mask = (x_data >= float(x_lo)) & (x_data <= float(x_hi))
+        if bool(np.any(visible_mask)) is False:
+            return np.empty((0, 2), dtype=float)
+
+        visible_xy = np.column_stack([x_data[visible_mask], y_data[visible_mask]])
+        return ax.transData.transform(visible_xy)
+
+    def _measure_annotation_bbox(
+        self,
+        ax: plt.Axes,
+        fig: plt.Figure,
+        renderer,
+        peak: PeakResult,
+        label_text: str,
+        offset_x: float,
+        offset_y: float,
+        horizontal_align: str,
+    ):
+        """
+        功能:
+            测量候选标注位置对应的 display bbox.
+
+        参数:
+            ax: matplotlib 坐标轴.
+            fig: matplotlib 图形.
+            renderer: 当前 renderer.
+            peak: 当前峰.
+            label_text: 标注文本.
+            offset_x: X 偏移.
+            offset_y: Y 偏移.
+            horizontal_align: 水平对齐方式.
+
+        返回:
+            Bbox, 候选位置的 display bbox.
+        """
         tmp = ax.annotate(
             label_text,
             xy=(peak.retention_time, peak.height),
-            xytext=(0, 8),
+            xytext=(offset_x, offset_y),
             textcoords="offset points",
-            ha="center", va="bottom",
+            ha=horizontal_align,
+            va="bottom",
             fontsize=6,
         )
         fig.canvas.draw()
-        tmp_bbox = tmp.get_window_extent(renderer)
+        bbox = tmp.get_window_extent(renderer)
         tmp.remove()
+        return bbox
 
-        # 检查是否与已有标注重叠
-        if not self._has_overlap(tmp_bbox, placed_bboxes):
-            return (0, 8)
+    @staticmethod
+    def _bbox_overlaps_signal(
+        bbox,
+        signal_display_points: np.ndarray,
+        padding: float = 2.0,
+        local_x_margin: float = 0.0,
+    ) -> bool:
+        """
+        功能:
+            判断标注 bbox 是否压到 chromatogram 曲线.
+            当 local_x_margin > 0 时, 仅检测标签水平邻域内的曲线点,
+            避免远处高峰曲线干扰小峰标签定位.
 
-        # 仅沿 y 方向逐级上移, 避免标注重叠
-        for shift in range(1, 8):
-            y_off = 8 + shift * 12  # 同时逐级上移避免箭头交叉
+        参数:
+            bbox: 标注 display bbox.
+            signal_display_points: chromatogram 的 display 坐标数组.
+            padding: 额外间距 (display pixels).
+            local_x_margin: 局部 X 范围余量 (display pixels), 0 表示全局检测.
 
-            tmp2 = ax.annotate(
-                label_text,
-                xy=(peak.retention_time, peak.height),
-                xytext=(0, y_off),
-                textcoords="offset points",
-                ha="center", va="bottom",
-                fontsize=6,
+        返回:
+            bool: True 表示 bbox 覆盖到曲线.
+        """
+        if len(signal_display_points) == 0:
+            return False
+
+        # 局部化: 仅保留标签水平邻域内的曲线点
+        points = signal_display_points
+        if local_x_margin > 0:
+            x_mask = (
+                (points[:, 0] >= bbox.x0 - local_x_margin)
+                & (points[:, 0] <= bbox.x1 + local_x_margin)
             )
-            fig.canvas.draw()
-            bbox2 = tmp2.get_window_extent(renderer)
-            tmp2.remove()
+            points = points[x_mask]
+            if len(points) == 0:
+                return False
 
-            if not self._has_overlap(bbox2, placed_bboxes):
-                return (0, y_off)
-
-        # 所有位置都重叠, 用最大偏移
-        return (0, 8 + 7 * 12)
+        expanded = bbox.expanded(
+            1 + padding / max(bbox.width, 1),
+            1 + padding / max(bbox.height, 1),
+        )
+        inside_mask = (
+            (points[:, 0] >= expanded.x0)
+            & (points[:, 0] <= expanded.x1)
+            & (points[:, 1] >= expanded.y0)
+            & (points[:, 1] <= expanded.y1)
+        )
+        return bool(np.any(inside_mask))
 
     @staticmethod
     def _has_overlap(bbox, placed_bboxes: list, padding: float = 2.0) -> bool:

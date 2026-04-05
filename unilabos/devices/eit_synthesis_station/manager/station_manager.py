@@ -44,6 +44,7 @@ JsonDict = Dict[str, Any]
 
 # 模块根目录, 用于构建相对路径
 MODULE_ROOT = Path(__file__).resolve().parent.parent
+TASK_NAME_TIMESTAMP_SUFFIX_RE = re.compile(r"(?:_\d{8}_\d{6})+$")
 
 class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationController):
     """
@@ -71,6 +72,32 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             **kwargs,
         )
 
+    @staticmethod
+    def _rename_duplicate_task_name(task_name: Any, timestamp: Optional[str] = None) -> str:
+        """
+        功能:
+            生成任务名称冲突时的新名称. 如果名称末尾已经带有一个或多个时间戳后缀,
+            先移除旧后缀, 再写入新的时间戳.
+
+        参数:
+            task_name: Any, 原始任务名称.
+            timestamp: Optional[str], 指定的新时间戳, 为 None 时使用当前时间.
+
+        返回:
+            str, 冲突重命名后的任务名称.
+        """
+        resolved_timestamp = timestamp
+        if resolved_timestamp is None:
+            resolved_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        task_name_str = "" if task_name is None else str(task_name).strip()
+        base_task_name = TASK_NAME_TIMESTAMP_SUFFIX_RE.sub("", task_name_str)
+
+        if base_task_name == "":
+            return resolved_timestamp
+
+        return f"{base_task_name}_{resolved_timestamp}"
+
     def login(self) -> tuple:
         """
         功能:
@@ -89,6 +116,29 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         except Exception as e:
             logger.warning("异常通知监控启动失败, 不影响主流程: %s", e)
         return result
+
+    def arrange_w_t_trays_for_task(
+        self,
+        task_id: int,
+        *,
+        poll_interval_s: float = 1.0,
+        timeout_s: float = 900.0,
+    ) -> JsonDict:
+        """
+        功能:
+            透传 W/T 货架托盘整理能力, 便于 manager 层与 CLI 统一调用.
+        参数:
+            task_id: int, 任务ID.
+            poll_interval_s: float, 等待设备空闲的轮询间隔.
+            timeout_s: float, 等待设备空闲的超时时间.
+        返回:
+            JsonDict, 整理结果摘要.
+        """
+        return super().arrange_w_t_trays_for_task(
+            task_id,
+            poll_interval_s=poll_interval_s,
+            timeout_s=timeout_s,
+        )
 
     def _read_table_file_with_required_columns(
         self,
@@ -1521,6 +1571,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         # 5. 聚合返回
         overall_success = overall_success and len(all_errors) == 0
 
+        # 全部轮次成功, 清空货架状态(默认人工已取走全部物料)
+        if overall_success:
+            agv_controller.shelf_manager.reset_all()
+
         return {
             "success": overall_success,
             "total_trays": total_records,
@@ -1887,11 +1941,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 resp = self.add_task(task_payload)
             except ApiError as exc:
                 if getattr(exc, "code", None) == 409:
-                    # 自动重命名: 在任务名称后添加当前日期时间(精确到秒)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    # 末尾已有时间戳时先替换, 避免出现双时间后缀
 
                     task_name = task_payload.get("task_name") or params.get("实验名称")
-                    new_task_name = f"{task_name}_{timestamp}"
+                    new_task_name = self._rename_duplicate_task_name(task_name)
 
                     task_payload["task_name"] = new_task_name
                     logger.info(f"任务名称重复, 自动重命名为: {new_task_name}")
@@ -3073,6 +3126,38 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
     def auto_unload_trays_to_agv(self, batch_out_file: Optional[str] = None, *, block: bool = True, auto_run_analysis: bool = True):
         return super().auto_unload_trays_to_agv(batch_out_file, block=block, auto_run_analysis=auto_run_analysis)
 
+    def transfer_analysis_to_shelf(
+        self,
+        source_trays=None,
+        material_type="FLASH_FILTER_OUTER_BOTTLE_TRAY",
+        poll_interval=30.0,
+        poll_timeout=7200.0,
+        block=True,
+    ):
+        """
+        功能:
+            从分析站取走完成检测的样品, 通过AGV放置到货架空位上.
+            委托 AGVController 执行: 轮询智达设备状态 -> 转运 -> AGV回充电站.
+        参数:
+            source_trays: 源托盘列表, 默认 ["analysis_station_tray_1-2"]
+            material_type: 物料类型标识, 默认 "FLASH_FILTER_OUTER_BOTTLE_TRAY"
+            poll_interval: 状态轮询间隔(秒), 默认 30
+            poll_timeout: 轮询超时(秒), 默认 7200(2小时)
+            block: 是否阻塞执行
+        返回:
+            bool, True 表示转运成功, False 表示失败
+        """
+        from eit_agv.controller.agv_controller import AGVController
+
+        agv_controller = AGVController()
+        return agv_controller.transfer_analysis_to_shelf(
+            source_trays=source_trays,
+            material_type=material_type,
+            poll_interval=poll_interval,
+            poll_timeout=poll_timeout,
+            block=block,
+        )
+
     # ---------- 7. Unilab 接口（待修改） ----------
     def submit_experiment_task(
         self,
@@ -3220,11 +3305,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             resp = self.add_task(task_payload)
         except ApiError as exc:
             if getattr(exc, "code", None) == 409:
-                # 自动重命名: 在任务名称后添加当前日期时间(精确到秒)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # 末尾已有时间戳时先替换, 避免出现双时间后缀
 
                 task_name_val = task_payload.get("task_name") or params.get("实验名称")
-                new_task_name = f"{task_name_val}_{timestamp}"
+                new_task_name = self._rename_duplicate_task_name(task_name_val)
 
                 task_payload["task_name"] = new_task_name
                 logger.info(f"任务名称重复, 自动重命名为: {new_task_name}")

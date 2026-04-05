@@ -13,8 +13,6 @@ import logging
 import json
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
-
 import requests
 
 from . import chemicalbook_scraper
@@ -200,7 +198,8 @@ def _pubchem_get_cid_by_smiles(smiles: str, timeout: float = 15.0) -> Optional[i
     """
     功能:
         通过 SMILES 查询 PubChem 获取化合物 CID.
-        SMILES 作为 URL 路径参数时需强制编码特殊字符, 以兼容立体化学斜杠等符号.
+        使用 POST 请求将 SMILES 放入请求体, 避免含立体化学标记(/ \)的
+        SMILES 在 URL 路径中被服务器误解析为路径分隔符.
     参数:
         smiles: str, 单个完整 SMILES 结构式.
         timeout: float, 请求超时秒数.
@@ -211,10 +210,9 @@ def _pubchem_get_cid_by_smiles(smiles: str, timeout: float = 15.0) -> Optional[i
     if normalized_smiles == "":
         return None
 
-    encoded_smiles = quote(normalized_smiles, safe="")
-    url = f"{_PUBCHEM_BASE}/compound/smiles/{encoded_smiles}/cids/JSON"
+    url = f"{_PUBCHEM_BASE}/compound/smiles/cids/JSON"
     try:
-        resp = requests.get(url, timeout=timeout)
+        resp = requests.post(url, data={"smiles": normalized_smiles}, timeout=timeout)
         if resp.status_code != 200:
             logger.debug("PubChem SMILES CID 查询失败: status=%s, smiles=%s", resp.status_code, normalized_smiles)
             return None

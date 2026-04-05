@@ -18,8 +18,8 @@ class Settings:
         timeout_s: requests 默认超时(秒).
         verify_ssl: https 场景是否校验证书, 内网调试可为 False.
         log_level: 日志级别字符串, 例如 "INFO".
-        auto_rename_on_duplicate: 任务名称重复(409)时是否自动追加时间戳后缀并重试,
-            格式为 "<原名称>_YYYYMMDD_HHmmss", 默认 True.
+        auto_rename_on_duplicate: 任务名称重复(409)时是否自动写入时间戳后缀并重试,
+            若名称末尾已有时间戳, 则替换为最新时间, 默认 True.
     返回:
         Settings.
     """
@@ -37,7 +37,7 @@ class Settings:
     task_retention_days: int = 90
 
     # 任务提交配置
-    auto_rename_on_duplicate: bool = True   # 遇到 409 冲突时自动重命名任务, 追加 _YYYYMMDD_HHmmss 后缀
+    auto_rename_on_duplicate: bool = True   # 遇到 409 冲突时自动重命名任务, 末尾已有时间戳则替换为最新值
 
     # 异常通知配置
     notification: NotificationSettings = field(default_factory=NotificationSettings)

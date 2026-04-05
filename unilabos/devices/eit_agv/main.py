@@ -555,6 +555,8 @@ def _handle_choice_1_to_12(
     if choice == "3":
         print("\n--- 机械臂回零 ---")
         try:
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.arm_go_home(block=True)
             print(f"回零结果: {result}")
         except Exception as exc:
@@ -653,6 +655,8 @@ def _handle_choice_1_to_12(
                 return True
 
             selected_tray = tray_list[tray_index]
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             print(f"\n开始执行取托盘流程: {selected_tray}")
             result = controller.pick_tray(selected_tray, block=True)
             print(f"取托盘结果: {'成功' if result else '失败'}")
@@ -673,6 +677,8 @@ def _handle_choice_1_to_12(
                 return True
 
             selected_tray = tray_list[tray_index]
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             print(f"\n开始执行放托盘流程: {selected_tray}")
             result = controller.put_tray(selected_tray, block=True)
             print(f"放托盘结果: {'成功' if result else '失败'}")
@@ -770,6 +776,8 @@ def _handle_choice_13_to_24(
                 print("已取消校准")
                 return True, current_station_display
 
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.calibrate_station(block=True)
             if result is not None:
                 print("\n校准成功! 偏移值:")
@@ -912,6 +920,8 @@ def _handle_choice_13_to_24(
                 return True, current_station_display
 
             selected_tray = tray_list[tray_index]
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             print(f"\n开始执行运动到抓取点位流程: {selected_tray}")
             result = controller.move_to_grasp_position(selected_tray, block=True)
             print(f"运动到抓取点位结果: {'成功' if result else '失败'}")
@@ -971,6 +981,8 @@ def _handle_choice_13_to_24(
             print(f"\n开始物料转移: {source_tray} -> {target_tray}")
             if selected_material is not None:
                 print(f"物料类型: {selected_material}")
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.transfer_material(
                 source_tray,
                 target_tray,
@@ -1012,6 +1024,8 @@ def _handle_choice_13_to_24(
                 print("已取消")
                 return True, current_station_display
 
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.change_gripper(target_gripper, block=True)
             print(f"更换夹爪结果: {'成功' if result else '失败'}")
         except Exception as exc:
@@ -1081,6 +1095,8 @@ def _handle_choice_13_to_24(
                 return True, current_station_display
 
             print("\n开始执行批量物料转运...")
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.batch_transfer_materials(transfer_tasks, block=True)
             if result:
                 print(f"\n{'=' * 60}")
@@ -1116,6 +1132,8 @@ def _handle_choice_13_to_24(
                 return True, current_station_display
 
             print("\n步骤1: 运动到抓取点位...")
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.move_to_grasp_position(selected_tray, block=True)
             if not result:
                 print("运动到抓取点位失败")
@@ -1264,6 +1282,8 @@ def _handle_choice_13_to_24(
                 return True, current_station_display
 
             print("\n开始执行全点位测试...")
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             results = controller.test_all_positions(selected_material, block=True)
             print("\n" + "=" * 60)
             print("全点位测试结果汇总")
@@ -1326,6 +1346,8 @@ def _handle_choice_25_to_33(
                 print("已取消")
                 return True, current_station_display
 
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.calibrate_station_offset(block=True)
             if result is not None:
                 print("\n工站偏差矫正完成!")
@@ -1449,6 +1471,8 @@ def _handle_choice_25_to_33(
                 return True, current_station_display
 
             print("\n开始执行批量物料转运循环测试...")
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.batch_transfer_cycle_test(
                 transfer_tasks,
                 cycle_count=cycle_count,
@@ -1502,6 +1526,8 @@ def _handle_choice_25_to_33(
                 return True, current_station_display
 
             print("\n开始执行分析站→货架样品转运...")
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
             result = controller.transfer_analysis_to_shelf(
                 source_trays=source_trays,
                 poll_interval=poll_interval,

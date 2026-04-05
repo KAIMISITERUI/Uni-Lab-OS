@@ -53,6 +53,26 @@ def _prompt_task_id() -> Optional[str]:
     return task_id_input
 
 
+def _prompt_rack_code() -> Optional[str]:
+    """
+    功能:
+        读取 run_analysis 交互式提交流程使用的 RackCode.
+        直接回车时使用控制器默认的 Rack 6.
+    参数:
+        无.
+    返回:
+        Optional[str], None 表示沿用默认 Rack 6, 否则返回 "Rack 1" 到 "Rack 6".
+    """
+    rack_input = input("请输入 Rack 编号(1-6, 直接回车使用默认 Rack 6): ").strip()
+    if rack_input == "":
+        return None
+
+    if rack_input not in ("1", "2", "3", "4", "5", "6"):
+        raise ValueError("无效 Rack 选择, 请输入 1-6, 或直接回车使用默认 Rack 6.")
+
+    return f"Rack {rack_input}"
+
+
 def _handle_device_query(controller: AnalysisStationController, choice: str) -> None:
     """
     功能:
@@ -247,8 +267,13 @@ def interactive() -> None:
         task_id = _prompt_task_id()
 
         if choice == "1":
-            print(f"\n>>> 调用 run_analysis(task_id={task_id!r})")
-            result = controller.run_analysis(task_id=task_id)
+            try:
+                rack_code = _prompt_rack_code()
+            except ValueError as exc:
+                print(str(exc))
+                continue
+            print(f"\n>>> 调用 run_analysis(task_id={task_id!r}, rack_code={rack_code!r})")
+            result = controller.run_analysis(task_id=task_id, rack_code=rack_code)
             _print_result(result)
 
         elif choice == "2":

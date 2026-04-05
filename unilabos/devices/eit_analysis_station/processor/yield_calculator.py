@@ -21,7 +21,7 @@ import openpyxl
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from .ecn import class_dct, ecn_dct, molecule2carbontypes
+from .ecn import calculate_ecn_from_molecule
 
 try:
     from rdkit import Chem
@@ -481,14 +481,7 @@ class YieldCalculator:
         返回:
             float, ECN 值.
         """
-        ecn = 0.0
-        for ary, typ in molecule2carbontypes(molecule):
-            if typ == "alcohol":
-                key = (ary + " " + typ) if ary else typ
-                ecn += ecn_dct[key]
-            else:
-                ecn += ecn_dct[class_dct[typ]]
-        return ecn
+        return calculate_ecn_from_molecule(molecule)
 
     @staticmethod
     def _describe_compound_from_smiles(

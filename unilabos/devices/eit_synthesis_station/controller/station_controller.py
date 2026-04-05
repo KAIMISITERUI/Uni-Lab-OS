@@ -30,6 +30,62 @@ JsonDict = Dict[str, Any]
 logger = logging.getLogger(__name__)
 
 
+def _build_position_range(prefix: str, start: int, end: int) -> Tuple[str, ...]:
+    """
+    功能:
+        构造连续位置编码元组, 用于集中定义货架规则.
+    参数:
+        prefix: str, 位置前缀, 例如 "W-4-".
+        start: int, 起始编号.
+        end: int, 结束编号.
+    返回:
+        Tuple[str, ...], 连续位置编码元组.
+    """
+    return tuple(f"{prefix}{index}" for index in range(start, end + 1))
+
+
+# ---------- W/T货架托盘整理规则 ----------
+_WT_BUFFER_POSITIONS: Tuple[str, ...] = ("W-1-5", "W-1-6", "W-1-7", "W-1-8")
+_WT_FORBIDDEN_POSITION = "T-1-1"
+_WT_TRAY_STRICT_POSITIONS = OrderedDict(
+    [
+        (int(ResourceCode.POWDER_BUCKET_TRAY_30ML), _build_position_range("W-4-", 1, 8) + ("W-3-1",)),
+        (int(ResourceCode.REAGENT_BOTTLE_TRAY_40ML), _build_position_range("W-3-", 2, 5)),
+        (
+            int(ResourceCode.TIP_TRAY_1ML),
+            ("W-3-7", "T-1-2", "T-1-3", "T-2-1", "T-2-2", "T-2-3"),
+        ),
+        (
+            int(ResourceCode.TIP_TRAY_50UL),
+            ("W-3-8", "T-1-2", "T-1-3", "T-2-1", "T-2-2", "T-2-3"),
+        ),
+        (int(ResourceCode.TIP_TRAY_5ML), ("T-1-2", "T-2-1", "T-2-2", "T-2-3")),
+        (int(ResourceCode.REAGENT_BOTTLE_TRAY_8ML), _build_position_range("W-2-", 1, 4)),
+        (int(ResourceCode.REACTION_TUBE_TRAY_2ML), ("W-2-5", "W-2-6")),
+        (int(ResourceCode.REAGENT_BOTTLE_TRAY_2ML), ("W-2-7",)),
+        (int(ResourceCode.REAGENT_BOTTLE_TRAY_125ML), _build_position_range("W-1-", 1, 4)),
+    ]
+)
+
+_wt_position_allowed_trays: OrderedDict[str, List[int]] = OrderedDict()
+_wt_position_allowed_trays[_WT_FORBIDDEN_POSITION] = []
+for _tray_code, _positions in _WT_TRAY_STRICT_POSITIONS.items():
+    for _position in _positions:
+        if _position not in _wt_position_allowed_trays:
+            _wt_position_allowed_trays[_position] = []
+        _wt_position_allowed_trays[_position].append(_tray_code)
+_WT_POSITION_ALLOWED_TRAYS = OrderedDict(
+    (position, tuple(tray_codes)) for position, tray_codes in _wt_position_allowed_trays.items()
+)
+_WT_MANAGED_POSITIONS: Tuple[str, ...] = tuple(
+    list(_WT_POSITION_ALLOWED_TRAYS.keys()) + list(_WT_BUFFER_POSITIONS)
+)
+_WT_TARGET_POSITIONS: Tuple[str, ...] = tuple(
+    [position for position in _WT_POSITION_ALLOWED_TRAYS.keys() if position != _WT_FORBIDDEN_POSITION]
+    + list(_WT_BUFFER_POSITIONS)
+)
+
+
 def _parse_filter_experiment_numbers(raw_text: Any) -> Optional[Set[int]]:
     """
     功能:
@@ -2006,7 +2062,6 @@ class SynthesisStationController:
         return records
 
     # ---------- AGV 转运辅助方法 ----------
-
     def _build_agv_transfer_tasks(
         self,
         records: List[Dict[str, str]],
@@ -2306,6 +2361,10 @@ class SynthesisStationController:
             transferred_count == len(transfer_tasks_all) and len(errors) == 0
         )
 
+        # 全部转运成功, 清空货架状态(默认人工已取走全部物料)
+        if success:
+            agv_controller.shelf_manager.reset_all()
+
         return {
             "success": success,
             "total_trays": len(transfer_tasks_all),
@@ -2502,7 +2561,6 @@ class SynthesisStationController:
             ResourceCode,
             RESOURCE_CODE_TO_MATERIAL_TYPE,
             TB_CODE_TO_SYNTHESIS_TRAY,
-            SHELF_TRAY_POSITIONS,
             ANALYSIS_STATION_TRAY_POSITIONS,
         )
 
@@ -2546,6 +2604,39 @@ class SynthesisStationController:
         shelf_position_index = 0
         analysis_position_index = 0
         errors = []
+
+        # 统计需要货架槽位的物料数量(非分析工站物料)
+        shelf_needed = 0
+        for resource in resources:
+            dst_layout_code = resource.get("dst_layout_code", "")
+            resource_type = resource.get("resource_type")
+            if resource_type is None or dst_layout_code == "":
+                continue
+            if resource_type != int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE_TRAY):
+                shelf_needed += 1
+
+        # 查询货架空闲槽位
+        if shelf_needed > 0:
+            empty_shelf_slots = agv_controller.shelf_manager.find_empty_slots(shelf_needed)
+            if len(empty_shelf_slots) < shelf_needed:
+                error_msg = (
+                    f"货架空闲槽位不足: 需要 {shelf_needed} 个, "
+                    f"仅有 {len(empty_shelf_slots)} 个"
+                )
+                self._logger.error(error_msg)
+                return {
+                    "success": False,
+                    "total_trays": len(resources),
+                    "transferred_trays": 0,
+                    "batches": [],
+                    "errors": [error_msg],
+                    "analysis_results": {},
+                }
+            self._logger.info(
+                "已找到 %d 个空闲货架槽位: %s", len(empty_shelf_slots), empty_shelf_slots
+            )
+        else:
+            empty_shelf_slots = []
 
         for resource in resources:
             dst_layout_code = resource.get("dst_layout_code", "")
@@ -2596,12 +2687,12 @@ class SynthesisStationController:
                 )
             else:
                 # 其它托盘 -> 货架
-                if shelf_position_index >= len(SHELF_TRAY_POSITIONS):
-                    error_msg = f"货架托盘位置已用尽, 无法放置 {resource_type_name}"
+                if shelf_position_index >= len(empty_shelf_slots):
+                    error_msg = f"货架空闲槽位已用尽, 无法放置 {resource_type_name}"
                     self._logger.error(error_msg)
                     errors.append(error_msg)
                     continue
-                target_tray = SHELF_TRAY_POSITIONS[shelf_position_index]
+                target_tray = empty_shelf_slots[shelf_position_index]
                 shelf_position_index += 1
                 shelf_tasks.append({
                     "source_tray": source_tray,
@@ -2741,6 +2832,17 @@ class SynthesisStationController:
                 if result:
                     transferred_count += len(batch_tasks)
                     self._logger.info(f"第 {batch_num} 批转运成功")
+
+                    # 记录已放到货架的槽位状态
+                    for task in batch_tasks:
+                        target_tray = task["target_tray"]
+                        if target_tray.startswith("shelf_tray_"):
+                            agv_controller.shelf_manager.place_material(
+                                slot_name=target_tray,
+                                material_type=task.get("material_type", ""),
+                                source=task["source_tray"],
+                                description="合成完成下料(自动转运)",
+                            )
 
                     # 兜底: 正常情况下 analysis_submitted 已由 on_station_delivered 回调置 True.
                     #   若回调未执行(极端异常), 此处作为最后保障.
@@ -3493,6 +3595,9 @@ class SynthesisStationController:
                 raise ValidationError(f"task_id={target_task_id}状态非未运行, 不允许自动启动")
 
         self._logger.info("准备启动任务 task_id=%s", target_task_id)
+        # 启动前先整理货架, 避免任务药品托盘停在缓冲位或限定位放错托盘
+        self._logger.info("启动任务前整理W/T货架托盘 task_id=%s", target_task_id)
+        self.arrange_w_t_trays_for_task(int(target_task_id))
         resp = self._call_with_relogin(self._client.start_task, int(target_task_id))
         self._logger.info("任务启动请求已提交 task_id=%s", target_task_id)
 
@@ -3518,6 +3623,608 @@ class SynthesisStationController:
     def get_task_info(self, task_id: int) -> JsonDict:
         return self._call_with_relogin(self._client.get_task_info, task_id)
 
+    # ---------- W/T货架托盘整理: 执行器 ----------
+    def move_tray(
+        self,
+        layout_list: List[JsonDict],
+        *,
+        poll_interval_s: float = 1.0,
+        timeout_s: float = 900.0,
+    ) -> JsonDict:
+        """
+        功能:
+            移动托盘位置, 在执行前后等待设备空闲, 并统一做参数校验和中文日志记录.
+        参数:
+            layout_list: List[JsonDict], 托盘移动列表, 每项必须包含 source_layout_code 和 destination_layout_code.
+            poll_interval_s: float, 等待设备空闲的轮询间隔.
+            timeout_s: float, 等待设备空闲的超时时间.
+        返回:
+            JsonDict, MoveTray 接口响应.
+        """
+        if layout_list is None:
+            raise ValidationError("layout_list 不能为空")
+        if len(layout_list) == 0:
+            raise ValidationError("layout_list 不能为空")
+
+        validated_layout_list: List[JsonDict] = []
+        for index, item in enumerate(layout_list, start=1):
+            if isinstance(item, dict) is False:
+                raise ValidationError(f"第{index}项移盘参数不是字典")
+
+            source_layout_code = str(item.get("source_layout_code") or "").strip()
+            destination_layout_code = str(item.get("destination_layout_code") or "").strip()
+
+            if source_layout_code == "":
+                raise ValidationError(f"第{index}项缺少 source_layout_code")
+            if destination_layout_code == "":
+                raise ValidationError(f"第{index}项缺少 destination_layout_code")
+            if source_layout_code == destination_layout_code:
+                raise ValidationError(
+                    f"第{index}项的 source_layout_code 与 destination_layout_code 不能相同"
+                )
+
+            validated_layout_list.append(
+                {
+                    "source_layout_code": source_layout_code,
+                    "destination_layout_code": destination_layout_code,
+                }
+            )
+
+        self.wait_idle(stage="移盘前等待空闲", poll_interval_s=poll_interval_s, timeout_s=timeout_s)
+        self._logger.info("开始移盘, 共 %s 步", len(validated_layout_list))
+        for item in validated_layout_list:
+            self._logger.info(
+                "移盘步骤: %s -> %s",
+                item["source_layout_code"],
+                item["destination_layout_code"],
+            )
+
+        resp = self._call_with_relogin(self._client.move_tray, validated_layout_list)
+        self._logger.info("移盘指令已发送, 等待设备回到空闲")
+        self.wait_idle(stage="移盘后等待空闲", poll_interval_s=poll_interval_s, timeout_s=timeout_s)
+        self._logger.info("移盘完成")
+        return resp
+
+    # ---------- W/T货架托盘整理: 任务解析 ----------
+    def _extract_task_units_from_task_info(self, task_info: JsonDict) -> List[JsonDict]:
+        """
+        功能:
+            从任务详情响应中提取布局单元列表, 兼容 result/data 包裹层和 layout_list/unit_list 字段.
+        参数:
+            task_info: JsonDict, GetTaskInfo 接口响应.
+        返回:
+            List[JsonDict], 任务布局单元列表.
+        """
+        task_data = task_info.get("result") or task_info.get("data") or task_info
+        units = task_data.get("layout_list") or task_data.get("unit_list") or []
+        if isinstance(units, list) is False:
+            raise ValidationError(f"任务详情缺少有效的 layout_list/unit_list, resp={task_info}")
+        return units
+
+    def _extract_task_used_substances_from_task_info(self, task_info: JsonDict) -> List[str]:
+        """
+        功能:
+            从任务详情中提取任务实际使用的药品名称集合.
+        参数:
+            task_info: JsonDict, GetTaskInfo 接口响应.
+        返回:
+            List[str], 去重排序后的药品名称列表.
+        """
+        units = self._extract_task_units_from_task_info(task_info)
+        used_substances: Set[str] = set()
+
+        for unit in units:
+            process_json = unit.get("process_json") or {}
+            substance = str(process_json.get("substance") or "").strip()
+            if substance != "":
+                used_substances.add(substance)
+
+        return sorted(used_substances)
+
+    def _get_w_t_tray_strict_positions(self, tray_code: int) -> Tuple[str, ...]:
+        """
+        功能:
+            获取指定托盘在 W/T 整理规则中的严格合法位置列表.
+        参数:
+            tray_code: int, 托盘编码.
+        返回:
+            Tuple[str, ...], 严格合法位置列表.
+        """
+        return _WT_TRAY_STRICT_POSITIONS.get(tray_code, tuple())
+
+    def _is_w_t_tray_valid_at_position(
+        self,
+        layout_code: str,
+        tray_info: Optional[JsonDict],
+    ) -> bool:
+        """
+        功能:
+            判断指定托盘在当前 W/T 位置上是否符合整理规则.
+        参数:
+            layout_code: str, 位置编码.
+            tray_info: Optional[JsonDict], 托盘信息, None 表示空位.
+        返回:
+            bool, True 表示当前放置合法.
+        """
+        if tray_info is None:
+            return True
+
+        if layout_code == _WT_FORBIDDEN_POSITION:
+            return False
+
+        if layout_code in _WT_BUFFER_POSITIONS:
+            return tray_info.get("is_task_chemical") is False
+
+        allowed_tray_codes = _WT_POSITION_ALLOWED_TRAYS.get(layout_code)
+        if allowed_tray_codes is None:
+            return False
+
+        tray_code = self._safe_int(tray_info.get("resource_type"))
+        if tray_code is None:
+            return False
+        return tray_code in allowed_tray_codes
+
+    # ---------- W/T货架托盘整理: 状态构建与规则校验 ----------
+    def _build_w_t_arrangement_state(
+        self,
+        resource_rows: List[JsonDict],
+        task_substances: Set[str],
+    ) -> "OrderedDict[str, Optional[JsonDict]]":
+        """
+        功能:
+            基于资源快照构建 W/T 整理状态映射, 未出现在资源列表中的管理位视为空位.
+        参数:
+            resource_rows: List[JsonDict], get_resource_info 返回结果.
+            task_substances: Set[str], 当前任务使用的药品名称集合.
+        返回:
+            OrderedDict[str, Optional[JsonDict]], 位置到托盘信息的映射.
+        """
+        state = OrderedDict((position, None) for position in _WT_MANAGED_POSITIONS)
+
+        for row in resource_rows:
+            layout_code = str(row.get("layout_code") or "").strip()
+            if layout_code not in state:
+                continue
+
+            tray_code = self._safe_int(row.get("resource_type"))
+            if tray_code is None:
+                continue
+
+            tray_name = str(row.get("resource_type_name") or TRAY_CODE_DISPLAY_NAME.get(tray_code) or "").strip()
+            substances: List[str] = []
+            for detail in row.get("substance_details") or []:
+                substance = str(detail.get("substance") or "").strip()
+                if substance != "":
+                    substances.append(substance)
+
+            is_task_chemical = False
+            for substance in substances:
+                if substance in task_substances:
+                    is_task_chemical = True
+                    break
+
+            state[layout_code] = {
+                "source_layout_code": layout_code,
+                "layout_code": layout_code,
+                "resource_type": tray_code,
+                "resource_type_name": tray_name,
+                "substances": list(substances),
+                "is_task_chemical": is_task_chemical,
+            }
+
+        return state
+
+    def _describe_w_t_violation_reason(self, layout_code: str, tray_info: JsonDict) -> str:
+        """
+        功能:
+            生成 W/T 整理违规原因文本.
+        参数:
+            layout_code: str, 当前托盘位置.
+            tray_info: JsonDict, 当前托盘信息.
+        返回:
+            str, 中文违规原因.
+        """
+        if layout_code == _WT_FORBIDDEN_POSITION:
+            return "T-1-1不可使用, 必须保持为空"
+
+        if layout_code in _WT_BUFFER_POSITIONS and tray_info.get("is_task_chemical") is True:
+            return "任务药品托盘不能放在W-1-5到W-1-8"
+
+        allowed_tray_codes = _WT_POSITION_ALLOWED_TRAYS.get(layout_code, tuple())
+        if len(allowed_tray_codes) == 0:
+            return "当前位置不允许放置该托盘"
+
+        allowed_names: List[str] = []
+        for tray_code in allowed_tray_codes:
+            tray_name = TRAY_CODE_DISPLAY_NAME.get(tray_code, str(tray_code))
+            allowed_names.append(tray_name)
+        return f"当前位置仅允许放置: {', '.join(allowed_names)}"
+
+    def _collect_w_t_arrangement_violations(
+        self,
+        state: "OrderedDict[str, Optional[JsonDict]]",
+    ) -> List[JsonDict]:
+        """
+        功能:
+            收集当前 W/T 状态中的全部违规托盘信息.
+        参数:
+            state: OrderedDict[str, Optional[JsonDict]], W/T 状态映射.
+        返回:
+            List[JsonDict], 违规托盘明细列表.
+        """
+        violations: List[JsonDict] = []
+
+        for layout_code, tray_info in state.items():
+            if tray_info is None:
+                continue
+            if self._is_w_t_tray_valid_at_position(layout_code, tray_info) is True:
+                continue
+
+            violations.append(
+                {
+                    "layout_code": layout_code,
+                    "resource_type": tray_info.get("resource_type"),
+                    "resource_type_name": tray_info.get("resource_type_name", ""),
+                    "substances": list(tray_info.get("substances") or []),
+                    "is_task_chemical": bool(tray_info.get("is_task_chemical")),
+                    "reason": self._describe_w_t_violation_reason(layout_code, tray_info),
+                }
+            )
+
+        return violations
+
+    # ---------- W/T货架托盘整理: 目标位规划 ----------
+    def _get_w_t_tray_match_priority(self, layout_code: str, tray_info: JsonDict) -> Tuple[int, str]:
+        """
+        功能:
+            计算 W/T 托盘最终位置分配时的优先级.
+        参数:
+            layout_code: str, 托盘当前位置.
+            tray_info: JsonDict, 托盘信息.
+        返回:
+            Tuple[int, str], 优先级与位置编码组成的排序键, 数值越小优先级越高.
+        """
+        is_current_valid = self._is_w_t_tray_valid_at_position(layout_code, tray_info)
+
+        if is_current_valid is False and tray_info.get("is_task_chemical") is True:
+            return 0, layout_code
+        if is_current_valid is False:
+            return 1, layout_code
+        if layout_code in _WT_BUFFER_POSITIONS:
+            return 3, layout_code
+        return 2, layout_code
+
+    def _build_w_t_tray_preferred_positions(
+        self,
+        layout_code: str,
+        tray_info: JsonDict,
+    ) -> List[str]:
+        """
+        功能:
+            生成单个托盘的目标位置偏好列表.
+        参数:
+            layout_code: str, 托盘当前位置.
+            tray_info: JsonDict, 托盘信息.
+        返回:
+            List[str], 目标位置偏好列表.
+        """
+        preferred_positions: List[str] = []
+        if self._is_w_t_tray_valid_at_position(layout_code, tray_info) is True:
+            if layout_code in _WT_TARGET_POSITIONS:
+                preferred_positions.append(layout_code)
+
+        tray_code = self._safe_int(tray_info.get("resource_type"))
+        if tray_code is not None:
+            for position in self._get_w_t_tray_strict_positions(tray_code):
+                if position not in preferred_positions:
+                    preferred_positions.append(position)
+
+        if tray_info.get("is_task_chemical") is False:
+            for position in _WT_BUFFER_POSITIONS:
+                if position not in preferred_positions:
+                    preferred_positions.append(position)
+
+        return preferred_positions
+
+    def _plan_w_t_target_assignment(
+        self,
+        state: "OrderedDict[str, Optional[JsonDict]]",
+    ) -> Dict[str, str]:
+        """
+        功能:
+            为当前 W/T 管理范围内的全部托盘规划最终目标位置, 无法形成完整合法分配时直接报错.
+        参数:
+            state: OrderedDict[str, Optional[JsonDict]], W/T 状态映射.
+        返回:
+            Dict[str, str], source_layout_code 到目标位置的映射.
+        """
+        tray_by_source: Dict[str, JsonDict] = {}
+        preferred_positions_by_source: Dict[str, List[str]] = {}
+
+        occupied_trays: List[Tuple[str, JsonDict]] = []
+        for layout_code, tray_info in state.items():
+            if tray_info is None:
+                continue
+            occupied_trays.append((layout_code, tray_info))
+
+        occupied_trays.sort(key=lambda item: self._get_w_t_tray_match_priority(item[0], item[1]))
+
+        for layout_code, tray_info in occupied_trays:
+            source_layout_code = str(tray_info.get("source_layout_code") or layout_code).strip()
+            tray_by_source[source_layout_code] = tray_info
+            preferred_positions = self._build_w_t_tray_preferred_positions(layout_code, tray_info)
+            if len(preferred_positions) == 0:
+                raise ValidationError(
+                    f"托盘 {layout_code}({tray_info.get('resource_type_name', tray_info.get('resource_type'))}) 没有可用目标位"
+                )
+            preferred_positions_by_source[source_layout_code] = preferred_positions
+
+        matched_position_to_source: Dict[str, str] = {}
+
+        def _assign_source(source_layout_code: str, visited_positions: Set[str]) -> bool:
+            for position in preferred_positions_by_source[source_layout_code]:
+                if position in visited_positions:
+                    continue
+
+                visited_positions.add(position)
+                occupied_source_layout_code = matched_position_to_source.get(position)
+                if occupied_source_layout_code is None:
+                    matched_position_to_source[position] = source_layout_code
+                    return True
+
+                if _assign_source(occupied_source_layout_code, visited_positions) is True:
+                    matched_position_to_source[position] = source_layout_code
+                    return True
+
+            return False
+
+        for layout_code, tray_info in occupied_trays:
+            source_layout_code = str(tray_info.get("source_layout_code") or layout_code).strip()
+            if _assign_source(source_layout_code, set()) is False:
+                raise ValidationError(
+                    f"无法为托盘 {layout_code}({tray_info.get('resource_type_name', tray_info.get('resource_type'))}) 规划合法目标位"
+                )
+
+        source_to_target: Dict[str, str] = {}
+        for target_layout_code, source_layout_code in matched_position_to_source.items():
+            source_to_target[source_layout_code] = target_layout_code
+
+        for source_layout_code in tray_by_source.keys():
+            if source_layout_code not in source_to_target:
+                raise ValidationError(f"托盘 {source_layout_code} 未分配到目标位")
+
+        return source_to_target
+
+    def _build_w_t_target_state(
+        self,
+        current_state: "OrderedDict[str, Optional[JsonDict]]",
+        source_to_target: Dict[str, str],
+    ) -> "OrderedDict[str, Optional[JsonDict]]":
+        """
+        功能:
+            根据目标位置分配结果构造整理后的模拟状态.
+        参数:
+            current_state: OrderedDict[str, Optional[JsonDict]], 当前状态.
+            source_to_target: Dict[str, str], source_layout_code 到目标位置的映射.
+        返回:
+            OrderedDict[str, Optional[JsonDict]], 整理后的模拟状态.
+        """
+        target_state = OrderedDict((position, None) for position in _WT_MANAGED_POSITIONS)
+
+        for source_layout_code, target_layout_code in source_to_target.items():
+            tray_info = current_state.get(source_layout_code)
+            if tray_info is None:
+                raise ValidationError(f"未找到源位置 {source_layout_code} 的托盘信息")
+
+            target_tray_info = dict(tray_info)
+            target_tray_info["layout_code"] = target_layout_code
+            target_state[target_layout_code] = target_tray_info
+
+        return target_state
+
+    def _plan_w_t_move_sequence(
+        self,
+        current_state: "OrderedDict[str, Optional[JsonDict]]",
+        source_to_target: Dict[str, str],
+    ) -> List[JsonDict]:
+        """
+        功能:
+            将最终目标位分配结果转换为顺序可执行的单步移盘列表.
+        参数:
+            current_state: OrderedDict[str, Optional[JsonDict]], 当前状态.
+            source_to_target: Dict[str, str], source_layout_code 到目标位置的映射.
+        返回:
+            List[JsonDict], 顺序执行的移盘步骤列表.
+        """
+        tray_by_source: Dict[str, JsonDict] = {}
+        current_occupancy = OrderedDict((position, None) for position in _WT_MANAGED_POSITIONS)
+        source_to_current_position: Dict[str, str] = {}
+
+        for layout_code, tray_info in current_state.items():
+            if tray_info is None:
+                continue
+            source_layout_code = str(tray_info.get("source_layout_code") or layout_code).strip()
+            tray_by_source[source_layout_code] = tray_info
+            current_occupancy[layout_code] = source_layout_code
+            source_to_current_position[source_layout_code] = layout_code
+
+        remaining_sources: Set[str] = set()
+        for source_layout_code, target_layout_code in source_to_target.items():
+            current_layout_code = source_to_current_position.get(source_layout_code)
+            if current_layout_code != target_layout_code:
+                remaining_sources.add(source_layout_code)
+
+        planned_moves: List[JsonDict] = []
+
+        while len(remaining_sources) > 0:
+            empty_positions = {
+                position for position, occupied_source in current_occupancy.items() if occupied_source is None
+            }
+            progressed = False
+
+            for source_layout_code in sorted(
+                remaining_sources,
+                key=lambda item: str(source_to_target[item]),
+            ):
+                target_layout_code = source_to_target[source_layout_code]
+                if target_layout_code not in empty_positions:
+                    continue
+
+                current_layout_code = source_to_current_position[source_layout_code]
+                tray_info = tray_by_source[source_layout_code]
+                planned_moves.append(
+                    {
+                        "source_layout_code": current_layout_code,
+                        "destination_layout_code": target_layout_code,
+                        "resource_type": tray_info.get("resource_type"),
+                        "resource_type_name": tray_info.get("resource_type_name", ""),
+                        "reason": "移动到规划目标位",
+                    }
+                )
+
+                current_occupancy[current_layout_code] = None
+                current_occupancy[target_layout_code] = source_layout_code
+                source_to_current_position[source_layout_code] = target_layout_code
+                remaining_sources.remove(source_layout_code)
+                progressed = True
+
+            if progressed is True:
+                continue
+
+            temp_buffer_position = None
+            for position in _WT_BUFFER_POSITIONS:
+                if current_occupancy.get(position) is None:
+                    temp_buffer_position = position
+                    break
+
+            if temp_buffer_position is None:
+                raise ValidationError("存在位置闭环, 且W-1-5到W-1-8没有空位, 无法整理")
+
+            cycle_source_layout_code = None
+            for source_layout_code in sorted(remaining_sources):
+                current_layout_code = source_to_current_position[source_layout_code]
+                if current_layout_code != temp_buffer_position:
+                    cycle_source_layout_code = source_layout_code
+                    break
+
+            if cycle_source_layout_code is None:
+                raise ValidationError("未找到可用于拆环的托盘")
+
+            current_layout_code = source_to_current_position[cycle_source_layout_code]
+            tray_info = tray_by_source[cycle_source_layout_code]
+            planned_moves.append(
+                {
+                    "source_layout_code": current_layout_code,
+                    "destination_layout_code": temp_buffer_position,
+                    "resource_type": tray_info.get("resource_type"),
+                    "resource_type_name": tray_info.get("resource_type_name", ""),
+                    "reason": "使用缓冲位拆环",
+                }
+            )
+
+            current_occupancy[current_layout_code] = None
+            current_occupancy[temp_buffer_position] = cycle_source_layout_code
+            source_to_current_position[cycle_source_layout_code] = temp_buffer_position
+
+        for source_layout_code, target_layout_code in source_to_target.items():
+            final_layout_code = source_to_current_position.get(source_layout_code)
+            if final_layout_code != target_layout_code:
+                raise ValidationError(
+                    f"移盘计划生成失败: 托盘 {source_layout_code} 最终位置 {final_layout_code} 与目标位 {target_layout_code} 不一致"
+                )
+
+        return planned_moves
+
+    # ---------- W/T货架托盘整理: 主入口 ----------
+    def arrange_w_t_trays_for_task(
+        self,
+        task_id: int,
+        *,
+        poll_interval_s: float = 1.0,
+        timeout_s: float = 900.0,
+    ) -> JsonDict:
+        """
+        功能:
+            基于任务详情与当前资源快照整理 W/T 货架托盘, 先在内存中完成全量规划, 再顺序执行移盘.
+        参数:
+            task_id: int, 任务ID.
+            poll_interval_s: float, 等待设备空闲的轮询间隔.
+            timeout_s: float, 等待设备空闲的超时时间.
+        返回:
+            JsonDict, 整理结果摘要.
+        """
+        task_id_int = self._safe_int(task_id)
+        if task_id_int is None:
+            raise ValidationError("task_id 必须为整数")
+
+        self.wait_idle(stage="整理W/T货架前等待空闲", poll_interval_s=poll_interval_s, timeout_s=timeout_s)
+        task_info = self.get_task_info(task_id_int)
+        # 先抽取任务药品集合, 用于识别哪些托盘最终不能停在缓冲位
+        used_substances = self._extract_task_used_substances_from_task_info(task_info)
+        task_substance_set = set(used_substances)
+
+        self._logger.info("开始整理W/T货架托盘, task_id=%s, 任务药品=%s", task_id_int, used_substances)
+
+        resource_rows_before = self.get_resource_info()
+        # 基于当前快照构造受控位置状态, 先判断当前是否已经满足规则
+        current_state = self._build_w_t_arrangement_state(resource_rows_before, task_substance_set)
+        violations_before = self._collect_w_t_arrangement_violations(current_state)
+
+        result: JsonDict = {
+            "success": True,
+            "task_id": task_id_int,
+            "used_substances": used_substances,
+            "violations_before": violations_before,
+            "planned_moves": [],
+            "executed_moves": [],
+            "violations_after": [],
+        }
+
+        if len(violations_before) == 0:
+            self._logger.info("当前W/T货架已满足整理规则, 无需移盘")
+            return result
+
+        # 先在内存中完成目标位分配和后验检查, 只要不可解就直接报错, 不执行任何真实移盘
+        source_to_target = self._plan_w_t_target_assignment(current_state)
+        planned_state = self._build_w_t_target_state(current_state, source_to_target)
+        planned_violations = self._collect_w_t_arrangement_violations(planned_state)
+        if len(planned_violations) > 0:
+            raise ValidationError(f"规划后的整理结果仍存在违规: {planned_violations}")
+
+        planned_moves = self._plan_w_t_move_sequence(current_state, source_to_target)
+        result["planned_moves"] = planned_moves
+
+        executed_moves: List[JsonDict] = []
+        # 顺序执行单步移盘, 保证每一步都在设备回到空闲后再进入下一步
+        for move_item in planned_moves:
+            self.move_tray(
+                [
+                    {
+                        "source_layout_code": move_item["source_layout_code"],
+                        "destination_layout_code": move_item["destination_layout_code"],
+                    }
+                ],
+                poll_interval_s=poll_interval_s,
+                timeout_s=timeout_s,
+            )
+            executed_moves.append(dict(move_item))
+
+        result["executed_moves"] = executed_moves
+
+        resource_rows_after = self.get_resource_info()
+        # 用最新快照复跑同一套校验, 确认真实现场状态与规划结果一致
+        final_state = self._build_w_t_arrangement_state(resource_rows_after, task_substance_set)
+        violations_after = self._collect_w_t_arrangement_violations(final_state)
+        result["violations_after"] = violations_after
+
+        if len(violations_after) > 0:
+            self._logger.error("整理后仍存在违规位置: %s", violations_after)
+            raise ValidationError(f"整理后仍存在违规位置: {violations_after}")
+
+        self._logger.info("W/T货架托盘整理完成, task_id=%s, 共执行%s步", task_id_int, len(executed_moves))
+        return result
+
+    # ---------- 任务查询 ----------
     def get_task_list(
         self,
         *,
@@ -3663,7 +4370,7 @@ class SynthesisStationController:
 
                 retry_count += 1
                 if retry_count < 3:
-                    time.sleep(10)
+                    time.sleep(20)
 
             if target_task_id is None:
                 msg = "未找到运行中的任务"
@@ -5089,17 +5796,116 @@ class SynthesisStationController:
                     return kind, val
             return "", 0.0
 
-        def _tip_usage(volume_ml: float) -> Dict[int, int]:
+        def _classify_pipetting_tip(volume_ml: float) -> Tuple[int, float]:
+            """
+            功能:
+                按单次加液体积返回对应Tip编码与单支可用体积.
+            参数:
+                volume_ml: float, 单次加液体积, 单位mL.
+            返回:
+                Tuple[int, float], (Tip编码, 单支可用体积mL).
+            """
             usable_50ul = 0.05 * 0.7
             usable_1ml = 1.0 * 0.7
             usable_5ml = 5.0 * 0.7
             if volume_ml <= usable_50ul:
-                return {int(ResourceCode.TIP_50UL): 1}
+                return int(ResourceCode.TIP_50UL), usable_50ul
             if volume_ml <= usable_1ml:
-                return {int(ResourceCode.TIP_1ML): 1}
-            # 1 mL 及以上统一用 5 mL 枪头, 每根最大 3.5 mL
-            count = math.ceil(volume_ml / usable_5ml)
-            return {int(ResourceCode.TIP_5ML): count}
+                return int(ResourceCode.TIP_1ML), usable_1ml
+            # 1 mL以上统一使用5 mL Tip, 单支按3.5 mL可用体积估算.
+            return int(ResourceCode.TIP_5ML), usable_5ml
+
+        def _count_continuous_pipetting_tips(pipetting_records: List[JsonDict]) -> Dict[int, int]:
+            """
+            功能:
+                按同一行横向连续规则累计exp_pipetting所需Tip数量.
+            参数:
+                pipetting_records: List[Dict], exp_pipetting记录列表.
+            返回:
+                Dict[int, int], 三类Tip编码对应的需求增量.
+            """
+            tip_need = {
+                int(ResourceCode.TIP_50UL): 0,
+                int(ResourceCode.TIP_1ML): 0,
+                int(ResourceCode.TIP_5ML): 0,
+            }
+            records_by_row: Dict[Any, List[JsonDict]] = {}
+
+            def _sort_nullable_int(value: Any) -> Tuple[int, int]:
+                """
+                功能:
+                    为可能为空的行列号提供稳定排序键.
+                参数:
+                    value: Any, 待排序的行号或列号.
+                返回:
+                    Tuple[int, int], 排序键, 空值排在最后.
+                """
+                if value is None:
+                    return 1, 0
+                return 0, int(value)
+
+            def _flush_segment(
+                tip_code: Optional[int],
+                tip_capacity_ml: float,
+                total_volume_ml: float,
+            ) -> None:
+                """
+                功能:
+                    将当前连续段累计体积折算为Tip数量并回写统计结果.
+                参数:
+                    tip_code: Optional[int], 当前连续段Tip编码.
+                    tip_capacity_ml: float, 当前连续段单支Tip可用体积, 单位mL.
+                    total_volume_ml: float, 当前连续段累计体积, 单位mL.
+                返回:
+                    None
+                """
+                if tip_code is None:
+                    return
+                if tip_capacity_ml <= 0 or total_volume_ml <= 0:
+                    return
+                tip_need[tip_code] = tip_need.get(tip_code, 0) + math.ceil(total_volume_ml / tip_capacity_ml)
+
+            for record in pipetting_records:
+                row_key = record.get("unit_row")
+                records_by_row.setdefault(row_key, []).append(record)
+
+            for row_key in sorted(records_by_row.keys(), key=_sort_nullable_int):
+                row_records = sorted(
+                    records_by_row[row_key],
+                    key=lambda item: (
+                        _sort_nullable_int(item.get("unit_column")),
+                        int(item.get("layout_index", 0)),
+                    ),
+                )
+                current_substance = ""
+                current_tip_code: Optional[int] = None
+                current_tip_capacity_ml = 0.0
+                current_total_volume_ml = 0.0
+
+                # 同一行按列扫描, 只有相同物质且Tip类型一致时才复用连续段.
+                for record in row_records:
+                    record_substance = str(record.get("substance") or "").strip()
+                    record_tip_code = self._safe_int(record.get("single_step_tip_code"))
+                    record_tip_capacity_ml = float(record.get("single_step_tip_capacity_ml") or 0.0)
+                    record_volume_ml = float(record.get("add_volume") or 0.0)
+
+                    if (
+                        current_tip_code is not None
+                        and record_substance == current_substance
+                        and record_tip_code == current_tip_code
+                    ):
+                        current_total_volume_ml += record_volume_ml
+                        continue
+
+                    _flush_segment(current_tip_code, current_tip_capacity_ml, current_total_volume_ml)
+                    current_substance = record_substance
+                    current_tip_code = record_tip_code
+                    current_tip_capacity_ml = record_tip_capacity_ml
+                    current_total_volume_ml = record_volume_ml
+
+                _flush_segment(current_tip_code, current_tip_capacity_ml, current_total_volume_ml)
+
+            return tip_need
 
         # 按试剂瓶规格定义液体死体积(mL)
         container_dead_volume_map = {
@@ -5138,11 +5944,11 @@ class SynthesisStationController:
             int(ResourceCode.FLASH_FILTER_OUTER_BOTTLE): 0,
         }
         magnet_from_unit = 0
-        pipetting_tip_volumes: List[float] = []
+        pipetting_tip_records: List[JsonDict] = []
         filtering_rows = set()
         filtering_diluent_tip_plan: Dict[str, float] = {}
 
-        for unit in layout_list:
+        for layout_index, unit in enumerate(layout_list):
             utype = str(unit.get("unit_type") or "").strip()
             process_json = unit.get("process_json") or {}
             substance = str(process_json.get("substance") or "").strip()
@@ -5161,7 +5967,18 @@ class SynthesisStationController:
                 reagent_need[substance]["ml"] += add_volume
                 reagent_kind[substance] = "liquid"
                 if add_volume > 0:
-                    pipetting_tip_volumes.append(add_volume)
+                    tip_code, tip_capacity_ml = _classify_pipetting_tip(add_volume)
+                    pipetting_tip_records.append(
+                        {
+                            "unit_row": row_index,
+                            "unit_column": self._safe_int(unit.get("unit_column")),
+                            "substance": substance,
+                            "add_volume": add_volume,
+                            "single_step_tip_code": tip_code,
+                            "single_step_tip_capacity_ml": tip_capacity_ml,
+                            "layout_index": layout_index,
+                        }
+                    )
                 continue
 
             if utype == "exp_add_magnet":
@@ -5185,10 +6002,9 @@ class SynthesisStationController:
         if magnet_from_unit > consumable_need[int(ResourceCode.TEST_TUBE_MAGNET_2ML)]:
             consumable_need[int(ResourceCode.TEST_TUBE_MAGNET_2ML)] = magnet_from_unit
 
-        for volume in pipetting_tip_volumes:
-            tip_dict = _tip_usage(volume)
-            for code, count in tip_dict.items():
-                consumable_need[code] = consumable_need.get(code, 0) + count
+        pipetting_tip_need = _count_continuous_pipetting_tips(pipetting_tip_records)
+        for code, count in pipetting_tip_need.items():
+            consumable_need[code] = consumable_need.get(code, 0) + count
 
         if len(filtering_rows) > 0 and experiment_num > 0:
             sample_tip_need = len(filtering_rows) * experiment_num

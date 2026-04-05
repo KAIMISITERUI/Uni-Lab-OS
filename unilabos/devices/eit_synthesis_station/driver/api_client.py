@@ -277,6 +277,27 @@ class ApiClient:
         """
         body = {"layout_list": layout_list, "move_type": move_type}
         return self._request("POST", "/api/BatchOutTray", json_body=body)
+
+    # 移动托盘
+    def move_tray(self, layout_list: List[JsonDict]) -> JsonDict:
+        """
+        功能:
+            移动托盘位置, 对应 MoveTray.
+        参数:
+            layout_list: 托盘移动列表, 每项必须包含 source_layout_code 和 destination_layout_code.
+        返回:
+            Dict.
+        """
+        if layout_list is None or len(layout_list) == 0:
+            raise ValidationError("layout_list 不能为空.")
+
+        for item in layout_list:
+            if "source_layout_code" not in item:
+                raise ValidationError("layout_list 中每项都必须包含 source_layout_code.")
+            if "destination_layout_code" not in item:
+                raise ValidationError("layout_list 中每项都必须包含 destination_layout_code.")
+
+        return self._request("POST", "/api/MoveTray", json_body={"layout_list": layout_list})
     
     # 8. 获取化学品
     def get_chemical_list(

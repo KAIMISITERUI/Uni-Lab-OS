@@ -43,6 +43,9 @@ _STATION_STATE_LABEL = {
 # 运行时缓存: 最近操作的任务ID
 _last_task_id = None
 
+# 哨兵对象: 用于区分"函数正常返回None"和"异常/中断导致的失败"
+_SENTINEL_FAILED = object()
+
 
 # ===================== 工具函数 =====================
 
@@ -82,26 +85,40 @@ def _input_file_path(prompt, default_path):
 def _input_task_id(allow_none=True):
     """
     功能:
-        提示用户输入任务ID, 支持默认值和留空
+        提示用户输入任务ID.
+        最近任务ID仅作为提示展示, 不再作为输入默认值.
+        当 allow_none 为 True 时, 直接回车表示自动选取.
+        当 allow_none 为 False 时, 必须显式输入合法任务ID.
     参数:
         allow_none: bool, 是否允许留空(由系统自动选取)
     返回:
         int | None, 任务ID或None
     """
     global _last_task_id
-    hint = "请输入任务ID"
-    if allow_none is True:
-        hint += "(留空则自动选取)"
-    val = _input_with_default(hint, _last_task_id)
-    if val == "" or val == "None":
-        return None
-    try:
-        tid = int(val)
-        _last_task_id = tid
-        return tid
-    except ValueError:
-        print("输入的任务ID格式不正确, 将自动选取")
-        return None
+    while True:
+        hint = "请输入任务ID"
+        if _last_task_id is not None:
+            hint += f" [最近: {_last_task_id}]"
+
+        if allow_none is True:
+            val = input(f"{hint}(留空则自动选取): ").strip()
+            if val == "" or val == "None":
+                return None
+        else:
+            val = input(f"{hint}: ").strip()
+            if val == "" or val == "None":
+                print("任务ID不能为空, 请重新输入")
+                continue
+
+        try:
+            tid = int(val)
+            _last_task_id = tid
+            return tid
+        except ValueError:
+            if allow_none is True:
+                print("输入的任务ID格式不正确, 将自动选取")
+                return None
+            print("输入的任务ID格式不正确, 请重新输入")
 
 
 def _input_positive_float(prompt):
@@ -153,7 +170,7 @@ def _safe_run(func, *args, **kwargs):
         logger.debug("异常详情:\n%s", traceback.format_exc())
         print(f"\n操作失败: {exc}")
     _pause()
-    return None
+    return _SENTINEL_FAILED
 
 
 def _print_menu(title, options):
@@ -326,15 +343,17 @@ def _run_workflow(steps, quick=False):
                 print("工作流已终止")
                 return
         result = _safe_run(action)
-        if result is None:
+        if result is _SENTINEL_FAILED:
             if quick is True:
-                # 快速模式下步骤失败, 询问是否继续
-                continue
+                # 快速模式下步骤失败或被中断, 直接终止工作流
+                print("工作流已中断")
+                _pause()
+                return
             else:
                 retry = input("该步骤可能未成功, 是否继续后续步骤? (y/n) [默认: n]: ").strip().lower()
-            if retry != "y":
-                print("工作流已终止")
-                return
+                if retry != "y":
+                    print("工作流已终止")
+                    return
     print("\n工作流执行完毕!")
     _pause()
 
@@ -344,11 +363,10 @@ def _run_workflow(steps, quick=False):
 def _menu_quick_workflow(manager):
     """快速工作流子菜单"""
     options = [
-        ("1", "完整合成流程(AGV上料)"),
-        ("2", "完整合成流程(手动上料)"),
-        ("3", "上传任务流程"),
-        ("4", "agv上料+提交合成任务+分析执行流程"),
-        ("5", "等待任务完成+分析执行流程"),
+        ("1", "上传任务流程"),
+        ("2", "agv上料+提交合成任务+分析执行流程"),
+        ("3", "等待合成任务完成+分析执行流程"),
+        ("4", "等待分析任务完成+回收检测样品"),
         ("0", "返回上级菜单"),
     ]
 
@@ -360,43 +378,11 @@ def _menu_quick_workflow(manager):
             return
 
         # 收集所有工作流共用的文件路径
-        if choice in ("1", "2", "3"):
+        if choice in ("1"):
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
             chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
 
         if choice == "1":
-            # 完整合成流程(AGV上料)
-            steps = [
-                ("对齐化学品库", lambda: manager.align_chemicals_with_file(chem_db)),
-                ("上传任务到工站", lambda: _update_task_id(manager.create_task_by_file(task_tpl, chem_db))),
-                ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
-                ("AGV上料", lambda: manager.batch_in_tray_with_agv_transfer()),
-                ("启动任务", lambda: manager.start_task()),
-                ("等待任务完成", lambda: manager.wait_task_with_ops()),
-                ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
-                ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),
-                ("谱图数据处理", lambda: manager.poll_analysis_run()),
-            ]
-            _run_workflow(steps, quick=True)
-
-        elif choice == "2":
-            # 完整合成流程(手动上料)
-            template_in = _input_file_path("上料文件路径", DEFAULT_TEMPLATE_IN)
-            steps = [
-                ("对齐化学品库", lambda: manager.align_chemicals_with_file(chem_db)),
-                ("上传任务到工站", lambda: _update_task_id(manager.create_task_by_file(task_tpl, chem_db))),
-                ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
-                ("手动上料", lambda: manager.batch_in_tray_by_file(template_in)),
-                ("启动任务", lambda: manager.start_task()),
-                ("等待任务完成", lambda: manager.wait_task_with_ops()),
-                ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
-                ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),
-                ("提交分析任务", lambda: manager.run_analysis()),
-                ("谱图数据处理", lambda: manager.poll_analysis_run()),
-            ]
-            _run_workflow(steps, quick=True)
-
-        elif choice == "3":
             # 提交任务流程
             steps = [
                 ("对齐化学品库", lambda: manager.align_chemicals_with_file(chem_db)),
@@ -405,7 +391,7 @@ def _menu_quick_workflow(manager):
             ]
             _run_workflow(steps, quick=True)
 
-        elif choice == "4":
+        elif choice == "2":
             # AGV执行流程
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
             chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
@@ -416,16 +402,30 @@ def _menu_quick_workflow(manager):
                 ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
                 ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),
                 ("谱图数据处理", lambda: manager.poll_analysis_run()),
+                ("分析样品转运到货架", lambda: manager.transfer_analysis_to_shelf()),
             ]
             _run_workflow(steps, quick=True)
 
-        elif choice == "5":
+        elif choice == "3":
             # 执行流程
+            tid = _input_task_id()
+            tid_str = str(tid) if tid is not None else None
             steps = [
-                ("等待任务完成", lambda: manager.wait_task_with_ops()),
-                ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays()),
+                ("等待任务完成", lambda: manager.wait_task_with_ops(task_id=tid)),
+                ("下料(任务物料+空托盘)", lambda: manager.batch_out_task_and_empty_trays(task_id=tid)),
                 ("AGV自动下料", lambda: manager.auto_unload_trays_to_agv()),
-                ("谱图数据处理", lambda: manager.poll_analysis_run()),
+                ("谱图数据处理", lambda: manager.poll_analysis_run(task_id=tid_str)),
+                ("分析样品转运到货架", lambda: manager.transfer_analysis_to_shelf()),
+            ]
+            _run_workflow(steps, quick=True)
+
+        elif choice == "4":
+            # 执行流程
+            tid = _input_task_id()
+            tid_str = str(tid) if tid is not None else None
+            steps = [
+                ("谱图数据处理", lambda: manager.poll_analysis_run(task_id=tid_str)),
+                ("分析样品转运到货架", lambda: manager.transfer_analysis_to_shelf()),
             ]
             _run_workflow(steps, quick=True)
 
@@ -1050,6 +1050,7 @@ def _menu_other(manager):
         ("2", "控制过渡舱门"),
         ("3", "控制W1货架"),
         ("4", "异常通知监控"),
+        ("5", "整理W/T货架托盘"),
         ("0", "返回上级菜单"),
     ]
 
@@ -1097,6 +1098,13 @@ def _menu_other(manager):
             _safe_run(manager.control_w1_shelf, position, action)
         elif choice == "4":
             _menu_notification(manager)
+        elif choice == "5":
+            task_id = _input_task_id(allow_none=False)
+            if task_id is not None:
+                result = _safe_run(manager.arrange_w_t_trays_for_task, task_id)
+                if result is not _SENTINEL_FAILED:
+                    # _print_result(result)
+                    _pause()
         else:
             print("无效选择, 请重新输入")
 
