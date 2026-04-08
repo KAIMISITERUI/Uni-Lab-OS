@@ -6,6 +6,12 @@
 """
 
 import logging
+
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    from unilabos.devices.devices_logging import configure_root_logging
+
 from .DucoCobot.DucoCobot import DucoCobot
 from .DucoCobot.gen_py.robot.ttypes import Op, PointOp
 
@@ -33,6 +39,10 @@ class ArmDriver:
         self.ip = ip
         self.port = port
         self.timeout = timeout
+        self.last_exception = None
+        self.last_error_type = None
+        self.last_error_message = None
+        self.last_error_repr = None
         self.current_gripper = "gripper_type_a"  # 当前安装的夹爪名称,目前夹爪有问题，先默认是type as
 
         # 运动参数最大值配置
@@ -41,6 +51,47 @@ class ArmDriver:
         self.max_linear_velocity = 2  # 最大末端线速度 m/s
         self.max_linear_acceleration = 2  # 最大末端线加速度 m/s²
         logger.debug("AGV机械臂驱动初始化完成")
+
+    def _clear_last_error(self):
+        """
+        功能:
+            清空最近一次机械臂驱动错误记录.
+
+        参数:
+            无.
+
+        返回:
+            无.
+        """
+        self.last_exception = None
+        self.last_error_type = None
+        self.last_error_message = None
+        self.last_error_repr = None
+
+    def _record_last_error(self, default_message: str):
+        """
+        功能:
+            从底层机械臂对象采集最近一次错误信息.
+
+        参数:
+            default_message: 无法获取底层错误时使用的默认消息.
+
+        返回:
+            无.
+        """
+        robot_exception = getattr(self.robot, "last_exception", None)
+        robot_error_message = getattr(self.robot, "last_error_message", None)
+        robot_error_repr = getattr(self.robot, "last_error_repr", None)
+
+        self.last_exception = robot_exception
+        self.last_error_type = type(robot_exception).__name__ if robot_exception is not None else "UnknownError"
+        self.last_error_message = robot_error_message or default_message
+        if robot_error_repr is not None:
+            self.last_error_repr = robot_error_repr
+        elif robot_exception is not None:
+            self.last_error_repr = repr(robot_exception)
+        else:
+            self.last_error_repr = default_message
 
     # ==================== 连接管理 ====================
 
@@ -51,6 +102,7 @@ class ArmDriver:
         返回:
             bool, True表示连接成功, False表示连接失败
         """
+        self._clear_last_error()
         result = self.robot.open()
         if result == 0:
             self.is_connected = True
@@ -58,7 +110,8 @@ class ArmDriver:
             return True
         else:
             self.is_connected = False
-            logger.error("机械臂连接失败")
+            self._record_last_error("机械臂连接失败")
+            logger.error("机械臂连接失败: %s", self.last_error_message)
             return False
 
     def disconnect(self):
@@ -68,13 +121,15 @@ class ArmDriver:
         返回:
             bool, True表示断开成功, False表示断开失败
         """
+        self._clear_last_error()
         result = self.robot.close()
         if result == 0:
             self.is_connected = False
             logger.debug("机械臂断开连接成功")
             return True
         else:
-            logger.error("机械臂断开连接失败")
+            self._record_last_error("机械臂断开连接失败")
+            logger.error("机械臂断开连接失败: %s", self.last_error_message)
             return False
 
     def reconnect(self):
@@ -85,11 +140,15 @@ class ArmDriver:
             bool, True表示重连成功, False表示重连失败
         """
         logger.warning("尝试重新连接机械臂")
+        self._clear_last_error()
         # 先断开旧连接
         try:
             self.robot.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            self.last_exception = exc
+            self.last_error_type = type(exc).__name__
+            self.last_error_message = str(exc)
+            self.last_error_repr = repr(exc)
 
         # 重新创建连接对象
         self.robot = DucoCobot(self.ip, self.port, self.timeout)
@@ -1108,10 +1167,7 @@ def main():
         交互式测试机械臂驱动的主要接口
     """
     # 配置日志输出到控制台
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    configure_root_logging(level="INFO")
 
     print("=" * 60)
     print("机械臂驱动交互式测试程序")

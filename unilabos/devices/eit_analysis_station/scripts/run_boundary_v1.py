@@ -19,7 +19,11 @@ from pathlib import Path
 import numpy as np
 
 # 将 devices 目录加入 sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from devices_logging import configure_root_logging
 
 from eit_analysis_station.processor.data_reader import GCMSDataReader
 from eit_analysis_station.processor.peak_boundary_detector import (
@@ -30,11 +34,7 @@ from eit_analysis_station.processor.peak_boundary_detector import (
     PeakDetectionInput,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+configure_root_logging(level="INFO")
 logger = logging.getLogger(__name__)
 
 

@@ -162,6 +162,88 @@ class TestQueryWithRetry(unittest.TestCase):
         self.assertEqual(query_func.call_count, 2)
 
 
+class TestQueryWithRetryDetailed(unittest.TestCase):
+    """测试 _query_with_retry_detailed 的详细诊断信息"""
+
+    def setUp(self):
+        self.controller = _make_controller()
+
+    @patch(_CONTROLLER_SLEEP_PATH)
+    @patch(_AGV_DRIVER_CLS_PATH)
+    def test_timeout_failure_records_attempts_host_and_port(self, mock_driver_cls, mock_sleep):
+        """
+        验收条件:
+            所有尝试都因超时失败
+        预期:
+            返回失败诊断, 包含 attempts、host、port 和 timeout 分类
+        """
+        mock_driver = MagicMock()
+        mock_driver.connect.side_effect = socket.timeout("timed out")
+        mock_driver_cls.return_value = mock_driver
+
+        result = self.controller._query_with_retry_detailed(
+            query_func=MagicMock(),
+            query_name="测试查询",
+            error_stage="test_stage",
+            success_message="不会成功",
+            max_retries=2,
+            retry_delay=1.0,
+        )
+
+        self.assertIs(result["ok"], False)
+        self.assertEqual(result["failure"]["error_reason"], "timeout")
+        self.assertEqual(result["failure"]["host"], "192.168.1.5")
+        self.assertEqual(result["failure"]["port"], 19204)
+        self.assertEqual(len(result["failure"]["attempts"]), 2)
+
+    @patch(_CONTROLLER_SLEEP_PATH)
+    @patch(_AGV_DRIVER_CLS_PATH)
+    def test_empty_response_failure_is_classified(self, mock_driver_cls, mock_sleep):
+        """
+        验收条件:
+            查询函数返回空响应错误
+        预期:
+            失败原因被分类为 empty_response
+        """
+        mock_driver = MagicMock()
+        mock_driver_cls.return_value = mock_driver
+
+        result = self.controller._query_with_retry_detailed(
+            query_func=MagicMock(side_effect=RuntimeError("查询导航状态返回空")),
+            query_name="查询导航任务状态",
+            error_stage="nav_guard",
+            success_message="不会成功",
+            max_retries=1,
+        )
+
+        self.assertIs(result["ok"], False)
+        self.assertEqual(result["failure"]["error_reason"], "empty_response")
+        self.assertEqual(result["failure"]["last_exception_type"], "RuntimeError")
+
+    @patch(_CONTROLLER_SLEEP_PATH)
+    @patch(_AGV_DRIVER_CLS_PATH)
+    def test_device_rejected_failure_is_classified(self, mock_driver_cls, mock_sleep):
+        """
+        验收条件:
+            查询函数抛出设备拒绝类错误
+        预期:
+            失败原因被分类为 device_rejected
+        """
+        mock_driver = MagicMock()
+        mock_driver_cls.return_value = mock_driver
+
+        result = self.controller._query_with_retry_detailed(
+            query_func=MagicMock(side_effect=RuntimeError("查询电池状态返回错误: AGV忙碌")),
+            query_name="查询电池状态",
+            error_stage="query_battery_simple",
+            success_message="不会成功",
+            max_retries=1,
+        )
+
+        self.assertIs(result["ok"], False)
+        self.assertEqual(result["failure"]["error_reason"], "device_rejected")
+
+
 # =====================================================================
 # 控制器层: 三个查询方法各自的重试验证
 # =====================================================================
@@ -628,6 +710,37 @@ class TestAutoChargeCheckWithRetry(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["action"], "query_location")
+
+
+class TestArmDriverErrorRecording(unittest.TestCase):
+    """测试 ArmDriver.connect 的错误记录能力"""
+
+    @patch("builtins.print")
+    @patch("eit_agv.driver.arm_driver.DucoCobot")
+    def test_connect_records_last_error_without_print(self, mock_robot_cls, mock_print):
+        """
+        验收条件:
+            底层连接失败并提供错误详情
+        预期:
+            ArmDriver.connect 返回 False, last_error_* 被写入, 且不走裸 print
+        """
+        mock_robot = MagicMock()
+        mock_robot.open.return_value = -1
+        mock_robot.last_exception = RuntimeError("rpc unavailable")
+        mock_robot.last_error_message = "rpc unavailable"
+        mock_robot.last_error_repr = "RuntimeError('rpc unavailable')"
+        mock_robot_cls.return_value = mock_robot
+
+        from eit_agv.driver.arm_driver import ArmDriver
+
+        arm = ArmDriver()
+        result = arm.connect()
+
+        self.assertIs(result, False)
+        self.assertEqual(arm.last_error_type, "RuntimeError")
+        self.assertEqual(arm.last_error_message, "rpc unavailable")
+        self.assertEqual(arm.last_error_repr, "RuntimeError('rpc unavailable')")
+        mock_print.assert_not_called()
 
 
 if __name__ == "__main__":

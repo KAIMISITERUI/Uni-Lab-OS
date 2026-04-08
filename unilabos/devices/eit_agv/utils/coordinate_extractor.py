@@ -8,7 +8,17 @@
 import os
 import json
 import logging
+import sys
 from typing import Dict, List, Any, Optional
+
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(current_dir))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from devices_logging import configure_root_logging
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -335,10 +345,7 @@ def main():
         主函数, 演示坐标提取功能
     """
     # 配置日志输出到控制台
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    configure_root_logging(level="INFO")
 
     print("=" * 60)
     print("程序文件运动坐标提取工具")
@@ -376,7 +383,6 @@ def main_with_arm():
     功能:
         连接机械臂并进行坐标转换的主函数
     """
-    import sys
     # 添加项目根目录到路径
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
@@ -386,10 +392,7 @@ def main_with_arm():
     from driver.arm_driver import ArmDriver
 
     # 配置日志输出到控制台
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    configure_root_logging(level="INFO")
 
     print("=" * 60)
     print("程序文件运动坐标提取工具 (带坐标转换)")

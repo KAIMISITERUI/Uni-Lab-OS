@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from devices_logging import configure_root_logging
 from unilabos.devices.eit_analysis_station.processor.data_reader import GCMSDataReader
 from unilabos.devices.eit_analysis_station.processor.peak_integrator import PeakIntegrator, PeakResult
 
@@ -924,10 +925,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-    )
+    configure_root_logging(level="INFO")
 
     checks: List[Callable[[], bool]] = [
         run_synthetic_doublet_regression,

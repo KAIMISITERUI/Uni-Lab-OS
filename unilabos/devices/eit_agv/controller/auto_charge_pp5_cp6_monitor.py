@@ -15,6 +15,11 @@ import logging
 import os
 import sys
 
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    from unilabos.devices.devices_logging import configure_root_logging
+
 from ..config.agv_config import (
     AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
     AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
@@ -32,24 +37,13 @@ def _setup_logging(log_dir: str) -> None:
         无.
     """
     log_file = os.path.join(log_dir, "auto_charge_pp5_cp6_monitor.log")
-
-    fmt = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+    configure_root_logging(
+        level="DEBUG",
+        console_level="INFO",
+        file_level="DEBUG",
+        log_file=log_file,
+        stream=sys.stdout,
     )
-
-    file_handler = logging.FileHandler(log_file, encoding="utf-8", mode="a")
-    file_handler.setFormatter(fmt)
-    file_handler.setLevel(logging.DEBUG)
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(fmt)
-    console_handler.setLevel(logging.INFO)
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
 
     logging.info(f"日志文件路径: {log_file}")
 

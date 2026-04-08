@@ -3,6 +3,11 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    from unilabos.devices.devices_logging import configure_root_logging
+
 from ..notification.notification_settings import NotificationSettings
 
 
@@ -116,16 +121,4 @@ def configure_logging(level: str = "INFO") -> None:
     返回:
         无.
     """
-    numeric_level = getattr(logging, level.upper(), logging.INFO)
-
-    root = logging.getLogger()
-    root.setLevel(numeric_level)
-
-    if not root.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            fmt="%(asctime)s %(levelname)s %(name)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-        handler.setFormatter(formatter)
-        root.addHandler(handler)
+    configure_root_logging(level=level)

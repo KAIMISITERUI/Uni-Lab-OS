@@ -20,12 +20,14 @@ import sys
 
 import yaml
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from devices_logging import configure_root_logging
+
 # ──────────────────────────── 日志配置 ────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
+configure_root_logging(level="INFO")
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────── 常量 ────────────────────────────────

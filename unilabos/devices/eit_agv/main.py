@@ -15,6 +15,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    from unilabos.devices.devices_logging import configure_root_logging
+
 from .config.agv_config import (
     STATION_POSITIONS,
     AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
@@ -35,10 +40,7 @@ def _configure_logging() -> None:
     返回:
         无.
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    configure_root_logging(level="INFO")
 
 
 def _report_exception(exc: Exception) -> None:

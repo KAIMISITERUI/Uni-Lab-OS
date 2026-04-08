@@ -30,6 +30,9 @@ class DucoCobot:
         # 如果未指定参数, 使用配置文件中的默认值
         self.ip = "192.168.1.10"
         self.port = 7003
+        self.last_exception = None
+        self.last_error_message = None
+        self.last_error_repr = None
 
         self.transport = TSocket.TSocket(self.ip, self.port)
         # 设置socket超时时间, 避免长时间运动时连接断开
@@ -42,10 +45,15 @@ class DucoCobot:
     * @return -1:打开失败; 0:打开成功
     '''
     def open(self):
+        self.last_exception = None
+        self.last_error_message = None
+        self.last_error_repr = None
         try:
             self.transport.open()
         except TTransport.TTransportException as e:
-            print("open mesg:",repr(e))
+            self.last_exception = e
+            self.last_error_message = str(e)
+            self.last_error_repr = repr(e)
             return -1
         else:
             return 0   
@@ -54,10 +62,15 @@ class DucoCobot:
     * @return -1:打开失败; 0:打开成功
     '''
     def close(self):
+        self.last_exception = None
+        self.last_error_message = None
+        self.last_error_repr = None
         try:
             self.transport.close()
         except Exception as e:
-            print("close mesg:",repr(e))
+            self.last_exception = e
+            self.last_error_message = str(e)
+            self.last_error_repr = repr(e)
             return -1
         else:
             return 0

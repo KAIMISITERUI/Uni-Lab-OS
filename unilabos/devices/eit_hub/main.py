@@ -12,6 +12,11 @@
 import importlib
 import logging
 
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    from unilabos.devices.devices_logging import configure_root_logging
+
 logger = logging.getLogger("EITHubInteractiveCLI")
 
 
@@ -42,6 +47,8 @@ def interactive() -> None:
     返回:
         无.
     """
+    configure_root_logging(level="INFO")
+
     while True:
         print("\n================================================")
         print("EIT 多工站总控交互台")

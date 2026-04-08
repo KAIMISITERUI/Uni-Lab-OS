@@ -7,9 +7,20 @@ JSON格式化工具模块
 
 import json
 import logging
+import os
+import sys
 from pathlib import Path
 from typing import Union
 import re
+
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(current_dir))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from devices_logging import configure_root_logging
 
 
 logger = logging.getLogger(__name__)
@@ -205,10 +216,7 @@ def format_all_jspf_in_directory(
 
 if __name__ == "__main__":
     # 配置日志
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    configure_root_logging(level="INFO")
 
     import sys
 

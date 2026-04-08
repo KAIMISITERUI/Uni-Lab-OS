@@ -13,6 +13,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
+try:
+    from devices_logging import configure_root_logging
+except ImportError:
+    from unilabos.devices.devices_logging import configure_root_logging
+
 from ..config.agv_config import (
     FRAME_HEAD_SIZE,
     REQ_CMD_ROBOT_STATUS_TASK,
@@ -784,7 +789,7 @@ def main() -> None:
     功能:
         交互式测试主函数
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_root_logging(level="INFO")
 
     driver = AGVDriver(AGVDriverConfig(
         host=AGV_HOST,
