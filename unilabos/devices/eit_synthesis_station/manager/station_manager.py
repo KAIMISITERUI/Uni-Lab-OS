@@ -1723,7 +1723,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             ws.add_data_validation(dv_tray)
             dv_tray.add("B2:B101")
 
-            ws["C1"] = "content(耗材填数量; 物质填: A1|名称|2mL; B2|名称|5mg)"
+            ws["C1"] = "content(耗材填数量, 物质严格填: A1|名称|2mL; B2|名称|5mg, 多条必须用;分隔, 不能用:连接下一条)"
             ws["D1"] = "shelf_position"
             ws["E1"] = "storage(格式: 物质|位置; 多个用;隔开)"
             safe_workbook_save(wb, file_path)

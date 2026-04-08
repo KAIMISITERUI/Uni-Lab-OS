@@ -6,8 +6,10 @@
 """
 
 import logging
+import math
 import time
 import threading
+from typing import Dict, List, Optional, Tuple
 from ..driver.arm_driver import ArmDriver
 from ..driver.agv_driver import AGVDriver, AGVDriverConfig
 from ..utils.position_manager import PositionManager
@@ -252,6 +254,565 @@ class AGVController:
         except Exception as e:
             logger.error(f"机械臂回零失败: {e}")
             return None
+
+    def _get_station_name_from_tray(self, tray_name):
+        """
+        功能:
+            根据托盘点位名称推断所属工站名称.
+
+        参数:
+            tray_name: 托盘点位名称.
+
+        返回:
+            str或None, 匹配到的工站名称, 未匹配时返回None.
+        """
+        station_id = self._get_station_from_tray(tray_name)
+        if station_id is None:
+            return None
+
+        station_info = STATION_POSITIONS.get(station_id)
+        if station_info is None:
+            logger.warning(f"工站ID不存在配置: {station_id}")
+            return None
+
+        return station_info["name"]
+
+    def _parse_middle_tray_name(self, tray_name: str) -> Optional[Dict[str, object]]:
+        """
+        功能:
+            解析形如 station_tray_row-col 的托盘点位名称.
+
+        参数:
+            tray_name: 托盘点位名称.
+
+        返回:
+            Dict[str, object]或None, 成功时返回工站名、排号和列号, 失败时返回None.
+        """
+        tray_marker = "_tray_"
+        if tray_marker not in tray_name:
+            return None
+
+        station_name, index_text = tray_name.split(tray_marker, 1)
+        if index_text.count("-") != 1:
+            return None
+
+        row_text, col_text = index_text.split("-", 1)
+        if row_text.isdigit() is False or col_text.isdigit() is False:
+            return None
+
+        return {
+            "station_name": station_name,
+            "row_index": int(row_text),
+            "col_index": int(col_text),
+        }
+
+    def _is_valid_middle_tray_pose(self, pose: Optional[List[float]]) -> bool:
+        """
+        功能:
+            判断托盘位姿是否满足中间点位计算要求.
+
+        参数:
+            pose: 待校验的位姿列表.
+
+        返回:
+            bool, True表示位姿合法, False表示不合法.
+        """
+        if pose is None:
+            return False
+
+        if len(pose) != 6:
+            return False
+
+        for axis_value in pose:
+            if isinstance(axis_value, (int, float)) is False:
+                return False
+
+        return True
+
+    def _calculate_shortest_angle_delta(self, start_angle: float, end_angle: float) -> float:
+        """
+        功能:
+            计算两个姿态角之间的最短角度差.
+
+        参数:
+            start_angle: 起始角度, 单位rad.
+            end_angle: 结束角度, 单位rad.
+
+        返回:
+            float, 最短路径角度差, 单位rad.
+        """
+        angle_delta = end_angle - start_angle
+        normalized_delta = (angle_delta + math.pi) % (2 * math.pi) - math.pi
+
+        if normalized_delta == -math.pi and angle_delta > 0:
+            return math.pi
+
+        return normalized_delta
+
+    def _interpolate_middle_tray_pose(
+        self,
+        left_pose: List[float],
+        right_pose: List[float],
+        ratio: float,
+    ) -> List[float]:
+        """
+        功能:
+            根据左右端点位姿插值计算中间托盘位姿.
+
+        参数:
+            left_pose: 左端点位姿[x, y, z, rx, ry, rz].
+            right_pose: 右端点位姿[x, y, z, rx, ry, rz].
+            ratio: 目标点在左右端点之间的比例, 取值范围[0, 1].
+
+        返回:
+            List[float], 插值得到的目标位姿.
+        """
+        new_pose: List[float] = []
+
+        for axis_index in range(3):
+            interpolated_value = left_pose[axis_index] + (
+                right_pose[axis_index] - left_pose[axis_index]
+            ) * ratio
+            new_pose.append(float(interpolated_value))
+
+        for axis_index in range(3, 6):
+            shortest_delta = self._calculate_shortest_angle_delta(
+                left_pose[axis_index],
+                right_pose[axis_index],
+            )
+            interpolated_value = left_pose[axis_index] + shortest_delta * ratio
+            new_pose.append(float(interpolated_value))
+
+        return new_pose
+
+    def _collect_station_middle_tray_updates(
+        self,
+        station_name: str,
+    ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+        """
+        功能:
+            收集指定工站的中间托盘点位预览结果与跳过信息.
+
+        参数:
+            station_name: 工站名称, 如 shelf 或 synthesis_station.
+
+        返回:
+            Tuple[List[Dict[str, object]], List[Dict[str, object]]], 第1项为可更新点位列表, 第2项为跳过排信息.
+        """
+        tray_positions = self.position_manager.get_category("tray_position")
+        if tray_positions is None or len(tray_positions) == 0:
+            logger.warning("未找到托盘位置配置, 无法计算工站中间点位: %s", station_name)
+            return [], [{"row_index": None, "reason": "未找到托盘位置配置"}]
+
+        row_position_map: Dict[int, Dict[int, Dict[str, object]]] = {}
+        for tray_name, tray_config in tray_positions.items():
+            parsed_result = self._parse_middle_tray_name(tray_name)
+            if parsed_result is None:
+                continue
+
+            if parsed_result["station_name"] != station_name:
+                continue
+
+            row_index = parsed_result["row_index"]
+            col_index = parsed_result["col_index"]
+
+            if row_index not in row_position_map:
+                row_position_map[row_index] = {}
+
+            row_position_map[row_index][col_index] = {
+                "tray_name": tray_name,
+                "config": tray_config,
+            }
+
+        if len(row_position_map) == 0:
+            logger.info("工站 %s 没有符合命名规则的托盘点位", station_name)
+            return [], []
+
+        preview_items: List[Dict[str, object]] = []
+        skipped_rows: List[Dict[str, object]] = []
+
+        for row_index in sorted(row_position_map.keys()):
+            col_position_map = row_position_map[row_index]
+            sorted_col_indexes = sorted(col_position_map.keys())
+
+            if len(sorted_col_indexes) < 2:
+                skipped_rows.append({
+                    "row_index": row_index,
+                    "reason": "该排有效端点数量不足2个",
+                })
+                continue
+
+            left_col = sorted_col_indexes[0]
+            right_col = sorted_col_indexes[-1]
+            if right_col - left_col < 2:
+                skipped_rows.append({
+                    "row_index": row_index,
+                    "reason": "该排没有中间编号可计算",
+                })
+                continue
+
+            left_entry = col_position_map[left_col]
+            right_entry = col_position_map[right_col]
+            left_pose = left_entry["config"].get("pose")
+            right_pose = right_entry["config"].get("pose")
+            if self._is_valid_middle_tray_pose(left_pose) is False:
+                skipped_rows.append({
+                    "row_index": row_index,
+                    "reason": f"左端点位姿无效: {left_entry['tray_name']}",
+                })
+                continue
+            if self._is_valid_middle_tray_pose(right_pose) is False:
+                skipped_rows.append({
+                    "row_index": row_index,
+                    "reason": f"右端点位姿无效: {right_entry['tray_name']}",
+                })
+                continue
+
+            span = right_col - left_col
+            for target_col in range(left_col + 1, right_col):
+                ratio = (target_col - left_col) / span
+                target_tray_name = f"{station_name}_tray_{row_index}-{target_col}"
+                existing_entry = col_position_map.get(target_col)
+                exists = existing_entry is not None
+                old_pose = None
+                if existing_entry is not None:
+                    old_pose = existing_entry["config"].get("pose")
+
+                preview_items.append({
+                    "row_index": row_index,
+                    "left_tray": left_entry["tray_name"],
+                    "right_tray": right_entry["tray_name"],
+                    "target_tray": target_tray_name,
+                    "target_col": target_col,
+                    "ratio": ratio,
+                    "exists": exists,
+                    "old_pose": old_pose,
+                    "new_pose": self._interpolate_middle_tray_pose(left_pose, right_pose, ratio),
+                })
+
+        return preview_items, skipped_rows
+
+    def preview_station_middle_tray_updates(self, station_name: str) -> List[Dict[str, object]]:
+        """
+        功能:
+            预览指定工站的中间托盘点位自动计算结果.
+
+        参数:
+            station_name: 工站名称, 如 shelf 或 synthesis_station.
+
+        返回:
+            List[Dict[str, object]], 中间点位预览结果列表.
+        """
+        preview_items, skipped_rows = self._collect_station_middle_tray_updates(station_name)
+        if len(preview_items) == 0:
+            logger.info("工站 %s 没有可自动计算的中间托盘点位", station_name)
+
+        for skipped_row in skipped_rows:
+            logger.info(
+                "工站 %s 第%s排跳过: %s",
+                station_name,
+                skipped_row["row_index"],
+                skipped_row["reason"],
+            )
+
+        return preview_items
+
+    def apply_station_middle_tray_updates(self, station_name: str) -> Dict[str, object]:
+        """
+        功能:
+            将指定工站的中间托盘点位自动计算结果写入配置文件.
+
+        参数:
+            station_name: 工站名称, 如 shelf 或 synthesis_station.
+
+        返回:
+            Dict[str, object], 包含更新汇总信息.
+        """
+        preview_items, skipped_rows = self._collect_station_middle_tray_updates(station_name)
+        result_summary = {
+            "station_name": station_name,
+            "updated_count": 0,
+            "created_count": 0,
+            "skipped_rows": skipped_rows,
+            "affected_trays": [],
+        }
+
+        if len(preview_items) == 0:
+            logger.info("工站 %s 没有需要写入的中间托盘点位", station_name)
+            return result_summary
+
+        for preview_item in preview_items:
+            target_tray = preview_item["target_tray"]
+            new_pose = preview_item["new_pose"]
+            if preview_item["exists"] is True:
+                self.position_manager.save_tray_position(target_tray, new_pose)
+                result_summary["updated_count"] += 1
+            else:
+                self.position_manager.save_tray_position_from_template(
+                    target_tray,
+                    new_pose,
+                    preview_item["left_tray"],
+                )
+                result_summary["created_count"] += 1
+
+            result_summary["affected_trays"].append(target_tray)
+
+        logger.info(
+            "工站 %s 中间托盘点位写入完成, 更新%d个, 新增%d个",
+            station_name,
+            result_summary["updated_count"],
+            result_summary["created_count"],
+        )
+        return result_summary
+
+    def _get_tray_position_context(self, tray_name):
+        """
+        功能:
+            获取托盘点位配置和对应工站校准偏移.
+
+        参数:
+            tray_name: 托盘点位名称.
+
+        返回:
+            tuple, 第1项为点位配置, 第2项为工站偏移字典或None.
+        """
+        tray_position = self.position_manager.get_position('tray_position', tray_name)
+        if tray_position is None:
+            logger.error(f"未找到托盘位置配置: tray_position.{tray_name}")
+            return None, None
+
+        station_offset = None
+        if tray_name.startswith('agv') is False:
+            station_name = self._get_station_name_from_tray(tray_name)
+            if station_name is None:
+                logger.debug(f"托盘 {tray_name} 未匹配到工站偏移配置, 使用原始坐标")
+                return tray_position, None
+
+            station_offset = self.position_manager.get_calibration_offset(station_name)
+            if station_offset is None:
+                logger.debug(f"工站 {station_name} 未配置校准偏移, 使用原始坐标")
+            else:
+                logger.debug(
+                    "托盘 %s 使用工站 %s 偏移: x=%.6f, y=%.6f, z=%.6f, dx=%.6f, dy=%.6f, dz=%.6f",
+                    tray_name,
+                    station_name,
+                    station_offset['x'],
+                    station_offset['y'],
+                    station_offset['z'],
+                    station_offset['dx'],
+                    station_offset['dy'],
+                    station_offset['dz'],
+                )
+
+        return tray_position, station_offset
+
+    def _build_transition_pose(self, tray_position, station_offset=None, transition_z_offset=0):
+        """
+        功能:
+            生成托盘点位对应的过渡位姿.
+
+        参数:
+            tray_position: 托盘点位配置对象.
+            station_offset: 工站校准偏移, 为None表示不应用偏移.
+            transition_z_offset: 过渡位Z轴附加偏移, 单位mm.
+
+        返回:
+            list, 过渡位姿[x, y, z, rx, ry, rz].
+        """
+        grasp_pose = tray_position.pose.copy()
+        config_descend_z = tray_position.descend_z if hasattr(tray_position, 'descend_z') else -32
+        transition_pose = grasp_pose.copy()
+        transition_pose[2] = grasp_pose[2] - config_descend_z
+
+        if station_offset is not None:
+            transition_pose[0] += station_offset['x']
+            transition_pose[1] += station_offset['y']
+            transition_pose[2] += station_offset['z']
+            transition_pose[3] += station_offset['dx']
+            transition_pose[4] += station_offset['dy']
+            transition_pose[5] += station_offset['dz']
+
+        if transition_z_offset != 0:
+            transition_pose[2] += transition_z_offset
+
+        return transition_pose
+
+    def _move_to_put_transition_pose(self, tray_position, station_offset=None, transition_z_offset=0, block=True):
+        """
+        功能:
+            复用放托盘前半段动作, 运动到目标点前的过渡位并停住.
+
+        参数:
+            tray_position: 托盘点位配置对象.
+            station_offset: 工站校准偏移, 为None表示不应用偏移.
+            transition_z_offset: 过渡位Z轴附加偏移, 单位mm.
+            block: 是否阻塞等待动作完成.
+
+        返回:
+            bool, True表示到达过渡位, False表示失败.
+        """
+        if tray_position is None or tray_position.pose is None:
+            logger.error("托盘点位缺少有效pose, 无法运动到过渡位")
+            return False
+
+        logger.debug("步骤1: 运动到安全姿态")
+        result = self.arm_go_home(block=block)
+        logger.debug(f"安全姿态运动完成: {result}")
+
+        logger.debug("步骤2: 运动到过渡点")
+        transition_pose = self._build_transition_pose(
+            tray_position,
+            station_offset=station_offset,
+            transition_z_offset=transition_z_offset,
+        )
+        logger.debug(f"目标过渡点位姿: {transition_pose}")
+
+        current_pose = self.arm.get_tcp_pose()
+        target_pose_for_orientation = [
+            current_pose[0] / 1000.0,
+            current_pose[1] / 1000.0,
+            current_pose[2] / 1000.0,
+            transition_pose[3],
+            transition_pose[4],
+            transition_pose[5],
+        ]
+        current_joints = self.arm.get_joints_position()
+        target_joints = self.arm.calculate_inverse_kinematics(
+            pose=target_pose_for_orientation,
+            q_near=current_joints,
+        )
+        result = self.arm.move_to_joints(
+            joints_list=target_joints,
+            v=tray_position.speed,
+            a=tray_position.acceleration,
+            block=block,
+        )
+        logger.debug(f"姿态调整完成: {result}")
+
+        if transition_pose[1] < 450:
+            result = self.arm.move_linear(
+                pose=transition_pose,
+                v=tray_position.speed,
+                a=tray_position.acceleration,
+                block=block,
+            )
+            logger.debug(f"过渡点运动完成: {result}")
+            return True
+
+        current_pose = self.arm.get_tcp_pose()
+        intermediate_pose = [
+            transition_pose[0],
+            400,
+            transition_pose[2],
+            current_pose[3],
+            current_pose[4],
+            current_pose[5],
+        ]
+        result = self.arm.move_linear(
+            pose=intermediate_pose,
+            v=tray_position.speed,
+            a=tray_position.acceleration,
+            block=block,
+        )
+        logger.debug(f"运动到y=400完成: {result}")
+
+        result = self.arm.move_linear(
+            pose=transition_pose,
+            v=tray_position.speed * 0.2,
+            a=tray_position.acceleration,
+            block=block,
+        )
+        logger.debug(f"过渡点运动完成: {result}")
+        return True
+
+    def _finish_put_tray_from_current_pose(self, tray_position, lift_z=None, block=True):
+        """
+        功能:
+            从当前位置执行松爪, 提升和回零收尾动作.
+
+        参数:
+            tray_position: 托盘点位配置对象.
+            lift_z: 提升距离, 为None时使用点位配置.
+            block: 是否阻塞等待动作完成.
+
+        返回:
+            bool, True表示收尾成功, False表示失败.
+        """
+        if tray_position is None:
+            logger.error("托盘点位配置为空, 无法执行放托盘收尾")
+            return False
+
+        logger.debug("步骤4: 松开夹爪")
+        self.arm.open_gripper(block=True)
+        time.sleep(1)
+
+        if self.arm.is_gripper_opened() is False:
+            logger.error("夹爪未松开")
+            return False
+        logger.debug("夹爪松开成功")
+
+        logger.debug("步骤5: 提升")
+        if lift_z is None:
+            lift_z = tray_position.lift_z if hasattr(tray_position, 'lift_z') else 0.1
+        current_pose = self.arm.get_tcp_pose()
+        logger.debug(f"当前位置: {current_pose}, 提升距离: {lift_z}mm")
+        lift_pose = [
+            current_pose[0],
+            current_pose[1],
+            current_pose[2] + lift_z,
+            current_pose[3],
+            current_pose[4],
+            current_pose[5],
+        ]
+        result = self.arm.move_linear(
+            pose=lift_pose,
+            v=tray_position.speed * 0.5,
+            a=tray_position.acceleration,
+            block=block,
+        )
+        logger.debug(f"提升完成: {result}")
+
+        logger.debug("步骤6: 回到home位置")
+        result = self.arm_go_home(block=block)
+        logger.debug(f"回到home位置完成: {result}")
+        return True
+
+    def _build_saved_tray_pose(self, tray_name, current_pose):
+        """
+        功能:
+            将当前TCP位姿转换为配置文件中应保存的托盘位姿.
+
+        参数:
+            tray_name: 托盘点位名称.
+            current_pose: 当前TCP位姿[x, y, z, rx, ry, rz].
+
+        返回:
+            list, 应保存到配置文件的位姿.
+        """
+        if tray_name.startswith('agv'):
+            logger.info(f"AGV点位直接保存当前TCP位姿: {current_pose}")
+            return current_pose
+
+        station_name = self._get_station_name_from_tray(tray_name)
+        if station_name is None:
+            logger.warning(f"托盘 {tray_name} 未匹配到工站, 直接保存当前TCP位姿")
+            return current_pose
+
+        station_offset = self.position_manager.get_calibration_offset(station_name)
+        if station_offset is None:
+            logger.warning(f"工站 {station_name} 未校准, 直接保存当前TCP位姿")
+            return current_pose
+
+        pose_to_save = [
+            current_pose[0] - station_offset['x'],
+            current_pose[1] - station_offset['y'],
+            current_pose[2] - station_offset['z'],
+            current_pose[3] - station_offset['dx'],
+            current_pose[4] - station_offset['dy'],
+            current_pose[5] - station_offset['dz'],
+        ]
+        logger.info(f"工站 {station_name} 点位将保存去偏移后的TCP位姿: {pose_to_save}")
+        return pose_to_save
 
     def pick_tray(self, tray_name, descend_z=None, lift_z=None, transition_z_offset=0, block=True):
         """
@@ -1681,6 +2242,76 @@ class AGVController:
             bool, True表示放置成功, False表示放置失败
         """
         # 自动连接机械臂
+        if self._ensure_connected() is False:
+            logger.error("机械臂连接失败, 无法执行放托盘动作")
+            return False
+
+        tray_position, station_offset = self._get_tray_position_context(tray_name)
+        if tray_position is None:
+            return False
+
+        logger.info(f"开始执行放托盘流程: {tray_name}")
+
+        try:
+            transition_result = self._move_to_put_transition_pose(
+                tray_position,
+                station_offset=station_offset,
+                transition_z_offset=transition_z_offset,
+                block=block,
+            )
+            if transition_result is False:
+                return False
+
+            logger.debug("步骤3: 下探到抓取点位置")
+            target_grasp_pose = tray_position.pose.copy()
+            if station_offset is not None:
+                target_grasp_pose[0] += station_offset['x']
+                target_grasp_pose[1] += station_offset['y']
+                target_grasp_pose[2] += station_offset['z']
+                target_grasp_pose[3] += station_offset['dx']
+                target_grasp_pose[4] += station_offset['dy']
+                target_grasp_pose[5] += station_offset['dz']
+
+            if descend_z is not None:
+                current_pose = self.arm.get_tcp_pose()
+                target_grasp_pose[2] = current_pose[2] + descend_z
+
+            if transition_z_offset != 0:
+                target_grasp_pose[2] += transition_z_offset
+                logger.debug(f"应用物料高度偏移{transition_z_offset}mm到抓取点")
+
+            drop_z_offset = tray_position.drop_z if hasattr(tray_position, 'drop_z') else 0
+            if drop_z_offset > 0:
+                target_grasp_pose[2] += drop_z_offset
+                logger.debug(f"应用放置下落偏移{drop_z_offset}mm, 将在抓取点上方松开夹爪")
+
+            logger.debug(f"目标抓取点位姿: {target_grasp_pose}")
+            result = self.arm.move_linear(
+                pose=target_grasp_pose,
+                v=tray_position.speed * 0.1,
+                a=tray_position.acceleration,
+                block=block,
+            )
+            logger.debug(f"下探完成: {result}")
+
+            if drop_z_offset > 0:
+                time.sleep(2)  # 等待托盘自然落位稳定.
+
+            finish_result = self._finish_put_tray_from_current_pose(
+                tray_position,
+                lift_z=lift_z,
+                block=block,
+            )
+            if finish_result is False:
+                return False
+
+            logger.info(f"放托盘流程完成: {tray_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"放托盘流程失败: {e}")
+            return False
+
         if not self._ensure_connected():
             logger.error("机械臂连接失败, 无法执行放托盘动作")
             return False
@@ -1838,6 +2469,11 @@ class AGVController:
             if transition_z_offset != 0:
                 target_grasp_pose[2] += transition_z_offset
                 logger.debug(f"应用物料高度偏移{transition_z_offset}mm到抓取点")
+            # 应用放置下落偏移(在抓取点上方 drop_z mm处松开夹爪)
+            drop_z_offset = tray_position.drop_z if hasattr(tray_position, 'drop_z') else 0
+            if drop_z_offset > 0:
+                target_grasp_pose[2] += drop_z_offset
+                logger.debug(f"应用放置下落偏移{drop_z_offset}mm, 将在抓取点上方松开夹爪")
             logger.debug(f"目标抓取点位姿: {target_grasp_pose}")
             result = self.arm.move_linear(
                 pose=target_grasp_pose,
@@ -1847,12 +2483,14 @@ class AGVController:
             )
             logger.debug(f"下探完成: {result}")
 
+            if drop_z_offset > 0:
+                time.sleep(2)  # 有下落偏移时额外等待托盘落位稳定
+
             # 步骤4: 松开夹爪并检查是否松开
             logger.debug("步骤4: 松开夹爪")
             self.arm.open_gripper(block=True)
 
             # 等待夹爪稳定并检查状态
-            import time
             time.sleep(1)
 
             if not self.arm.is_gripper_opened():
@@ -2496,6 +3134,7 @@ class AGVController:
             logger.info(f"任务{idx}: {task['source_tray']} <-> {task['target_tray']}, 物料类型: {task.get('material_type', '未指定')}")
 
         completed_cycles = 0
+        charging_station_wait_seconds = 10
 
         try:
             for cycle in range(cycle_count):
@@ -2535,6 +3174,9 @@ class AGVController:
                 logger.info(f"\n步骤3: 反向转运(目标->源)")
                 logger.info(f"-" * 80)
                 # 构建反向任务列表(交换源和目标)
+                # 回到充电站后停留 10 秒, 再执行下一段循环测试.
+                logger.info(f"第{cycle + 1}轮回到充电站后等待{charging_station_wait_seconds}秒, 然后开始反向转运")
+                time.sleep(charging_station_wait_seconds)
                 reverse_tasks = []
                 for task in transfer_tasks:
                     reverse_task = {
@@ -2570,6 +3212,11 @@ class AGVController:
                 logger.info(f"第{cycle + 1}轮反向转运后成功到达充电站")
 
                 # 完成一轮循环
+                if cycle < cycle_count - 1:
+                    # 非最后一轮时, 从充电站再次出发前同样等待 10 秒.
+                    logger.info(f"第{cycle + 1}轮结束后回到充电站, 等待{charging_station_wait_seconds}秒再开始下一轮")
+                    time.sleep(charging_station_wait_seconds)
+
                 completed_cycles += 1
                 logger.info(f"\n{'=' * 80}")
                 logger.info(f"第 {cycle + 1}/{cycle_count} 轮循环完成")
@@ -2744,6 +3391,95 @@ class AGVController:
         logger.warning(f"无法确定托盘{tray_name}所属站点")
         return None
 
+    def prepare_loaded_tray_calibration(self, target_tray_name, source_tray_name="agv_tray_1", block=True):
+        """
+        功能:
+            为带托盘点位校准准备现场状态, 固定先夹取源托盘, 再运动到目标点前过渡位.
+
+        参数:
+            target_tray_name: 目标托盘点位名称.
+            source_tray_name: 源托盘点位名称, 默认agv_tray_1.
+            block: 是否阻塞等待动作完成.
+
+        返回:
+            bool, True表示准备完成, False表示失败.
+        """
+        logger.info(f"开始准备带托盘点位校准: {source_tray_name} -> {target_tray_name}")
+
+        pick_result = self.pick_tray(source_tray_name, block=block)
+        if pick_result is False:
+            logger.error(f"源托盘夹取失败, 无法继续带托盘点位校准: {source_tray_name}")
+            return False
+
+        tray_position, station_offset = self._get_tray_position_context(target_tray_name)
+        if tray_position is None:
+            logger.error(f"目标点位不存在, 保持当前夹持状态等待人工处理: {target_tray_name}")
+            return False
+
+        try:
+            move_result = self._move_to_put_transition_pose(
+                tray_position,
+                station_offset=station_offset,
+                transition_z_offset=0,
+                block=block,
+            )
+            if move_result is False:
+                logger.error(f"目标过渡位运动失败, 保持当前夹持状态等待人工处理: {target_tray_name}")
+                return False
+        except Exception as e:
+            logger.error(f"带托盘点位校准准备失败, 保持当前夹持状态等待人工处理: {e}")
+            return False
+
+        logger.info(f"带托盘点位校准准备完成, 已到达目标过渡位: {target_tray_name}")
+        return True
+
+    def get_calibrated_tray_pose_from_current_pose(self, tray_name, current_pose=None):
+        """
+        功能:
+            将当前TCP位姿转换为应保存的托盘点位姿态.
+
+        参数:
+            tray_name: 托盘点位名称.
+            current_pose: 当前TCP位姿, 为None时实时读取机械臂当前位姿.
+
+        返回:
+            list或None, 成功时返回应保存的位姿, 失败时返回None.
+        """
+        if current_pose is None:
+            if self._ensure_connected() is False:
+                logger.error("机械臂连接失败, 无法读取当前TCP位姿")
+                return None
+            current_pose = self.arm.get_tcp_pose()
+
+        logger.info(f"当前TCP位姿: {current_pose}")
+        return self._build_saved_tray_pose(tray_name, current_pose)
+
+    def complete_loaded_tray_calibration(self, target_tray_name, block=True):
+        """
+        功能:
+            完成带托盘点位校准的收尾动作, 在当前位置松爪, 提升并回零.
+
+        参数:
+            target_tray_name: 目标托盘点位名称.
+            block: 是否阻塞等待动作完成.
+
+        返回:
+            bool, True表示收尾成功, False表示失败.
+        """
+        tray_position, _ = self._get_tray_position_context(target_tray_name)
+        if tray_position is None:
+            return False
+
+        try:
+            return self._finish_put_tray_from_current_pose(
+                tray_position,
+                lift_z=None,
+                block=block,
+            )
+        except Exception as e:
+            logger.error(f"带托盘点位校准收尾失败: {e}")
+            return False
+
     def calibrate_tray_position(self, tray_name, block=True):
         """
         功能:
@@ -2858,23 +3594,23 @@ class AGVController:
     def calibrate_station_offset(self, block=True):
         """
         功能:
-            工站整体偏差矫正, 通过选择参考点位计算偏移量并应用到工站所有点位
+            工站整体偏差矫正, 通过选择参考点位计算偏移量并应用到工站所有点位.
+            支持空载或带托盘两种校准方式, 带托盘时固定从 agv_tray_1 夹取托盘.
             流程:
-            1. 选择要校准的工站(agv或当前所在工站)
-            2. 如果不是agv, 先进行视觉补偿并记录偏移量
-            3. 让用户选择一个参考点位
-            4. 询问是否运动到该点位
-            5. 用户微调坐标后按回车确认
-            6. 计算偏移量并询问是否应用到工站所有点位
+            1. 选择要校准的工站(agv或当前所在工站).
+            2. 如果不是agv, 先进行视觉补偿并记录偏移量.
+            3. 让用户选择一个参考点位.
+            4. 询问是否夹托盘进行校准.
+            5. 空载时可选择运动到该点位, 带托盘时自动从 agv_tray_1 夹取并运动到目标点前过渡位.
+            6. 用户微调坐标后按回车确认.
+            7. 计算偏移量并询问是否应用到工站所有点位.
         参数:
-            block: 是否阻塞执行, True表示等待完成
+            block: 是否阻塞执行, True表示等待完成.
         返回:
-            dict或None, 成功时返回偏移量字典{"x": float, "y": float, "z": float}, 失败时返回None
+            dict或None, 成功时返回偏移量字典{"x": float, "y": float, "z": float, "rx": float, "ry": float, "rz": float}, 失败时返回None.
         """
-        import yaml
-
         # 自动连接机械臂
-        if not self._ensure_connected():
+        if self._ensure_connected() is False:
             logger.error("机械臂连接失败, 无法执行工站偏差矫正")
             return None
 
@@ -2898,7 +3634,7 @@ class AGVController:
             print(f"  {idx}. {station}")
 
         station_choice = input(f"请输入工站编号 (1-{len(station_options)}): ").strip()
-        if not station_choice.isdigit():
+        if station_choice.isdigit() is False:
             logger.error("输入无效")
             return None
 
@@ -2948,7 +3684,7 @@ class AGVController:
             print(f"  {idx}. {tray_name} - {description}")
 
         tray_choice = input(f"请选择参考点位 (1-{len(station_tray_list)}): ").strip()
-        if not tray_choice.isdigit():
+        if tray_choice.isdigit() is False:
             logger.error("输入无效")
             return None
 
@@ -2969,139 +3705,156 @@ class AGVController:
         original_pose = tray_position.pose.copy()
         logger.info(f"原始TCP位姿(配置文件): {original_pose}")
 
-        # 步骤4: 询问是否运动到该点位
-        print(f"\n是否运动到点位 {selected_tray}?")
-        move_confirm = input("确认运动? (y/n): ").strip().lower()
+        print("\n是否夹托盘进行校准?")
+        loaded_confirm = input("确认夹取 agv_tray_1 的托盘? (y/n): ").strip().lower()
+        use_loaded_tray = loaded_confirm == "y"
+        entered_manual_stage = False
 
-        if move_confirm == 'y':
-            logger.info(f"运动到点位 {selected_tray}...")
-            result = self.move_to_grasp_position(selected_tray, block=block)
-            if not result:
-                logger.error("运动到点位失败")
-                return None
-            logger.info("已到达点位")
+        try:
+            if use_loaded_tray is True:
+                logger.info(f"开始带托盘工站偏差矫正: agv_tray_1 -> {selected_tray}")
+                result = self.prepare_loaded_tray_calibration(
+                    selected_tray,
+                    source_tray_name="agv_tray_1",
+                    block=block,
+                )
+                if result is False:
+                    logger.error("带托盘参考点准备失败, 当前可能仍保持夹持状态, 请人工处理")
+                    return None
 
-        # 步骤5: 让用户微调坐标
-        print("\n请手动微调机械臂位置到正确位置")
-        print("提示: 可以使用示教器或其他方式调整机械臂位置")
-        print("微调完成后, 按回车键继续...")
-        input()
+                entered_manual_stage = True
+                logger.info(f"已带托盘到达参考点前过渡位: {selected_tray}")
+            else:
+                print(f"\n是否运动到点位 {selected_tray}?")
+                move_confirm = input("确认运动? (y/n): ").strip().lower()
 
-        # 获取当前TCP位姿
-        current_pose = self.arm.get_tcp_pose()
-        logger.info(f"当前TCP位姿(微调后): {current_pose}")
+                if move_confirm == "y":
+                    logger.info(f"运动到点位 {selected_tray}...")
+                    result = self.move_to_grasp_position(selected_tray, block=block)
+                    if not result:
+                        logger.error("运动到点位失败")
+                        return None
+                    logger.info("已到达点位")
 
-        # 步骤6: 计算偏移量
-        # 对于非agv工站, 需要考虑视觉补偿偏移量
-        # 原始位姿 + 视觉偏移 = 期望位姿, 实际位姿 = 当前位姿
-        # 整体偏移 = 当前位姿 - (原始位姿 + 视觉偏移)
-        if selected_station != "agv" and vision_offset is not None:
-            # 计算期望位姿(原始位姿 + 视觉偏移)
-            expected_pose = [
-                original_pose[0] + vision_offset['x'],
-                original_pose[1] + vision_offset['y'],
-                original_pose[2] + vision_offset['z'],
-                original_pose[3] + vision_offset['dx'],
-                original_pose[4] + vision_offset['dy'],
-                original_pose[5] + vision_offset['dz']
-            ]
-            logger.info(f"期望TCP位姿(原始+视觉偏移): {expected_pose}")
+                entered_manual_stage = True
 
-            # 计算整体偏移量
-            offset_x = current_pose[0] - expected_pose[0]
-            offset_y = current_pose[1] - expected_pose[1]
-            offset_z = current_pose[2] - expected_pose[2]
-            offset_rx = current_pose[3] - expected_pose[3]
-            offset_ry = current_pose[4] - expected_pose[4]
-            offset_rz = current_pose[5] - expected_pose[5]
-        else:
-            # agv工站或无视觉偏移, 直接计算偏移量
-            offset_x = current_pose[0] - original_pose[0]
-            offset_y = current_pose[1] - original_pose[1]
-            offset_z = current_pose[2] - original_pose[2]
-            offset_rx = current_pose[3] - original_pose[3]
-            offset_ry = current_pose[4] - original_pose[4]
-            offset_rz = current_pose[5] - original_pose[5]
+            # 用户在参考点附近手动完成最终对位.
+            print("\n请手动微调机械臂位置到正确位置")
+            print("提示: 可以使用示教器或其他方式调整机械臂位置")
+            print("微调完成后, 按回车键继续...")
+            input()
 
-        print(f"\n{'=' * 60}")
-        print("偏移量计算结果:")
-        print(f"{'=' * 60}")
-        print(f"原始TCP位姿(配置文件): x={original_pose[0]:.3f}, y={original_pose[1]:.3f}, z={original_pose[2]:.3f}")
-        print(f"                       rx={original_pose[3]:.6f}, ry={original_pose[4]:.6f}, rz={original_pose[5]:.6f}")
-        print(f"当前TCP位姿(微调后):   x={current_pose[0]:.3f}, y={current_pose[1]:.3f}, z={current_pose[2]:.3f}")
-        print(f"                       rx={current_pose[3]:.6f}, ry={current_pose[4]:.6f}, rz={current_pose[5]:.6f}")
-        print(f"计算得到的偏移量:      dx={offset_x:.3f}, dy={offset_y:.3f}, dz={offset_z:.3f}")
-        print(f"                       drx={offset_rx:.6f}, dry={offset_ry:.6f}, drz={offset_rz:.6f}")
+            current_pose = self.arm.get_tcp_pose()
+            logger.info(f"当前TCP位姿(微调后): {current_pose}")
 
-        offset_result = {
-            "x": offset_x,
-            "y": offset_y,
-            "z": offset_z,
-            "rx": offset_rx,
-            "ry": offset_ry,
-            "rz": offset_rz
-        }
+            # 非AGV工站完成视觉补偿后, 需先叠加视觉偏移再计算整体偏差.
+            if selected_station != "agv" and vision_offset is not None:
+                expected_pose = [
+                    original_pose[0] + vision_offset["x"],
+                    original_pose[1] + vision_offset["y"],
+                    original_pose[2] + vision_offset["z"],
+                    original_pose[3] + vision_offset["dx"],
+                    original_pose[4] + vision_offset["dy"],
+                    original_pose[5] + vision_offset["dz"],
+                ]
+                logger.info(f"期望TCP位姿(原始+视觉偏移): {expected_pose}")
 
-        # 步骤7: 询问是否应用到工站所有点位
-        print(f"\n是否将此偏移量应用到 {selected_station} 工站的所有点位?")
-        print(f"将影响以下 {len(station_tray_list)} 个点位:")
-        for tray_name in station_tray_list:
-            print(f"  - {tray_name}")
+                offset_x = current_pose[0] - expected_pose[0]
+                offset_y = current_pose[1] - expected_pose[1]
+                offset_z = current_pose[2] - expected_pose[2]
+                offset_rx = current_pose[3] - expected_pose[3]
+                offset_ry = current_pose[4] - expected_pose[4]
+                offset_rz = current_pose[5] - expected_pose[5]
+            else:
+                offset_x = current_pose[0] - original_pose[0]
+                offset_y = current_pose[1] - original_pose[1]
+                offset_z = current_pose[2] - original_pose[2]
+                offset_rx = current_pose[3] - original_pose[3]
+                offset_ry = current_pose[4] - original_pose[4]
+                offset_rz = current_pose[5] - original_pose[5]
 
-        apply_confirm = input("确认应用偏移量? (y/n): ").strip().lower()
+            print(f"\n{'=' * 60}")
+            print("偏移量计算结果:")
+            print(f"{'=' * 60}")
+            print(f"原始TCP位姿(配置文件): x={original_pose[0]:.3f}, y={original_pose[1]:.3f}, z={original_pose[2]:.3f}")
+            print(f"                       rx={original_pose[3]:.6f}, ry={original_pose[4]:.6f}, rz={original_pose[5]:.6f}")
+            print(f"当前TCP位姿(微调后):   x={current_pose[0]:.3f}, y={current_pose[1]:.3f}, z={current_pose[2]:.3f}")
+            print(f"                       rx={current_pose[3]:.6f}, ry={current_pose[4]:.6f}, rz={current_pose[5]:.6f}")
+            print(f"计算得到的偏移量:      dx={offset_x:.3f}, dy={offset_y:.3f}, dz={offset_z:.3f}")
+            print(f"                       drx={offset_rx:.6f}, dry={offset_ry:.6f}, drz={offset_rz:.6f}")
 
-        if apply_confirm != 'y':
-            logger.info("用户取消应用偏移量")
-            print(f"\n偏移量未应用, 但已计算:")
+            offset_result = {
+                "x": offset_x,
+                "y": offset_y,
+                "z": offset_z,
+                "rx": offset_rx,
+                "ry": offset_ry,
+                "rz": offset_rz,
+            }
+
+            print(f"\n是否将此偏移量应用到 {selected_station} 工站的所有点位?")
+            print(f"将影响以下 {len(station_tray_list)} 个点位:")
+            for tray_name in station_tray_list:
+                print(f"  - {tray_name}")
+
+            apply_confirm = input("确认应用偏移量? (y/n): ").strip().lower()
+
+            if apply_confirm != "y":
+                logger.info("用户取消应用偏移量")
+                print("\n偏移量未应用, 但已计算:")
+                print(f"  位置: dx={offset_x:.3f}, dy={offset_y:.3f}, dz={offset_z:.3f}")
+                print(f"  姿态: drx={offset_rx:.6f}, dry={offset_ry:.6f}, drz={offset_rz:.6f}")
+                return offset_result
+
+            logger.info(f"开始应用偏移量到 {selected_station} 工站的所有点位...")
+
+            success_count = 0
+            fail_count = 0
+
+            for tray_name in station_tray_list:
+                try:
+                    tray_pos = self.position_manager.get_position("tray_position", tray_name)
+                    if tray_pos is None or tray_pos.pose is None:
+                        logger.warning(f"点位 {tray_name} 没有有效的位姿数据, 跳过")
+                        fail_count += 1
+                        continue
+
+                    old_pose = tray_pos.pose.copy()
+                    new_pose = [
+                        old_pose[0] + offset_x,
+                        old_pose[1] + offset_y,
+                        old_pose[2] + offset_z,
+                        old_pose[3] + offset_rx,
+                        old_pose[4] + offset_ry,
+                        old_pose[5] + offset_rz,
+                    ]
+
+                    self.position_manager.save_tray_position(tray_name, new_pose)
+                    logger.info(f"点位 {tray_name} 已更新: x={old_pose[0]:.3f}->{new_pose[0]:.3f}, y={old_pose[1]:.3f}->{new_pose[1]:.3f}, z={old_pose[2]:.3f}->{new_pose[2]:.3f}")
+                    success_count += 1
+
+                except Exception as e:
+                    logger.error(f"更新点位 {tray_name} 失败: {e}")
+                    fail_count += 1
+
+            print(f"\n{'=' * 60}")
+            print("偏移量应用完成!")
+            print(f"{'=' * 60}")
+            print(f"成功更新: {success_count} 个点位")
+            print(f"更新失败: {fail_count} 个点位")
+            print("应用的偏移量:")
             print(f"  位置: dx={offset_x:.3f}, dy={offset_y:.3f}, dz={offset_z:.3f}")
             print(f"  姿态: drx={offset_rx:.6f}, dry={offset_ry:.6f}, drz={offset_rz:.6f}")
+
             return offset_result
-
-        # 应用偏移量到所有点位
-        logger.info(f"开始应用偏移量到 {selected_station} 工站的所有点位...")
-
-        success_count = 0
-        fail_count = 0
-
-        for tray_name in station_tray_list:
-            try:
-                # 获取当前点位配置
-                tray_pos = self.position_manager.get_position('tray_position', tray_name)
-                if tray_pos is None or tray_pos.pose is None:
-                    logger.warning(f"点位 {tray_name} 没有有效的位姿数据, 跳过")
-                    fail_count += 1
-                    continue
-
-                # 计算新的位姿(原始位姿 + 偏移量)
-                old_pose = tray_pos.pose.copy()
-                new_pose = [
-                    old_pose[0] + offset_x,
-                    old_pose[1] + offset_y,
-                    old_pose[2] + offset_z,
-                    old_pose[3] + offset_rx,
-                    old_pose[4] + offset_ry,
-                    old_pose[5] + offset_rz
-                ]
-
-                # 保存新的位姿
-                self.position_manager.save_tray_position(tray_name, new_pose)
-                logger.info(f"点位 {tray_name} 已更新: x={old_pose[0]:.3f}->{new_pose[0]:.3f}, y={old_pose[1]:.3f}->{new_pose[1]:.3f}, z={old_pose[2]:.3f}->{new_pose[2]:.3f}")
-                success_count += 1
-
-            except Exception as e:
-                logger.error(f"更新点位 {tray_name} 失败: {e}")
-                fail_count += 1
-
-        print(f"\n{'=' * 60}")
-        print("偏移量应用完成!")
-        print(f"{'=' * 60}")
-        print(f"成功更新: {success_count} 个点位")
-        print(f"更新失败: {fail_count} 个点位")
-        print(f"应用的偏移量:")
-        print(f"  位置: dx={offset_x:.3f}, dy={offset_y:.3f}, dz={offset_z:.3f}")
-        print(f"  姿态: drx={offset_rx:.6f}, dry={offset_ry:.6f}, drz={offset_rz:.6f}")
-
-        return offset_result
+        finally:
+            if use_loaded_tray is True and entered_manual_stage is True:
+                cleanup_result = self.complete_loaded_tray_calibration(
+                    selected_tray,
+                    block=block,
+                )
+                if cleanup_result is False:
+                    logger.error("带托盘工站偏差矫正收尾失败, 请人工处理")
 
     def test_all_positions(self, material_type, block=True):
         """

@@ -133,6 +133,7 @@ def _print_top_menu(current_station_display: str) -> None:
     print("31. 查看/管理货架状态")
     print("32. PP5/CP6自动充电检查(单次)")
     print("33. 启动PP5/CP6自动充电循环")
+    print("34. 工站中间托盘点位自动计算")
     print("0. 退出程序")
     print("=" * 60)
 
@@ -191,6 +192,132 @@ def _get_filtered_tray_context(
         raise ValueError("当前站点没有可用的托盘位置")
 
     return tray_positions, filtered_tray_list
+
+
+def _get_current_station_target_tray_context(
+    controller: AGVController,
+) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+    """
+    功能:
+        获取当前工站下可用于带托盘校准的目标点位列表, 只保留当前工站的非AGV托盘点位.
+
+    参数:
+        controller: AGVController 实例.
+
+    返回:
+        Tuple[Dict[str, Dict[str, Any]], List[str]], 托盘配置映射与目标点位列表.
+    """
+    tray_positions = controller.position_manager.get_category("tray_position")
+    if not tray_positions:
+        raise ValueError("未找到托盘位置配置")
+
+    if controller.current_station is None or controller.current_station not in STATION_POSITIONS:
+        raise ValueError("当前工站不可用")
+
+    station_name = STATION_POSITIONS[controller.current_station]["name"]
+    target_tray_list: List[str] = []
+    for tray_name in tray_positions.keys():
+        if tray_name.startswith(station_name):
+            target_tray_list.append(tray_name)
+
+    if len(target_tray_list) == 0:
+        raise ValueError("当前工站没有可校准的目标点位")
+
+    return tray_positions, target_tray_list
+
+
+def _extract_middle_tray_station_name(tray_name: str) -> Optional[str]:
+    """
+    功能:
+        从工站托盘点位名称中提取工站名称.
+
+    参数:
+        tray_name: 托盘点位名称.
+
+    返回:
+        Optional[str], 成功时返回工站名称, 失败时返回None.
+    """
+    tray_marker = "_tray_"
+    if tray_marker not in tray_name:
+        return None
+
+    station_name, index_text = tray_name.split(tray_marker, 1)
+    if index_text.count("-") != 1:
+        return None
+
+    row_text, col_text = index_text.split("-", 1)
+    if row_text.isdigit() is False or col_text.isdigit() is False:
+        return None
+
+    return station_name
+
+
+def _get_middle_tray_station_preview_context(
+    controller: AGVController,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    功能:
+        获取所有可自动计算中间托盘点位的工站预览结果.
+
+    参数:
+        controller: AGVController 实例.
+
+    返回:
+        Dict[str, List[Dict[str, Any]]], 键为工站名称, 值为对应预览列表.
+    """
+    tray_positions = controller.position_manager.get_category("tray_position")
+    if tray_positions is None or len(tray_positions) == 0:
+        raise ValueError("未找到托盘位置配置")
+
+    station_preview_map: Dict[str, List[Dict[str, Any]]] = {}
+    seen_station_names = set()
+
+    for tray_name in sorted(tray_positions.keys()):
+        station_name = _extract_middle_tray_station_name(tray_name)
+        if station_name is None:
+            continue
+        if station_name in seen_station_names:
+            continue
+
+        seen_station_names.add(station_name)
+        preview_items = controller.preview_station_middle_tray_updates(station_name)
+        if len(preview_items) > 0:
+            station_preview_map[station_name] = preview_items
+
+    if len(station_preview_map) == 0:
+        raise ValueError("当前没有可自动计算中间托盘点位的工站")
+
+    return station_preview_map
+
+
+def _print_middle_tray_update_preview(preview_items: List[Dict[str, Any]]) -> None:
+    """
+    功能:
+        按排展示工站中间托盘点位自动计算预览.
+
+    参数:
+        preview_items: 预览结果列表.
+
+    返回:
+        无.
+    """
+    current_row_index = None
+
+    for preview_item in preview_items:
+        row_index = preview_item["row_index"]
+        if row_index != current_row_index:
+            current_row_index = row_index
+            print(f"\n第{row_index}排, 端点范围: {preview_item['left_tray']} -> {preview_item['right_tray']}")
+
+        action_text = "更新" if preview_item["exists"] is True else "新增"
+        old_pose = preview_item["old_pose"]
+        old_pose_text = old_pose if old_pose is not None else "无"
+        print(
+            f"  - {preview_item['target_tray']} [{action_text}], "
+            f"比例={preview_item['ratio']:.3f}"
+        )
+        print(f"      原位姿: {old_pose_text}")
+        print(f"      新位姿: {preview_item['new_pose']}")
 
 
 def _print_tray_list(
@@ -736,7 +863,7 @@ def _handle_choice_13_to_24(
 ) -> Tuple[bool, str]:
     """
     功能:
-        处理 13-24 的点位, 导航, 转运和测试相关菜单动作.
+        处理 13-24 与 34-35 的点位, 导航, 转运和测试相关菜单动作.
     参数:
         controller: AGVController 实例.
         choice: 顶层菜单选项.
@@ -1110,32 +1237,135 @@ def _handle_choice_13_to_24(
 
     if choice == "23":
         print("\n--- 托盘点位校准 ---")
-        print("说明: 选择点位后运动到抓取点位, 手动矫正后确认, 保存当前TCP位姿到配置文件")
-        print("      对于AGV上的点位, 直接保存当前TCP位姿")
-        print("      对于非AGV点位, 会减去站点校准偏移量后存储原始TCP位姿")
+        print("说明: 支持空载校准和带托盘校准")
+        print("      空载时, 运动到抓取点位, 手动矫正后确认, 保存当前TCP位姿到配置文件")
+        print("      带托盘时, 固定从 agv_tray_1 夹取托盘, 运动到目标点前过渡位后暂停")
         try:
-            tray_positions, tray_list = _get_filtered_tray_context(controller)
-            _print_tray_list(tray_positions, tray_list, title="\n可用的托盘位置:")
-            tray_index = _prompt_index_choice(
-                f"请输入托盘编号 (1-{len(tray_list)}): ",
-                len(tray_list),
-            )
+            loaded_confirm = input("是否夹托盘校准? (y/n): ").strip().lower()
+            use_loaded_tray = loaded_confirm == "y"
+
+            if use_loaded_tray is True:
+                if controller.current_station is None:
+                    print("提示: 当前工站未知, 正在查询当前工站...")
+                    station_info = controller.query_current_station()
+                    if station_info is None:
+                        print("错误: 查询当前工站失败, 无法执行带托盘点位校准")
+                        return True, current_station_display
+
+                    controller.current_station = station_info["station_id"]
+                    current_station_display = (
+                        f"{station_info['station_id']} - "
+                        f"{station_info['station_name']} "
+                        f"({station_info['description']})"
+                    )
+                    print(f"当前工站: {current_station_display}")
+
+                tray_positions, tray_list = _get_current_station_target_tray_context(controller)
+                _print_tray_list(
+                    tray_positions,
+                    tray_list,
+                    title="\n当前工站可校准的目标点位:",
+                )
+                tray_index = _prompt_index_choice(
+                    f"请选择目标点位 (1-{len(tray_list)}): ",
+                    len(tray_list),
+                )
+            else:
+                tray_positions, tray_list = _get_filtered_tray_context(controller)
+                _print_tray_list(tray_positions, tray_list, title="\n可用的托盘位置:")
+                tray_index = _prompt_index_choice(
+                    f"请输入托盘编号 (1-{len(tray_list)}): ",
+                    len(tray_list),
+                )
+
             if tray_index is None:
                 return True, current_station_display
 
             selected_tray = tray_list[tray_index]
             print(f"\n开始执行托盘点位校准: {selected_tray}")
-            print("警告: 机械臂将运动到抓取点位, 请确保周围安全!")
+            if use_loaded_tray is True:
+                print("说明: 程序将先从 agv_tray_1 夹取托盘, 再运动到目标点前过渡位")
+                print("警告: 机械臂将执行夹取和运动动作, 请确认周围安全")
+            else:
+                print("警告: 机械臂将运动到抓取点位, 请确保周围安全!")
+
             confirm = input("确认执行? (y/n): ").strip().lower()
             if confirm != "y":
                 print("已取消")
                 return True, current_station_display
 
-            print("\n步骤1: 运动到抓取点位...")
             controller.position_manager.reload()
             logger.info("点位配置已重新加载")
+
+            if use_loaded_tray is True:
+                print("\n步骤1: 从 agv_tray_1 夹取托盘并运动到目标点前过渡位...")
+                result = controller.prepare_loaded_tray_calibration(
+                    selected_tray,
+                    source_tray_name="agv_tray_1",
+                    block=True,
+                )
+                if result is False:
+                    print("错误: 人工调整前流程失败, 当前可能仍保持夹持状态, 请人工处理")
+                    return True, current_station_display
+
+                print("已到达目标点前过渡位")
+                print("\n步骤2: 请通过控制器手动将托盘移动到目标点位")
+                print("      调整完成后按回车记录当前点位...")
+                input()
+
+                save_succeeded = False
+                try:
+                    print("\n步骤3: 获取当前TCP位姿...")
+                    current_pose = controller.arm.get_tcp_pose()
+                    print(f"当前TCP位姿: {current_pose}")
+
+                    pose_to_save = controller.get_calibrated_tray_pose_from_current_pose(
+                        selected_tray,
+                        current_pose=current_pose,
+                    )
+                    if pose_to_save is None:
+                        print("错误: 计算待保存点位失败")
+                    else:
+                        original_tray_position = controller.position_manager.get_position(
+                            "tray_position",
+                            selected_tray,
+                        )
+                        if original_tray_position is not None and original_tray_position.pose is not None:
+                            print(f"\n原先存储的TCP位姿: {original_tray_position.pose}")
+                        else:
+                            print("\n原先存储的TCP位姿: 无")
+                        print(f"将要保存的TCP位姿: {pose_to_save}")
+
+                        save_confirm = input("确认保存到配置文件? (y/n): ").strip().lower()
+                        if save_confirm == "y":
+                            save_succeeded = controller.save_calibrated_tray_position(
+                                selected_tray,
+                                pose_to_save,
+                            )
+                            if save_succeeded:
+                                print(f"\n托盘位置 {selected_tray} 已成功保存到配置文件")
+                            else:
+                                print("错误: 保存配置文件失败")
+                        else:
+                            print("已取消保存, 将继续执行松爪和收尾动作")
+                finally:
+                    print("\n步骤4: 松开夹爪并执行收尾动作...")
+                    cleanup_result = controller.complete_loaded_tray_calibration(
+                        selected_tray,
+                        block=True,
+                    )
+                    if cleanup_result:
+                        print("收尾动作完成")
+                    else:
+                        print("错误: 松爪或回零失败, 请人工处理")
+
+                if save_succeeded:
+                    print("带托盘点位校准完成")
+                return True, current_station_display
+
+            print("\n步骤1: 运动到抓取点位...")
             result = controller.move_to_grasp_position(selected_tray, block=True)
-            if not result:
+            if result is False:
                 print("运动到抓取点位失败")
                 return True, current_station_display
 
@@ -1306,6 +1536,73 @@ def _handle_choice_13_to_24(
             if total_count > 0:
                 success_rate = len(results["success"]) / total_count * 100
                 print(f"\n测试通过率: {success_rate:.1f}%")
+        except Exception as exc:
+            _report_exception(exc)
+        return True, current_station_display
+
+    if choice == "34":
+        print("\n--- 工站中间托盘点位自动计算 ---")
+        print("说明: 按每一排现有最左和最右编号自动等分中间托盘点位")
+        print("说明: 已有中间点位会重算覆盖, 缺失点位会自动新增")
+        try:
+            controller.position_manager.reload()
+            logger.info("点位配置已重新加载")
+
+            station_preview_map = _get_middle_tray_station_preview_context(controller)
+            station_list = sorted(station_preview_map.keys())
+
+            print("\n可自动计算的工站:")
+            for idx, station_name in enumerate(station_list, 1):
+                preview_items = station_preview_map[station_name]
+                row_count = len({item["row_index"] for item in preview_items})
+                print(
+                    f"  {idx}. {station_name} - "
+                    f"{row_count}排, {len(preview_items)}个中间点位"
+                )
+
+            station_index = _prompt_index_choice(
+                f"请选择工站 (1-{len(station_list)}): ",
+                len(station_list),
+            )
+            if station_index is None:
+                return True, current_station_display
+
+            selected_station = station_list[station_index]
+            preview_items = controller.preview_station_middle_tray_updates(selected_station)
+            if len(preview_items) == 0:
+                print("错误: 当前工站没有可自动计算的中间点位")
+                return True, current_station_display
+
+            print(f"\n工站 {selected_station} 的自动计算预览:")
+            _print_middle_tray_update_preview(preview_items)
+
+            print("\n警告: 此操作会修改配置文件中的托盘点位数据")
+            confirm = input("确认写入配置文件? (y/n): ").strip().lower()
+            if confirm != "y":
+                print("已取消")
+                return True, current_station_display
+
+            result = controller.apply_station_middle_tray_updates(selected_station)
+            updated_count = result["updated_count"]
+            created_count = result["created_count"]
+            total_count = updated_count + created_count
+
+            if total_count == 0:
+                print("没有需要写入的中间点位")
+            else:
+                print("\n自动计算完成!")
+                print(f"工站: {result['station_name']}")
+                print(f"更新点位: {updated_count}")
+                print(f"新增点位: {created_count}")
+                print("影响点位:")
+                for tray_name in result["affected_trays"]:
+                    print(f"  - {tray_name}")
+
+            skipped_rows = result["skipped_rows"]
+            if len(skipped_rows) > 0:
+                print("\n跳过的排:")
+                for skipped_row in skipped_rows:
+                    print(f"  - 第{skipped_row['row_index']}排: {skipped_row['reason']}")
         except Exception as exc:
             _report_exception(exc)
         return True, current_station_display
@@ -1647,7 +1944,7 @@ def interactive() -> None:
 
     while True:
         _print_top_menu(current_station_display)
-        choice = input("请输入选项 (0-33): ").strip()
+        choice = input("请输入选项 (0-34): ").strip()
 
         if choice == "0":
             print("\n正在退出...")

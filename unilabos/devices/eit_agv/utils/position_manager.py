@@ -5,6 +5,7 @@
     提供统一的坐标访问接口, 支持位姿、关节角度、轨迹等多种类型
 """
 
+import copy
 import yaml
 from ruamel.yaml import YAML
 import logging
@@ -39,6 +40,7 @@ class PositionData:
         self.description = data.get('description', '')  # 描述信息
         self.descend_z = data.get('descend_z')  # 下探距离, 单位mm
         self.lift_z = data.get('lift_z')  # 提升距离, 单位mm
+        self.drop_z = data.get('drop_z', 0)  # 放置下落距离, 单位mm
 
     def has_pose(self) -> bool:
         """
@@ -645,73 +647,114 @@ class PositionManager:
             pose: TCP位姿列表[x, y, z, rx, ry, rz], 位置单位mm, 姿态单位rad
             description: 位置描述, 为None时保留原有描述
         """
+        self._save_tray_position_internal(
+            tray_name=tray_name,
+            pose=pose,
+            description=description,
+            template_tray_name=None,
+        )
+
+    def save_tray_position_from_template(
+        self,
+        tray_name: str,
+        pose: list,
+        template_tray_name: str,
+        description: str = None,
+    ) -> None:
+        """
+        功能:
+            基于模板托盘点位创建新托盘点位并保存位姿到配置文件.
+
+        参数:
+            tray_name: 新托盘位置名称, 如"shelf_tray_1-5".
+            pose: TCP位姿列表[x, y, z, rx, ry, rz], 位置单位mm, 姿态单位rad.
+            template_tray_name: 模板托盘位置名称, 用于继承非pose字段.
+            description: 位置描述, 为None时使用 tray_name 的固定描述.
+        """
+        self._save_tray_position_internal(
+            tray_name=tray_name,
+            pose=pose,
+            description=description,
+            template_tray_name=template_tray_name,
+        )
+
+    def _save_tray_position_internal(
+        self,
+        tray_name: str,
+        pose: list,
+        description: str = None,
+        template_tray_name: Optional[str] = None,
+    ) -> None:
+        """
+        功能:
+            保存或创建托盘点位到配置文件, 支持按模板继承非pose字段.
+
+        参数:
+            tray_name: 托盘位置名称.
+            pose: TCP位姿列表[x, y, z, rx, ry, rz], 位置单位mm, 姿态单位rad.
+            description: 位置描述.
+            template_tray_name: 模板托盘位置名称, 为None时按默认字段创建.
+        """
         try:
             from ruamel.yaml.comments import CommentedSeq, CommentedMap
             from ruamel.yaml.tokens import CommentToken
             from ruamel.yaml.error import CommentMark
 
-            # 使用ruamel.yaml保留注释和格式
             yaml_handler = YAML()
             yaml_handler.preserve_quotes = True
             yaml_handler.default_flow_style = False
             yaml_handler.width = 4096  # 设置足够大的行宽, 避免自动换行
 
-            # 读取当前配置文件
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 config = yaml_handler.load(f)
 
             if config is None:
                 config = {}
 
-            # 确保存在tray_position节点
             if 'tray_position' not in config:
                 config['tray_position'] = {}
 
-            # 创建带注释的pose序列, 使用纯Python列表
             pose_list = [float(v) for v in pose]
             pose_seq = CommentedSeq(pose_list)
             pose_seq.fa.set_flow_style()
             pose_seq.fa.set_block_style()
-            # 使用安全的方式添加行尾注释
             pose_comments = ['x, 单位mm', 'y, 单位mm', 'z, 单位mm', 'rx, 单位rad', 'ry, 单位rad', 'rz, 单位rad']
             for i, comment in enumerate(pose_comments):
-                # 直接设置注释, 避免yaml_add_eol_comment的迭代问题
                 pose_seq.ca.items[i] = [None, None, CommentToken(f'  # {comment}\n', CommentMark(0), None), None]
 
-            # 检查托盘位置是否存在
-            if tray_name not in config['tray_position']:
-                # 新建托盘位置配置
-                tray_config = CommentedMap()
-                tray_config['pose'] = pose_seq
-                tray_config['descend_z'] = -32
-                tray_config['lift_z'] = 20
-                tray_config['speed'] = 0.6
-                tray_config['acceleration'] = 0.3
-                tray_config['description'] = description if description else f"{tray_name}抓取/放置位置"
-                # 添加行尾注释
-                tray_config.ca.items['pose'] = [None, None, CommentToken('  # 抓取点位姿, 位置单位mm, 姿态单位rad\n', CommentMark(0), None), None]
-                tray_config.ca.items['descend_z'] = [None, None, CommentToken('  # 过渡点到抓取点的下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm\n', CommentMark(0), None), None]
-                tray_config.ca.items['lift_z'] = [None, None, CommentToken('  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm\n', CommentMark(0), None), None]
-                tray_config.ca.items['speed'] = [None, None, CommentToken('  # 运动速度百分比 (0-1)\n', CommentMark(0), None), None]
-                tray_config.ca.items['acceleration'] = [None, None, CommentToken('  # 加速度百分比 (0-1)\n', CommentMark(0), None), None]
-                config['tray_position'][tray_name] = tray_config
-            else:
-                # 更新现有托盘位置的pose
+            if tray_name in config['tray_position']:
                 tray_config = config['tray_position'][tray_name]
-                tray_config['pose'] = pose_seq
-                # 更新pose键的注释
-                tray_config.ca.items['pose'] = [None, None, CommentToken('  # 抓取点位姿, 位置单位mm, 姿态单位rad\n', CommentMark(0), None), None]
-                # 如果提供了新描述, 则更新
+            else:
+                if template_tray_name is not None:
+                    if template_tray_name not in config['tray_position']:
+                        raise ValueError(f"模板托盘位置不存在: {template_tray_name}")
+                    tray_config = copy.deepcopy(config['tray_position'][template_tray_name])
+                else:
+                    tray_config = CommentedMap()
+                    tray_config['descend_z'] = -32
+                    tray_config['lift_z'] = 20
+                    tray_config['speed'] = 0.6
+                    tray_config['acceleration'] = 0.3
+                    tray_config.ca.items['descend_z'] = [None, None, CommentToken('  # 过渡点到抓取点的下探距离, 沿工具坐标系Z轴, 负值表示下降, 单位mm\n', CommentMark(0), None), None]
+                    tray_config.ca.items['lift_z'] = [None, None, CommentToken('  # 提升距离, 沿工具坐标系Z轴, 正值表示上升, 单位mm\n', CommentMark(0), None), None]
+                    tray_config.ca.items['speed'] = [None, None, CommentToken('  # 运动速度百分比 (0-1)\n', CommentMark(0), None), None]
+                    tray_config.ca.items['acceleration'] = [None, None, CommentToken('  # 加速度百分比 (0-1)\n', CommentMark(0), None), None]
+
+            tray_config['pose'] = pose_seq
+            tray_config.ca.items['pose'] = [None, None, CommentToken('  # 抓取点位姿, 位置单位mm, 姿态单位rad\n', CommentMark(0), None), None]
+
+            if tray_name not in config['tray_position'] or description is not None:
                 if description is not None:
                     tray_config['description'] = description
+                else:
+                    tray_config['description'] = f"{tray_name}抓取/放置位置"
 
-            # 写回配置文件, 保留注释和格式
+            config['tray_position'][tray_name] = tray_config
+
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 yaml_handler.dump(config, f)
 
             logger.info(f"成功保存托盘位置 {tray_name} 的TCP位姿到配置文件")
-
-            # 重新加载配置以更新内存中的数据
             self.reload()
 
         except Exception as e:

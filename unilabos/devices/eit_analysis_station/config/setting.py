@@ -111,7 +111,7 @@ class Settings:
     mspepsearch_timeout: float = 120.0  # MSPepSearch 超时秒数, 调大可降低复杂谱图超时失败.
 
     # ---------- 峰检测与积分参数 ----------
-    integration_mode: str = "boundary_v1"  # 处理模式, 可选 robust_v3 / legacy / gcpy/ boundary_v1, 切换后改变峰检测与边界算法路径.
+    integration_mode: str = "robust_v3"  # 处理模式, 可选 robust_v3 / legacy / gcpy/ boundary_v1, 切换后改变峰检测与边界算法路径.
     peak_smoothing_window: int = 11  # TIC 平滑窗口点数, 调大可抑制噪声但可能吞并窄峰.
     peak_prominence: float = 20000.0  # TIC 最小峰显著性阈值, 小幅调高以抑制平基线弱假峰.
     peak_min_distance: int = 3  # TIC 相邻峰最小点距, 调大可减少近邻峰分裂.

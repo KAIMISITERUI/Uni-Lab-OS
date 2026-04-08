@@ -1626,6 +1626,94 @@ class SynthesisStationController:
         unit = unit_norm if unit_norm else "mL"
         return value, unit
 
+    def _parse_batch_in_amount_strict(self, text: str, amount_kind: str) -> Tuple[float, str]:
+        """
+        功能:
+            严格解析 batch_in 上料用量文本, 仅接受正数加单位的格式.
+        参数:
+            text: str, 原始用量文本, 例如 8mL 或 500mg.
+            amount_kind: str, 用量类型, 支持 volume 或 weight.
+        返回:
+            Tuple[float, str], 解析后的数值与归一化前单位, 单位统一为 l/ml/ul 或 g/mg.
+        异常:
+            ValidationError: 文本格式非法, 数值不大于 0, 或单位不支持时抛出.
+        """
+        amount_text = str(text).strip()
+        if amount_text == "":
+            raise ValidationError("用量不能为空, 必须填写正数和单位")
+
+        pattern_match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?|\.[0-9]+)\s*([A-Za-z\u00B5\u03BC]+)", amount_text)
+        if pattern_match is None:
+            raise ValidationError("必须严格填写为正数+单位, 例如 8mL 或 500mg")
+
+        value_text = pattern_match.group(1)
+        unit_text = pattern_match.group(2)
+
+        try:
+            value = float(value_text)
+        except Exception as exc:
+            raise ValidationError("用量数值无法解析, 必须填写为正数") from exc
+
+        if value <= 0:
+            raise ValidationError("用量必须大于 0")
+
+        normalized_unit = unit_text.strip().replace("µ", "μ").replace("Μ", "μ").lower()
+        if normalized_unit == "μl":
+            normalized_unit = "ul"
+
+        if amount_kind == "volume":
+            if normalized_unit not in {"l", "ml", "ul"}:
+                raise ValidationError("液体单位仅支持 L, mL, uL")
+            return value, normalized_unit
+
+        if amount_kind == "weight":
+            if normalized_unit not in {"g", "mg"}:
+                raise ValidationError("固体单位仅支持 g, mg")
+            return value, normalized_unit
+
+        raise ValidationError(f"未支持的用量类型: {amount_kind}")
+
+    def _validate_batch_in_liquid_volume_limit(
+        self,
+        tray_code: int,
+        volume_ml: float,
+        tray_layout: str,
+        slot_text: str,
+        substance: str,
+        raw_amount_text: str,
+    ) -> None:
+        """
+        功能:
+            按试剂瓶规格校验 batch_in 液体上料体积上限.
+        参数:
+            tray_code: int, 托盘类型编码.
+            volume_ml: float, 归一化后的体积, 单位 mL.
+            tray_layout: str, 托盘位置编码.
+            slot_text: str, 原始点位文本.
+            substance: str, 物质名称.
+            raw_amount_text: str, 原始填写的用量文本.
+        返回:
+            None.
+        异常:
+            ValidationError: 归一化体积超出对应瓶型标称容量时抛出.
+        """
+        bottle_max_volume_map = {
+            int(ResourceCode.REAGENT_BOTTLE_TRAY_2ML): 2.0,
+            int(ResourceCode.REAGENT_BOTTLE_TRAY_8ML): 8.0,
+            int(ResourceCode.REAGENT_BOTTLE_TRAY_40ML): 40.0,
+            int(ResourceCode.REAGENT_BOTTLE_TRAY_125ML): 125.0,
+        }
+        max_volume_ml = bottle_max_volume_map.get(tray_code)
+        if max_volume_ml is None:
+            return
+
+        if volume_ml > max_volume_ml:
+            tray_name = TRAY_CODE_DISPLAY_NAME.get(tray_code, str(tray_code))
+            raise ValidationError(
+                f"托盘 {tray_layout} 点位 {slot_text} 物质 {substance} 的用量 {raw_amount_text} "
+                f"归一后为 {volume_ml:g}mL, 超出 {tray_name} 单瓶最大体积 {max_volume_ml:g}mL"
+            )
+
     def batch_in_tray(
         self,
         resource_req_list: List[JsonDict],
@@ -1840,8 +1928,11 @@ class SynthesisStationController:
 
                 for seg in entries:
                     parts = [p.strip() for p in seg.split("|")]
-                    if len(parts) < 3:
-                        continue
+                    if len(parts) != 3:
+                        raise ValidationError(
+                            f"托盘 {tray_layout} 条目 {seg} 格式错误, 必须严格填写为 点位|名称|数值单位, "
+                            "多个物质请使用 ; 分隔"
+                        )
 
                     slot_raw, substance, amt_str = parts[0], parts[1], parts[2]
 
@@ -1850,8 +1941,22 @@ class SynthesisStationController:
                         slot_idx = self._well_to_slot_index(slot_raw, tray_spec)
                     slot_idx = _validate_slot_index(slot_idx, tray_layout, tray_spec)  # 校验点位是否在托盘范围内
 
-                    raw_value, raw_unit = self._split_amount_unit(amt_str)
+                    try:
+                        raw_value, raw_unit = self._parse_batch_in_amount_strict(amt_str, amt_kind)
+                    except ValidationError as exc:
+                        raise ValidationError(
+                            f"托盘 {tray_layout} 点位 {slot_raw} 物质 {substance} 的用量填写无效: {amt_str}. {exc}"
+                        ) from exc
                     norm_value, norm_unit = _normalize_amount(raw_value, raw_unit, amt_kind, def_unit)
+                    if amt_kind == "volume":
+                        self._validate_batch_in_liquid_volume_limit(
+                            tray_code=tray_code_int,
+                            volume_ml=norm_value,
+                            tray_layout=tray_layout,
+                            slot_text=slot_raw,
+                            substance=substance,
+                            raw_amount_text=amt_str,
+                        )
 
                     fid = _resolve_fid(substance)
 
@@ -3514,10 +3619,131 @@ class SynthesisStationController:
 
         return resp
 
+    def _run_task_secondary_resource_check(self, task_id: int) -> JsonDict:
+        """
+        功能:
+            执行任务启动前的资源二次校验, 统一解析校验接口返回结果.
+        参数:
+            task_id: int, 任务ID.
+        返回:
+            Dict[str, Any], 包含校验是否通过, 提示信息和原始响应.
+        """
+        task_id_int = self._safe_int(task_id)
+        if task_id_int is None:
+            raise ValidationError("task_id 必须为整数")
+
+        def _parse_missing_number(value: Any) -> Tuple[Optional[float], str]:
+            """
+            功能:
+                解析二次校验返回的缺少数量, 兼容数字和字符串.
+            参数:
+                value: Any, prompt_msg.number 原始值.
+            返回:
+                Tuple[Optional[float], str], (数值结果, 展示文本). 无法转成数字时数值结果返回None.
+            """
+            if value is None:
+                return 0.0, "0"
+
+            if isinstance(value, (int, float)):
+                numeric_value = float(value)
+                if numeric_value.is_integer():
+                    return numeric_value, str(int(numeric_value))
+                return numeric_value, str(value)
+
+            text = str(value).strip()
+            if text == "":
+                return 0.0, "0"
+
+            try:
+                numeric_value = float(text)
+            except Exception:
+                return None, text
+
+            if numeric_value.is_integer():
+                return numeric_value, str(int(numeric_value))
+            return numeric_value, text
+
+        self._logger.info("开始二次校验, 任务ID: %d", task_id_int)
+        try:
+            check_result = self._call_with_relogin(self._client.check_task_resource, task_id_int)
+            code = check_result.get("code")
+
+            if code == 200:
+                self._logger.info("二次校验通过, 任务ID: %d", task_id_int)
+                return {
+                    "passed": True,
+                    "code": code,
+                    "message": "",
+                    "raw": check_result,
+                }
+
+            if code == 1200:
+                msg = str(check_result.get("msg", "") or "").strip()
+                prompt_msg = check_result.get("prompt_msg", {})
+                if isinstance(prompt_msg, dict) is False:
+                    prompt_msg = {}
+
+                resource_type = str(prompt_msg.get("resource_type", "未知资源") or "未知资源").strip()
+                if resource_type == "":
+                    resource_type = "未知资源"
+
+                number_value, number_text = _parse_missing_number(prompt_msg.get("number", 0))
+
+                if number_value == 0:
+                    self._logger.info(
+                        "二次校验返回1200但缺少数量为0, 视为通过, 资源类型: %s",
+                        resource_type,
+                    )
+                    return {
+                        "passed": True,
+                        "code": code,
+                        "message": msg,
+                        "resource_type": resource_type,
+                        "number": number_text,
+                        "raw": check_result,
+                    }
+
+                fail_message = f"二次校验失败: {resource_type} 缺少 {number_text}"
+                if msg == "":
+                    self._logger.error("%s", fail_message)
+                else:
+                    self._logger.error("%s, 接口消息: %s", fail_message, msg)
+
+                return {
+                    "passed": False,
+                    "code": code,
+                    "message": fail_message,
+                    "resource_type": resource_type,
+                    "number": number_text,
+                    "secondary_check_failed": True,
+                    "raw": check_result,
+                }
+
+            self._logger.warning(
+                "二次校验返回异常代码: %s, 消息: %s",
+                code,
+                check_result.get("msg", ""),
+            )
+            return {
+                "passed": True,
+                "code": code,
+                "message": str(check_result.get("msg", "") or ""),
+                "raw": check_result,
+            }
+        except Exception as exc:
+            self._logger.error("二次校验过程中发生异常: %s", str(exc))
+            # 二次校验异常不影响主流程, 仅记录日志.
+            return {
+                "passed": True,
+                "code": None,
+                "message": str(exc),
+                "raw": {},
+            }
+
     def start_task(self, task_id: Optional[int] = None, *, check_glovebox_env: bool = True, water_limit_ppm: float = 10.0, oxygen_limit_ppm: float = 10.0) -> JsonDict:
         """
         功能:
-            确认设备空闲且手套箱环境达标后, 启动指定任务或task_id最大的任务
+            确认任务资源, 设备空闲且手套箱环境达标后, 启动指定任务或task_id最大的任务
         参数:
             task_id: 可选int, 指定任务id, None时自动查找task_id最大的任务
             check_glovebox_env: bool, 启动前是否校验手套箱水氧
@@ -3593,6 +3819,10 @@ class SynthesisStationController:
                 raise ValidationError(f"任务{target_task_id}缺少有效状态码, 无法自动启动")
             if latest_status != int(TaskStatus.UNSTARTED):
                 raise ValidationError(f"task_id={target_task_id}状态非未运行, 不允许自动启动")
+
+        secondary_check_result = self._run_task_secondary_resource_check(int(target_task_id))
+        if secondary_check_result.get("passed") is False:
+            raise ValidationError(str(secondary_check_result.get("message") or "二次校验失败"))
 
         self._logger.info("准备启动任务 task_id=%s", target_task_id)
         # 启动前先整理货架, 避免任务药品托盘停在缓冲位或限定位放错托盘
@@ -6191,38 +6421,14 @@ class SynthesisStationController:
             
             # 如果提供了task_id, 进行二次校验
             if task_id is not None:
-                self._logger.info("开始二次校验, 任务ID: %d", task_id)
-                try:
-                    check_result = self._client.check_task_resource(task_id)
-                    code = check_result.get("code")
-                    
-                    if code == 200:
-                        self._logger.info("二次校验通过")
-                    elif code == 1200:
-                        # 资源不足, 校验失败
-                        msg = check_result.get("msg", "")
-                        prompt_msg = check_result.get("prompt_msg", {})
-                        resource_type = prompt_msg.get("resource_type", "未知资源")
-                        number = prompt_msg.get("number", 0)
-
-                        # 缺少数量为0时视为校验通过
-                        if number == 0:
-                            self._logger.info("二次校验返回1200但缺少数量为0, 视为通过, 资源类型: %s", resource_type)
-                        else:
-                            self._logger.error("二次校验失败: %s, 资源类型: %s, 缺少数量: %s", msg, resource_type, number)
-
-                            # 更新结果状态为未通过
-                            result["ready"] = False
-                            result["secondary_check_failed"] = True
-                            result["secondary_check_message"] = f"二次校验失败: {resource_type} 缺少 {number}"
-
-                            return result
-                    else:
-                        # 其他错误码
-                        self._logger.warning("二次校验返回异常代码: %d, 消息: %s", code, check_result.get("msg", ""))
-                except Exception as e:
-                    self._logger.error("二次校验过程中发生异常: %s", str(e))
-                    # 二次校验异常不影响主流程, 仅记录日志
+                secondary_check_result = self._run_task_secondary_resource_check(task_id)
+                if secondary_check_result.get("passed") is False:
+                    result["ready"] = False
+                    result["secondary_check_failed"] = True
+                    result["secondary_check_message"] = str(
+                        secondary_check_result.get("message") or "二次校验失败"
+                    )
+                    return result
         else:
             self._logger.warning("资源核查未通过, 缺失项 %s", missing_items)
 
