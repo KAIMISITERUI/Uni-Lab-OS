@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 
 from . import chemicalbook_scraper
-from .chemical_append_utils import get_measurement_value
+from ..controller.append_utils import get_measurement_value
 
 logger = logging.getLogger("ChemicalLookup")
 

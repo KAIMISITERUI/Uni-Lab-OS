@@ -239,10 +239,12 @@ class AGVDriver:
             finally:
                 self._sock_nav = None
 
-    def reconnect(self) -> None:
+    def reconnect(self, max_attempts: int = 3) -> None:
         """
         功能:
             重新连接到AGV查询端口, 先关闭已有连接再创建新连接
+        参数:
+            max_attempts: 最大重试次数, 默认3次
         """
         # 关闭旧的查询端口socket
         if self._sock is not None:
@@ -251,12 +253,28 @@ class AGVDriver:
             except Exception:
                 pass
             self._sock = None
-        # 创建新连接
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(self.cfg.timeout_s)
-        s.connect((self.cfg.host, self.cfg.port))
-        self._sock = s
-        logger.info("已重新连接到查询端口 %s:%s", self.cfg.host, self.cfg.port)
+
+        last_err = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(self.cfg.timeout_s)
+                s.connect((self.cfg.host, self.cfg.port))
+                self._sock = s
+                logger.info("已重新连接到查询端口 %s:%s", self.cfg.host, self.cfg.port)
+                return
+            except Exception as e:
+                last_err = e
+                if attempt < max_attempts:
+                    wait = attempt * 2
+                    logger.warning(
+                        "重新连接查询端口第%d次失败: %s, %d秒后重试",
+                        attempt, e, wait
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.error("重新连接查询端口已达最大重试次数%d次", max_attempts)
+        raise last_err
 
     def reconnect_navigation(self) -> None:
         """
@@ -656,6 +674,7 @@ class AGVDriver:
                     self.reconnect()
                 except Exception as reconnect_err:
                     logger.error("重新连接失败: %s", reconnect_err)
+                    time.sleep(3)  # reconnect失败后额外等待3秒
 
             except Exception as e:
                 consecutive_errors += 1
@@ -670,6 +689,14 @@ class AGVDriver:
                         consecutive_errors, target_id
                     )
                     raise
+
+                # 尝试重新连接查询端口
+                try:
+                    logger.info("正在尝试重新连接查询端口...")
+                    self.reconnect()
+                except Exception as reconnect_err:
+                    logger.error("重新连接失败: %s", reconnect_err)
+                    time.sleep(3)  # reconnect失败后额外等待3秒
 
     def play_sound(
         self,

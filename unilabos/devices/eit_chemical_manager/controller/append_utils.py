@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import storage
+from ..driver import chemicalbook_storage as storage
 
 
 logger = logging.getLogger("ChemicalAppendUtils")

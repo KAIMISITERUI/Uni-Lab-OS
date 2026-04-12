@@ -2984,13 +2984,23 @@ class AGVController:
                 charging=False,
             )
 
+        # 电量在low_threshold~90%之间, 查询是否正在充电
+        charging_at_standby = False
+        battery_standby_result = self._query_battery_status_detailed(
+            simple=False,
+            error_stage="query_battery_full_standby_cp6",
+        )
+        if battery_standby_result["ok"] is True:
+            charging_at_standby = battery_standby_result["data"].get("charging", False)
+
         self._append_charge_step_trace(
             step_trace,
             stage="standby_at_cp6",
             status="success",
-            message="AGV继续在CP6待命",
+            message=f"AGV继续在CP6待命, 充电状态={charging_at_standby}",
+            charging=charging_at_standby,
         )
-        logger.info("AGV在CP6待命, 当前电量尚未达到离站阈值")
+        logger.info(f"AGV在CP6待命, 充电状态={charging_at_standby}, 当前电量尚未达到离站阈值")
         return self._build_pp5_cp6_result(
             status="success",
             action="standby_at_cp6",
@@ -2998,6 +3008,7 @@ class AGVController:
             step_trace=step_trace,
             battery_level=battery_level,
             current_station=current_station_id,
+            charging=charging_at_standby,
         )
 
     def _log_auto_charge_pp5_cp6_result_summary(self, result: Dict[str, Any]) -> None:
@@ -3065,8 +3076,12 @@ class AGVController:
                 self._log_auto_charge_pp5_cp6_result_summary(result)
 
                 if status == "success":
-                    wait_seconds = interval_minutes * 60
-                    logger.info(f"检查成功(action={action}), 等待{interval_minutes}分钟后进行下次检查...")
+                    if result.get("current_station") == "CP6" and result.get("charging") is True:
+                        wait_seconds = 60
+                        logger.info("AGV在CP6充电中, 1分钟后再次检查电量...")
+                    else:
+                        wait_seconds = interval_minutes * 60
+                        logger.info(f"检查成功(action={action}), 等待{interval_minutes}分钟后进行下次检查...")
                 else:
                     wait_seconds = retry_wait_minutes * 60
                     logger.info(f"检查未完成(action={action}, status={status}), 等待{retry_wait_minutes}分钟后重试...")

@@ -3,6 +3,7 @@ configs/
 temp/
 output/
 unilabos_data/
+unilabos/devices/eit_chemical_manager/data/
 pyrightconfig.json
 .cursorignore
 ## Python

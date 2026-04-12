@@ -29,15 +29,6 @@ from .synchronizer import EITSynthesisWorkstation
 
 from ..driver.exceptions import ValidationError,ApiError
 from ..utils.file_utils import safe_excel_write, safe_workbook_save
-from ..chem_tools.chemical_append_utils import (
-    build_append_row_data,
-    build_append_row_data_for_smiles,
-    build_prepared_chemical_row_data,
-    build_duplicate_check_specs,
-    collect_missing_append_headers,
-    get_excel_write_value,
-    save_chemicalbook_record,
-)
 
 logger = logging.getLogger("StationManager")
 
@@ -185,324 +176,35 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info("虚假执行 align_chemicals_with_file, file_path=%s, auto_delete=%s", file_path, auto_delete)
         time.sleep(5)
 
-    @staticmethod
-    def _has_any_append_core_value(row_data: Dict[str, Any]) -> bool:
-        """
-        功能:
-            判断追加行是否至少包含一个可用于识别化合物的核心字段.
-        参数:
-            row_data: Dict[str, Any], 准备写入 Excel 的行数据.
-        返回:
-            bool, True 表示至少包含 CAS, 英文名, 中文名中的一个.
-        """
-        logger.info("虚假执行 _has_any_append_core_value")
-        time.sleep(5)
-        return False
+    # ---------- 化学品库管理: 委托给 eit_chemical_manager 驱动 ----------
 
-    @staticmethod
-    def _format_append_row_summary(row_data: Dict[str, Any]) -> str:
+    def search_chemical_in_library(self, query, query_type, excel_path=None):
         """
         功能:
-            提取 chemical list 关键字段, 生成统一的日志摘要文本.
-        参数:
-            row_data: Dict[str, Any], 追加到 chemical list 的行数据.
-        返回:
-            str, 包含 substance, physical_state, physical_form 的摘要文本.
-        """
-        logger.info("虚假执行 _format_append_row_summary")
-        time.sleep(5)
-        return "虚假摘要"
-
-    def _resolve_append_excel_path(self, excel_path: Optional[str]) -> Path:
-        """
-        功能:
-            解析化学品追加流程使用的目标 Excel 路径.
-        参数:
-            excel_path: Optional[str], 用户指定路径, None 时使用默认库文件.
-        返回:
-            Path, 已解析的 Excel 路径.
-        异常:
-            FileNotFoundError: 目标文件不存在时抛出.
-        """
-        logger.info("虚假执行 _resolve_append_excel_path, excel_path=%s", excel_path)
-        time.sleep(5)
-        return MODULE_ROOT / "sheet" / "fake_append.xlsx"
-
-    @staticmethod
-    def _build_append_header_map(worksheet: Any) -> Dict[str, int]:
-        """
-        功能:
-            从化学品库工作表首行构建表头到列号的映射.
-        参数:
-            worksheet: Any, openpyxl 工作表对象.
-        返回:
-            Dict[str, int], 表头名称到列号的映射.
-        """
-        logger.info("虚假执行 _build_append_header_map")
-        time.sleep(5)
-        return {}
-
-    @staticmethod
-    def _build_append_row_snapshot(
-        worksheet: Any,
-        header_map: Dict[str, int],
-        row_index: int,
-    ) -> Dict[str, Any]:
-        """
-        功能:
-            从化学品库工作表中提取单行数据快照, 统一补齐常用别名字段.
-        参数:
-            worksheet: Any, openpyxl 工作表对象.
-            header_map: Dict[str, int], 表头名称到列号映射.
-            row_index: int, 目标行号.
-        返回:
-            Dict[str, Any], 单行字段字典.
-        """
-        logger.info("虚假执行 _build_append_row_snapshot")
-        time.sleep(5)
-        return {}
-
-    def _find_existing_chemical_row(
-        self,
-        *,
-        excel_path: Optional[str] = None,
-        cas_number: str = "",
-        substance_english_name: str = "",
-        substance: str = "",
-    ) -> Optional[Dict[str, Any]]:
-        """
-        功能:
-            按 CAS, 英文名, 中文名顺序在化学品库中查找已有条目, 优先返回 neat 行.
-        参数:
-            excel_path: Optional[str], 化学品库文件路径.
-            cas_number: str, 候选 CAS 号.
-            substance_english_name: str, 候选英文名.
-            substance: str, 候选中文名或展示名.
-        返回:
-            Optional[Dict[str, Any]], 命中时返回包含 row_data 与 row_index 的结果字典.
-        """
-        logger.info("虚假执行 _find_existing_chemical_row")
-        time.sleep(5)
-        return None
-
-    @staticmethod
-    def _parse_positive_float(value: Any, field_name: str) -> float:
-        """
-        功能:
-            将输入值解析为大于 0 的浮点数.
-        参数:
-            value: Any, 待解析的数值.
-            field_name: str, 字段中文名, 用于异常提示.
-        返回:
-            float, 解析后的正数.
-        异常:
-            ValidationError: 字段为空, 非数字或不大于 0 时抛出.
-        """
-        logger.info("虚假执行 _parse_positive_float, field_name=%s", field_name)
-        time.sleep(5)
-        return 0.0
-
-    @staticmethod
-    def _format_preparation_number(value: float) -> str:
-        """
-        功能:
-            将配液或称量结果格式化为紧凑展示文本.
-        参数:
-            value: float, 原始数值.
-        返回:
-            str, 去除多余尾零后的文本.
-        """
-        logger.info("虚假执行 _format_preparation_number")
-        time.sleep(5)
-        return "0"
-
-    def _build_solution_recipe(
-        self,
-        base_row_data: Dict[str, Any],
-        concentration_mol_l: float,
-        target_volume_ml: float,
-        solvent_name: str,
-    ) -> Dict[str, Any]:
-        """
-        功能:
-            根据母体化合物信息生成溶液配置结果.
-        参数:
-            base_row_data: Dict[str, Any], 母体化合物行数据.
-            concentration_mol_l: float, 目标浓度, 单位 mol/L.
-            target_volume_ml: float, 目标定容体积, 单位 mL.
-            solvent_name: str, 溶剂名称.
-        返回:
-            Dict[str, Any], 包含质量, 体积与展示文案的结果字典.
-        异常:
-            ValidationError: 缺少分子量时抛出.
-        """
-        logger.info("虚假执行 _build_solution_recipe")
-        time.sleep(5)
-        return {}
-
-    def _build_beads_recipe(
-        self,
-        base_row_data: Dict[str, Any],
-        wt_percent: float,
-        target_active_mmol: float,
-    ) -> Dict[str, Any]:
-        """
-        功能:
-            根据母体化合物信息生成 beads 称量结果.
-        参数:
-            base_row_data: Dict[str, Any], 母体化合物行数据.
-            wt_percent: float, 有效成分质量分数.
-            target_active_mmol: float, 目标活性摩尔数, 单位 mmol.
-        返回:
-            Dict[str, Any], 包含 beads 质量与展示文案的结果字典.
-        异常:
-            ValidationError: 缺少分子量时抛出.
-        """
-        logger.info("虚假执行 _build_beads_recipe")
-        time.sleep(5)
-        return {}
-
-    def _resolve_prepared_base_chemical(
-        self,
-        identifier: str,
-        excel_path: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        功能:
-            为溶液或 beads 配置流程解析母体化合物, 不存在时自动补录 neat 条目.
-        参数:
-            identifier: str, CAS 或 SMILES.
-            excel_path: Optional[str], 化学品库文件路径.
-        返回:
-            Optional[Dict[str, Any]], 成功时返回母体行数据与来源信息, 失败时返回 None.
-        """
-        logger.info("虚假执行 _resolve_prepared_base_chemical")
-        time.sleep(5)
-        return {}
-
-    @staticmethod
-    def _find_duplicate_append_row(
-        worksheet: Any,
-        header_map: Dict[str, int],
-        row_data: Dict[str, Any],
-    ) -> Optional[Tuple[str, str, str, int]]:
-        """
-        功能:
-            按约定优先级在 Excel 中查找重复化合物.
-        参数:
-            worksheet: Any, openpyxl 工作表对象.
-            header_map: Dict[str, int], 表头名称到列号映射.
-            row_data: Dict[str, Any], 准备写入的行数据.
-        返回:
-            Optional[Tuple[str, str, str, int]], 命中时返回
-            (字段标签, 目标值, 表头名, 行号), 否则返回 None.
-        """
-        logger.info("虚假执行 _find_duplicate_append_row")
-        time.sleep(5)
-        return None
-
-    def _append_chemical_row_to_excel(
-        self,
-        row_data: Dict[str, Any],
-        excel_path: Optional[str] = None,
-    ) -> Tuple[Optional[int], str]:
-        """
-        功能:
-            将单条化学品行数据追加到 Excel 末尾, 并执行重复检查.
-        参数:
-            row_data: Dict[str, Any], 准备写入的行数据.
-            excel_path: Optional[str], 目标 Excel 文件路径.
-        返回:
-            Tuple[Optional[int], str], 成功时返回 (新行行号, ""),
-            命中重复时返回 (None, 已有行的 substance 名称).
-        """
-        logger.info("虚假执行 _append_chemical_row_to_excel")
-        time.sleep(5)
-        return 2, ""
-
-    def _fetch_chemicalbook_append_artifacts(
-        self,
-        resolved_cas: str,
-    ) -> Tuple[Optional[Dict[str, Any]], str, str]:
-        """
-        功能:
-            根据已解析的 CAS 获取 ChemicalBook 结构化结果及 sidecar 路径.
-        参数:
-            resolved_cas: str, 已解析出的 CAS 号.
-        返回:
-            Tuple[Optional[Dict[str, Any]], str, str], 依次为
-            chemicalbook_record, chemicalbook_status, chemicalbook_record_path.
-        """
-        logger.info("虚假执行 _fetch_chemicalbook_append_artifacts")
-        time.sleep(5)
-        return {}
-
-    def search_chemical_in_library(
-        self,
-        query: str,
-        query_type: str,
-        excel_path: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        功能:
-            在化学品库中查询已有药品.
-        参数:
-            query: str, 查询字符串.
-            query_type: str, 查询类型.
-            excel_path: Optional[str], 化学品库文件路径.
-        返回:
-            List[Dict[str, Any]], 虚假执行返回空列表.
+            虚假执行: 查询化学品库.
         """
         logger.info("虚假执行 search_chemical_in_library: query=%s, type=%s", query, query_type)
+        time.sleep(5)
         return []
 
-    def lookup_and_append_chemical_unified(
-        self,
-        query: str,
-        query_type: str,
-        excel_path: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+    def lookup_and_append_chemical_unified(self, query, query_type, excel_path=None):
         """
         功能:
-            统一化学品在线查询并追加到化学品库 Excel 文件的入口.
-        参数:
-            query: str, 查询字符串 (CAS / 名称 / SMILES).
-            query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
-            excel_path: Optional[str], 目标 Excel 文件路径.
-        返回:
-            Optional[Dict[str, Any]], 虚假执行结果.
+            虚假执行: 在线查询并添加化学品.
         """
         logger.info("虚假执行 lookup_and_append_chemical_unified: query=%s, type=%s", query, query_type)
         time.sleep(5)
-        return {"success": True, "message": "虚假查询并追加完成"}
+        return None
 
     def prepare_solution_or_beads(
-        self,
-        identifier: str,
-        prepared_form: str,
-        *,
-        solvent_name: str = "",
-        active_content: Any,
-        target_volume_ml: Optional[Any] = None,
-        target_active_mmol: Optional[Any] = None,
-        excel_path: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        self, identifier, prepared_form, *,
+        solvent_name="", active_content,
+        target_volume_ml=None, target_active_mmol=None,
+        excel_path=None,
+    ):
         """
         功能:
-            根据 CAS 或 SMILES 解析母体化合物, 按指定形态生成溶液或 beads 条目并追加到化学品库.
-        参数:
-            identifier: str, 母体化合物 CAS 或 SMILES.
-            prepared_form: str, 派生形态, 支持 solution 或 beads.
-            solvent_name: str, solution 使用的溶剂名称.
-            active_content: Any, solution 时表示 mol/L, beads 时表示 wt%.
-            target_volume_ml: Optional[Any], solution 目标定容体积, 单位 mL.
-            target_active_mmol: Optional[Any], beads 目标活性摩尔数, 单位 mmol.
-            excel_path: Optional[str], 目标 Excel 文件路径.
-        返回:
-            Optional[Dict[str, Any]], 成功返回母体信息, 派生条目信息与配制结果摘要.
-            派生条目重复或母体无法解析时返回 None.
-        异常:
-            ValidationError: 形态或数值参数非法时抛出.
+            虚假执行: 配置溶液或 beads.
         """
         logger.info("虚假执行 prepare_solution_or_beads")
         time.sleep(5)

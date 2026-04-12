@@ -25,7 +25,7 @@ from urllib.parse import quote
 
 import requests
 
-from . import storage
+from . import chemicalbook_storage as storage
 
 try:
     from bs4 import BeautifulSoup

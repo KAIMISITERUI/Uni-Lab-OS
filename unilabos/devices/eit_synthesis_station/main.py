@@ -209,90 +209,6 @@ def _print_result(result):
         print(result)
 
 
-def _print_chemical_append_summary(result, *, source_label="查询"):
-    """
-    功能:
-        以精简摘要输出化学品追加成功结果, 避免直接打印完整结果字典.
-    参数:
-        result: dict | None, 化学品追加结果.
-        source_label: str, 成功来源标识, 例如 在线查询 或 SMILES 查询.
-    返回:
-        None
-    """
-    if isinstance(result, dict) is False:
-        return
-
-    row_data = result.get("row_data") or {}
-    if isinstance(row_data, dict) is False:
-        row_data = {}
-
-    cas_number = str(row_data.get("cas_number") or "").strip()
-    display_name = str(
-        row_data.get("substance")
-        or row_data.get("substance_chinese_name")
-        or row_data.get("substance_english_name")
-        or ""
-    ).strip()
-    row_index = result.get("row_index")
-    substance = str(
-        row_data.get("substance")
-        or row_data.get("substance_chinese_name")
-        or ""
-    ).strip()
-    physical_state = str(row_data.get("physical_state") or "").strip()
-    physical_form = str(row_data.get("physical_form") or "").strip()
-
-    print(
-        f"已成功添加化合物: CAS={cas_number}, 名称={display_name}, "
-        f"substance={substance}, physical_state={physical_state}, "
-        f"physical_form={physical_form}, 行号={row_index}"
-    )
-
-
-def _print_prepared_chemical_summary(result):
-    """
-    功能:
-        输出溶液或 beads 派生条目的精简摘要与配制结果.
-    参数:
-        result: dict | None, prepare_solution_or_beads 的返回结果.
-    返回:
-        None
-    """
-    if isinstance(result, dict) is False:
-        return
-
-    base_row_data = result.get("base_row_data") or {}
-    derived_row_data = result.get("derived_row_data") or {}
-    recipe = result.get("recipe") or {}
-
-    base_name = str(
-        base_row_data.get("base_substance")
-        or base_row_data.get("substance")
-        or base_row_data.get("substance_chinese_name")
-        or base_row_data.get("substance_english_name")
-        or ""
-    ).strip()
-    derived_name = str(
-        derived_row_data.get("substance")
-        or derived_row_data.get("substance_chinese_name")
-        or derived_row_data.get("substance_english_name")
-        or ""
-    ).strip()
-    base_created = bool(result.get("base_created"))
-    derived_row_index = result.get("derived_row_index")
-    instruction_text = str(recipe.get("instruction_text") or "").strip()
-
-    base_source_text = "新补录母体" if base_created is True else "复用现有母体"
-    print(f"母体条目: 名称={base_name}, 来源={base_source_text}")
-    print(f"已成功添加派生条目: 名称={derived_name}, 行号={derived_row_index}")
-    if instruction_text != "":
-        print(f"配制结果: {instruction_text}")
-
-    solute_volume_ml = recipe.get("solute_volume_ml")
-    if solute_volume_ml is not None:
-        print(f"液体母体估算体积: {solute_volume_ml:.6g} mL")
-
-
 def _update_task_id(result):
     """
     功能:
@@ -536,15 +452,20 @@ def _menu_status_query(manager):
 # ===================== 4. 化学品库管理 =====================
 
 def _menu_chemical_library(manager):
-    """化学品库管理子菜单"""
+    """
+    功能:
+        化学品库管理子菜单.
+        工站相关操作 (导出/导入到平台) 保留在此处,
+        本地化学品库管理 (查询/添加/配置/去重/迁移) 桥接到 eit_chemical_manager 驱动.
+    参数:
+        manager: SynthesisStationManager 实例.
+    返回:
+        None.
+    """
     options = [
-        ("1", "导出化学品到CSV"),
-        ("2", "从CSV导入化学品"),
-        ("3", "化学品库去重"),
-        ("4", "化学品库数据校验"),
-        ("5", "查询化学品库"),
-        ("6", "在线查询并添加化学品"),
-        ("7", "配置溶液或beads并添加到化学品库"),
+        ("1", "导出工站化学品到CSV"),
+        ("2", "从CSV导入化学品到工站"),
+        ("3", "本地化学品库管理"),
         ("0", "返回上级菜单"),
     ]
 
@@ -561,142 +482,11 @@ def _menu_chemical_library(manager):
             path = _input_with_default("导入CSV文件路径", "add_chemical_list.csv")
             _safe_run(manager.sync_chemicals_from_file, path)
         elif choice == "3":
-            path = _input_file_path("化学品库文件路径", DEFAULT_CHEM_DB)
-            _safe_run(manager.deduplicate_chemical_library_by_file, path)
-        elif choice == "4":
-            path = _input_file_path("化学品库文件路径", DEFAULT_CHEM_DB)
-            result = _safe_run(manager.check_chemical_library_by_file, path)
-            _print_result(result)
-            _pause()
-        elif choice == "5":
-            _menu_search_chemical(manager)
-        elif choice == "6":
-            _menu_add_chemical(manager)
-        elif choice == "7":
-            _menu_prepare_solution_or_beads(manager)
+            from eit_chemical_manager.main import chemical_library_menu
+            chemical_library_menu(manager)
         else:
             print("无效选择, 请重新输入")
 
-
-def _menu_search_chemical(manager):
-    """查询化学品库子菜单"""
-    query_type_options = [
-        ("1", "CAS 号"),
-        ("2", "名称"),
-        ("3", "SMILES 结构式"),
-        ("0", "返回"),
-    ]
-    _print_menu("查询类型", query_type_options)
-    sub_choice = input("请选择查询类型: ").strip()
-
-    query_type_map = {"1": "cas", "2": "name", "3": "smiles"}
-    prompt_map = {
-        "1": "请输入 CAS 号: ",
-        "2": "请输入化学品名称 (中文或英文): ",
-        "3": "请输入 SMILES 结构式: ",
-    }
-
-    if sub_choice not in query_type_map:
-        return
-
-    query = input(prompt_map[sub_choice]).strip()
-    if query == "":
-        print("输入不能为空")
-        _pause()
-        return
-
-    query_type = query_type_map[sub_choice]
-    results = _safe_run(
-        manager.search_chemical_in_library,
-        query, query_type, str(DEFAULT_CHEM_DB),
-    )
-
-    if results is None:
-        results = []
-
-    if len(results) > 0:
-        _print_search_results(results)
-    else:
-        print("未找到匹配的化学品")
-        add_choice = input("是否在线查询并添加? (y/n): ").strip().lower()
-        if add_choice == "y":
-            add_result = _safe_run(
-                manager.lookup_and_append_chemical_unified,
-                query, query_type, str(DEFAULT_CHEM_DB),
-            )
-            if add_result is None:
-                print("在线查询未找到化合物信息")
-            elif add_result.get("duplicate") is True:
-                print(f"该化合物已存在于化学品库, 名称: {add_result.get('duplicate_substance', '')}")
-            else:
-                _print_chemical_append_summary(add_result, source_label="在线查询")
-    _pause()
-
-
-def _print_search_results(results):
-    """
-    功能:
-        格式化展示化学品库查询结果列表.
-    参数:
-        results: list, search_chemical_in_library 返回的匹配结果列表.
-    返回:
-        None.
-    """
-    print(f"找到 {len(results)} 条匹配结果:")
-    for idx, item in enumerate(results, start=1):
-        row_data = item.get("row_data") or {}
-        cas = str(row_data.get("cas_number") or "").strip()
-        name = str(
-            row_data.get("substance")
-            or row_data.get("substance_chinese_name")
-            or row_data.get("substance_english_name")
-            or ""
-        ).strip()
-        state = str(row_data.get("physical_state") or "").strip()
-        form = str(row_data.get("physical_form") or "").strip()
-        row_idx = item.get("row_index", "")
-        print(f"  [{idx}] CAS={cas}, 名称={name}, 物态={state}, 形态={form}, 行号={row_idx}")
-
-
-def _menu_add_chemical(manager):
-    """在线查询并添加化学品子菜单"""
-    query_type_options = [
-        ("1", "CAS 号"),
-        ("2", "名称"),
-        ("3", "SMILES 结构式"),
-        ("0", "返回"),
-    ]
-    _print_menu("查询类型", query_type_options)
-    sub_choice = input("请选择查询类型: ").strip()
-
-    query_type_map = {"1": "cas", "2": "name", "3": "smiles"}
-    prompt_map = {
-        "1": "请输入 CAS 号: ",
-        "2": "请输入化学品名称 (中文或英文): ",
-        "3": "请输入 SMILES 结构式: ",
-    }
-
-    if sub_choice not in query_type_map:
-        return
-
-    query = input(prompt_map[sub_choice]).strip()
-    if query == "":
-        print("输入不能为空")
-        _pause()
-        return
-
-    query_type = query_type_map[sub_choice]
-    result = _safe_run(
-        manager.lookup_and_append_chemical_unified,
-        query, query_type, str(DEFAULT_CHEM_DB),
-    )
-    if result is None:
-        print("未查询到化合物信息, 请检查后重试")
-    elif result.get("duplicate") is True:
-        print(f"该化合物已存在于化学品库, 名称: {result.get('duplicate_substance', '')}")
-    else:
-        _print_chemical_append_summary(result, source_label="在线查询")
-    _pause()
 
 
 # ===================== 5. 任务管理 =====================
@@ -736,150 +526,6 @@ def _show_all_tasks(manager):
         latest = task_list[0].get("task_id")
         if latest is not None:
             _last_task_id = int(latest)
-
-
-def _menu_prepare_solution_or_beads(manager):
-    """配置溶液或beads并添加到化学品库子菜单"""
-
-    # 第1步: 选择查询类型
-    query_type_options = [
-        ("1", "CAS号"),
-        ("2", "名称"),
-        ("3", "SMILES结构式"),
-        ("0", "返回"),
-    ]
-    _print_menu("选择查询类型", query_type_options)
-    type_choice = input("请选择查询类型: ").strip()
-
-    query_type_map = {"1": "cas", "2": "name", "3": "smiles"}
-    prompt_map = {
-        "1": "请输入CAS号: ",
-        "2": "请输入化学品名称(中文或英文): ",
-        "3": "请输入SMILES结构式: ",
-    }
-
-    if type_choice not in query_type_map:
-        return
-
-    # 第2步: 输入查询内容
-    query = input(prompt_map[type_choice]).strip()
-    if query == "":
-        print("输入不能为空")
-        _pause()
-        return
-
-    query_type = query_type_map[type_choice]
-
-    # 第3步: 查询化学品库
-    results = _safe_run(
-        manager.search_chemical_in_library,
-        query, query_type, str(DEFAULT_CHEM_DB),
-    )
-    if results is None:
-        results = []
-
-    identifier = None
-
-    if len(results) > 0:
-        # 第4步a: 展示结果, 用户选择母体
-        _print_search_results(results)
-        select_input = input("请输入编号选择母体(0返回): ").strip()
-        if select_input == "0" or select_input == "":
-            return
-        try:
-            select_idx = int(select_input) - 1
-        except ValueError:
-            print("请输入数字")
-            _pause()
-            return
-        if select_idx < 0 or select_idx >= len(results):
-            print("编号超出范围")
-            _pause()
-            return
-
-        selected_row_data = results[select_idx].get("row_data") or {}
-        identifier = str(selected_row_data.get("cas_number") or "").strip()
-        if identifier == "":
-            print("所选条目缺少CAS号, 无法用于配置溶液或beads")
-            _pause()
-            return
-    else:
-        # 第4步b: 未找到, 询问是否在线添加
-        print("未在化学品库中找到匹配的化学品")
-        print("  1. 在线查询并添加母体")
-        print("  2. 返回")
-        add_choice = input("请选择: ").strip()
-        if add_choice != "1":
-            return
-
-        add_result = _safe_run(
-            manager.lookup_and_append_chemical_unified,
-            query, query_type, str(DEFAULT_CHEM_DB),
-        )
-        if add_result is None:
-            print("在线查询未找到化合物信息")
-            _pause()
-            return
-        if add_result.get("duplicate") is True:
-            print(f"该化合物已存在于化学品库, 名称: {add_result.get('duplicate_substance', '')}")
-            _pause()
-            return
-
-        _print_chemical_append_summary(add_result, source_label="在线查询")
-        row_data = add_result.get("row_data") or {}
-        identifier = str(row_data.get("cas_number") or "").strip()
-        if identifier == "":
-            print("添加的条目缺少CAS号, 无法继续配置")
-            _pause()
-            return
-
-    # 第6步: 选择派生形态
-    form_options = [
-        ("1", "溶液(solution)"),
-        ("2", "Beads"),
-        ("0", "返回"),
-    ]
-    _print_menu("选择派生形态", form_options)
-    form_choice = input("请选择派生形态: ").strip()
-
-    form_map = {"1": "solution", "2": "beads"}
-    prepared_form = form_map.get(form_choice)
-    if prepared_form is None:
-        return
-
-    # 第7步: 输入参数并执行
-    if prepared_form == "solution":
-        solvent_name = input("请输入溶剂名称: ").strip()
-        concentration_mol_l = _input_positive_float("请输入目标浓度(mol/L)")
-        target_volume_ml = _input_positive_float("请输入目标定容体积(mL)")
-        result = _safe_run(
-            manager.prepare_solution_or_beads,
-            identifier,
-            prepared_form,
-            solvent_name=solvent_name,
-            active_content=concentration_mol_l,
-            target_volume_ml=target_volume_ml,
-            excel_path=str(DEFAULT_CHEM_DB),
-        )
-    else:
-        wt_percent = _input_positive_float("请输入载量(wt%)")
-        target_active_mmol = _input_positive_float("请输入目标活性(mmol)")
-        result = _safe_run(
-            manager.prepare_solution_or_beads,
-            identifier,
-            prepared_form,
-            active_content=wt_percent,
-            target_active_mmol=target_active_mmol,
-            excel_path=str(DEFAULT_CHEM_DB),
-        )
-
-    if result is None:
-        print("未完成派生条目添加, 请检查输入或确认该条目是否已存在")
-    elif result.get("duplicate") is True:
-        print(f"该化合物已存在于化学品库, 名称: {result.get('duplicate_substance', '')}")
-    else:
-        _print_prepared_chemical_summary(result)
-    _pause()
 
 
 def _menu_task_management(manager):
