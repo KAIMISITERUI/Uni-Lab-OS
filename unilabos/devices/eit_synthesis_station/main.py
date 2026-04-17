@@ -40,9 +40,6 @@ _STATION_STATE_LABEL = {
     StationState.HOLDING: "挂起/保持",
 }
 
-# 运行时缓存: 最近操作的任务ID
-_last_task_id = None
-
 # 哨兵对象: 用于区分"函数正常返回None"和"异常/中断导致的失败"
 _SENTINEL_FAILED = object()
 
@@ -94,25 +91,19 @@ def _input_task_id(allow_none=True):
     返回:
         int | None, 任务ID或None
     """
-    global _last_task_id
     while True:
-        hint = "请输入任务ID"
-        if _last_task_id is not None:
-            hint += f" [最近: {_last_task_id}]"
-
         if allow_none is True:
-            val = input(f"{hint}(留空则自动选取): ").strip()
+            val = input("请输入任务ID(留空则自动选取): ").strip()
             if val == "" or val == "None":
                 return None
         else:
-            val = input(f"{hint}: ").strip()
+            val = input("请输入任务ID: ").strip()
             if val == "" or val == "None":
                 print("任务ID不能为空, 请重新输入")
                 continue
 
         try:
             tid = int(val)
-            _last_task_id = tid
             return tid
         except ValueError:
             if allow_none is True:
@@ -209,32 +200,6 @@ def _print_result(result):
         print(result)
 
 
-def _update_task_id(result):
-    """
-    功能:
-        从 create_task 返回值提取 task_id 并缓存
-    参数:
-        result: dict, create_task_by_file 的返回值
-    返回:
-        result 原样返回
-    """
-    global _last_task_id
-    if isinstance(result, dict):
-        # 尝试从多种可能的返回结构中提取 task_id
-        tid = result.get("task_id") or result.get("id")
-        if tid is None:
-            inner = result.get("result", {})
-            if isinstance(inner, dict):
-                tid = inner.get("task_id") or inner.get("id")
-        if tid is not None:
-            try:
-                _last_task_id = int(tid)
-                print(f"已记录任务ID: {_last_task_id}")
-            except (ValueError, TypeError):
-                pass
-    return result
-
-
 # ===================== 工作流执行器 =====================
 
 def _run_workflow(steps, quick=False):
@@ -302,7 +267,7 @@ def _menu_quick_workflow(manager):
             # 提交任务流程
             steps = [
                 ("对齐化学品库", lambda: manager.align_chemicals_with_file(chem_db)),
-                ("上传任务到工站", lambda: _update_task_id(manager.create_task_by_file(task_tpl, chem_db))),
+                ("上传任务到工站", lambda: manager.create_task_by_file(task_tpl, chem_db)),
                 ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
             ]
             _run_workflow(steps, quick=True)
@@ -380,8 +345,7 @@ def _menu_step_by_step(manager):
         elif choice == "2":
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
             chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
-            result = _safe_run(manager.create_task_by_file, task_tpl, chem_db)
-            _update_task_id(result)
+            _safe_run(manager.create_task_by_file, task_tpl, chem_db)
         elif choice == "3" or choice == "5":
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
             chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
@@ -494,13 +458,12 @@ def _menu_chemical_library(manager):
 def _show_all_tasks(manager):
     """
     功能:
-        格式化显示所有任务列表, 并更新 _last_task_id 缓存
+        格式化显示所有任务列表
     参数:
         manager: SynthesisStationManager 实例
     返回:
         None
     """
-    global _last_task_id
     resp = manager.get_all_tasks()
     # 兼容多种返回结构
     task_list = resp
@@ -520,12 +483,6 @@ def _show_all_tasks(manager):
         print(f"{tid:<10} {name:<30} {status_text:<10}")
 
     print(f"\n共 {len(task_list)} 个任务")
-
-    # 缓存最新的任务ID
-    if task_list:
-        latest = task_list[0].get("task_id")
-        if latest is not None:
-            _last_task_id = int(latest)
 
 
 def _menu_task_management(manager):

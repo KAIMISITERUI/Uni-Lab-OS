@@ -1,25 +1,30 @@
 {
-  "last_updated": "2026-04-09T14:11:06.357199",
+  "last_updated": "2026-04-15T01:18:14.074613",
   "slots": {
     "shelf_tray_1-1": {
       "material_type": "REACTION_SEAL_CAP_TRAY",
       "source": "synthesis_station_tray_2-1",
       "description": "合成完成下料(自动转运)",
-      "placed_at": "2026-04-09T14:11:06.355199"
+      "placed_at": "2026-04-15T01:13:54.960009"
     },
     "shelf_tray_1-2": {
       "material_type": "TEST_TUBE_MAGNET_TRAY_2ML",
       "source": "synthesis_station_tray_2-2",
       "description": "合成完成下料(自动转运)",
-      "placed_at": "2026-04-09T14:11:06.356199"
+      "placed_at": "2026-04-15T01:13:54.960009"
     },
     "shelf_tray_1-3": {
-      "material_type": "REACTION_TUBE_TRAY_2ML",
-      "source": "synthesis_station_tray_2-4",
+      "material_type": "FLASH_FILTER_INNER_BOTTLE_TRAY",
+      "source": "synthesis_station_tray_2-3",
       "description": "合成完成下料(自动转运)",
-      "placed_at": "2026-04-09T14:11:06.357199"
+      "placed_at": "2026-04-15T01:13:54.961010"
     },
-    "shelf_tray_1-4": null,
+    "shelf_tray_1-4": {
+      "material_type": "REACTION_TUBE_TRAY_2ML",
+      "source": "synthesis_station_tray_1-1",
+      "description": "合成完成下料(自动转运)",
+      "placed_at": "2026-04-15T01:18:14.074613"
+    },
     "shelf_tray_2-1": null,
     "shelf_tray_2-2": null,
     "shelf_tray_2-3": null,

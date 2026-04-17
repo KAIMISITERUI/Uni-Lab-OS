@@ -10,6 +10,7 @@
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .config.setting import configure_logging
@@ -212,6 +213,34 @@ def _handle_transfer_to_shelf() -> None:
         print(f"\n操作失败: {exc}\n")
 
 
+def _handle_generate_heatmap() -> None:
+    """
+    功能:
+        处理从 Excel/CSV 文件生成产率热力图的交互流程.
+    参数:
+        无.
+    返回:
+        无.
+    """
+    from .processor.heatmap_plotter import HeatmapPlotter
+
+    file_path_input = input("请输入数据文件路径(.xlsx 或 .csv): ").strip()
+    if file_path_input == "":
+        print("文件路径不能为空.")
+        return
+
+    output_input = input("请输入输出路径(留空则自动生成同名 .png): ").strip()
+    output_path = output_input if output_input != "" else None
+
+    try:
+        plotter = HeatmapPlotter()
+        result_path = plotter.plot(file_path=file_path_input, output_path=output_path)
+        print(f"\n热力图已保存: {result_path}\n")
+    except Exception as exc:
+        logger.exception("热力图生成失败")
+        print(f"\n操作失败: {exc}\n")
+
+
 def interactive() -> None:
     """
     功能:
@@ -236,6 +265,7 @@ def interactive() -> None:
         "  7. submit_by_csv_path    - 选择仪器并按CSV路径直接提交任务\n"
         "  8. aggregate_task_data   - 实验数据归档汇总\n"
         "  9. transfer_to_shelf     - 分析完成样品→货架转运(等待空闲后自动执行)\n"
+        "  10. generate_heatmap    - 从Excel/CSV生成产率热力图\n"
         "  0. 退出\n"
         "================================"
     )
@@ -248,8 +278,8 @@ def interactive() -> None:
             print("已退出测试.")
             break
 
-        if choice not in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
-            print("无效选择, 请输入 0/1/2/3/4/5/6/7/8/9.")
+        if choice not in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
+            print("无效选择, 请输入 0-10.")
             continue
 
         if choice in ("4", "5"):
@@ -262,6 +292,10 @@ def interactive() -> None:
 
         if choice == "9":
             _handle_transfer_to_shelf()
+            continue
+
+        if choice == "10":
+            _handle_generate_heatmap()
             continue
 
         task_id = _prompt_task_id()

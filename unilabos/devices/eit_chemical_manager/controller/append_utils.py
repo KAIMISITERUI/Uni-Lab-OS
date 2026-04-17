@@ -477,25 +477,15 @@ def build_duplicate_check_specs(row_data: Dict[str, Any]) -> List[Tuple[Tuple[st
         List[Tuple[Tuple[str, ...], str, str]], 每项包含候选列名集合, 目标值, 日志标签.
     """
     duplicate_specs: List[Tuple[Tuple[str, ...], str, str]] = []
-    physical_form = str(row_data.get("physical_form") or "").strip().lower()
-    is_prepared_form = physical_form in {"solution", "beads"}
 
-    if is_prepared_form is False:
-        cas_number = str(row_data.get("cas_number") or "").strip()
-        if cas_number != "":
-            duplicate_specs.append((("cas_number",), cas_number, "CAS"))
-
-        substance_english_name = str(row_data.get("substance_english_name") or "").strip()
-        if substance_english_name != "":
-            duplicate_specs.append((("substance_english_name",), substance_english_name, "英文名"))
-
+    # 仅按中文名去重
     substance_chinese_name = str(
         row_data.get("substance")
         or row_data.get("substance_chinese_name")
         or ""
     ).strip()
     if substance_chinese_name != "":
-        duplicate_specs.append((("substance", "substance_chinese_name"), substance_chinese_name, "中文名"))
+        duplicate_specs.append((("substance",), substance_chinese_name, "中文名"))
 
     return duplicate_specs
 
