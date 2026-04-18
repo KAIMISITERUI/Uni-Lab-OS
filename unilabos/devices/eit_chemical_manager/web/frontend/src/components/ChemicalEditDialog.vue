@@ -114,7 +114,7 @@ async function submit() {
         <el-input v-model="form.chemical_id" placeholder="对齐工站后回写" />
       </el-form-item>
       <el-form-item label="storage_location">
-        <el-input v-model="form.storage_location" placeholder="例: TB-2-1" />
+        <el-input v-model="form.storage_location" placeholder="输入存储位置" />
       </el-form-item>
       <el-form-item label="physical_state">
         <el-select v-model="form.physical_state" clearable placeholder="物态">
@@ -131,10 +131,10 @@ async function submit() {
         </el-select>
       </el-form-item>
       <el-form-item label="density (g/mL)">
-        <el-input-number v-model="form.density" :precision="4" :step="0.01" :min="0" />
+        <el-input-number v-model="form.density" :precision="4" :step="0.01" :min="0" :controls="false" />
       </el-form-item>
       <el-form-item label="molecular_weight">
-        <el-input-number v-model="form.molecular_weight" :precision="4" :step="0.01" :min="0" />
+        <el-input-number v-model="form.molecular_weight" :precision="4" :step="0.01" :min="0" :controls="false" />
       </el-form-item>
       <el-form-item label="active_content">
         <el-input v-model="form.active_content" placeholder="solution: mol/L; beads: wt%" />
