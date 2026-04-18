@@ -428,15 +428,6 @@ class ChemicalManager:
             dry_run=dry_run,
         )
 
-    def deduplicate(self) -> int:
-        """
-        功能:
-            按 CAS 号对化学品库去重.
-        返回:
-            int, 删除的重复行数.
-        """
-        return self._db.deduplicate()
-
     def check_integrity(self) -> Dict[str, Any]:
         """
         功能:

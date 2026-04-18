@@ -22,6 +22,14 @@ logger = logging.getLogger("ChemicalManagerWeb")
 # 前端静态资源目录, 由 Vite 构建产物 dist 提供; 不存在时跳过挂载
 _FRONTEND_DIST = Path(__file__).resolve().parent / "frontend" / "dist"
 
+# index.html 必须始终重新校验, 否则浏览器拿到旧 entry 后会去引用已被新构建删除的 hash chunk
+# hash 化的 assets/*.js / *.css 文件名变化, 浏览器自然走 200 拉新, 不需要 no-cache
+_INDEX_HTML_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 
 def create_app() -> FastAPI:
     """
@@ -68,13 +76,17 @@ def create_app() -> FastAPI:
         # SPA catch-all: 任意非 /api 路径返回 index.html, 让 vue-router 接管客户端路由
         @app.get("/{full_path:path}", include_in_schema=False)
         def spa_fallback(full_path: str) -> FileResponse:
-            """功能: SPA 路由 fallback, 静态文件存在时直接返回, 否则回到 index.html."""
+            """功能: SPA 路由 fallback, 静态文件存在时直接返回, 否则回到 index.html.
+            index.html 始终下发 no-cache 头, 防止前端构建升级后浏览器引用已删 chunk.
+            """
             candidate = _FRONTEND_DIST / full_path
             if full_path != "" and candidate.is_file():
+                if candidate.name == "index.html":
+                    return FileResponse(str(candidate), headers=_INDEX_HTML_HEADERS)
                 return FileResponse(str(candidate))
             if not index_file.is_file():
                 raise HTTPException(status_code=404, detail="前端入口不存在")
-            return FileResponse(str(index_file))
+            return FileResponse(str(index_file), headers=_INDEX_HTML_HEADERS)
 
         logger.info("已挂载前端静态资源目录: %s", _FRONTEND_DIST)
     else:

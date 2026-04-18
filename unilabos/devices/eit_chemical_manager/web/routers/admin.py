@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 功能:
-    化学品库的运维路由: 完整性检查, 去重, 导出 CSV / XLSX, 从文件导入.
+    化学品库的运维路由: 完整性检查, 导出 CSV / XLSX, 从文件导入.
     路由前缀 /api.
 """
 
@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 
 from ...manager.chemical_manager import ChemicalManager
 from ..deps import TokenDep, get_manager
-from ..schemas import DeduplicateResponse, ImportResponse, IntegrityReport
+from ..schemas import ImportResponse, IntegrityReport
 
 logger = logging.getLogger("AdminRouter")
 
@@ -39,19 +39,6 @@ def get_integrity(
         返回化学品库完整性报告.
     """
     return IntegrityReport(**manager.check_integrity())
-
-
-@router.post("/deduplicate", response_model=DeduplicateResponse)
-def deduplicate(
-    manager: ChemicalManager = Depends(get_manager),
-) -> DeduplicateResponse:
-    """
-    功能:
-        按 CAS 去重, 保留每组中 id 最小的行.
-    """
-    deleted = manager.deduplicate()
-    logger.info("Web 去重完成, 删除 %d 条", deleted)
-    return DeduplicateResponse(deleted=deleted)
 
 
 @router.get("/export.csv")

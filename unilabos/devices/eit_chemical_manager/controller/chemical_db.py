@@ -2,7 +2,7 @@
 """
 功能:
     化学品库 SQLite 数据库操作封装.
-    提供建表, CRUD, 搜索, 去重, 完整性校验等功能.
+    提供建表, CRUD, 搜索, 完整性校验等功能.
 """
 
 import json
@@ -626,65 +626,105 @@ class ChemicalDB:
         cursor = self._conn.execute("SELECT COUNT(*) FROM chemicals")
         return cursor.fetchone()[0]
 
-    def deduplicate(self) -> int:
-        """
-        功能:
-            按 CAS 号去重, 保留每组中 id 最小的行.
-            仅对 CAS 非空的行去重.
-        返回:
-            int, 删除的重复行数.
-        """
-        cursor = self._conn.execute(
-            """
-            DELETE FROM chemicals
-            WHERE id NOT IN (
-                SELECT MIN(id) FROM chemicals
-                WHERE cas_number IS NOT NULL AND cas_number != ''
-                GROUP BY cas_number
-            )
-            AND cas_number IS NOT NULL AND cas_number != ''
-            """
-        )
-        deleted = cursor.rowcount
-        self._conn.commit()
-        if deleted > 0:
-            logger.info("化学品库去重完成, 删除 %d 条重复记录", deleted)
-        return deleted
-
     def check_integrity(self) -> Dict[str, Any]:
         """
         功能:
-            检查化学品库完整性, 返回统计与问题列表.
+            检查化学品库完整性, 返回 7 类问题清单.
+            每条问题项均包含完整行数据, 便于前端跳转编辑.
         返回:
-            Dict[str, Any], 包含 total, no_cas, no_name, duplicated_cas 统计.
+            Dict[str, Any], 含以下 7 个键:
+                duplicate_chinese_names: 中文名 (substance) 列内重复, 每组含 name + rows
+                duplicate_english_names: 英文名 (substance_english_name) 列内重复, 同结构
+                missing_physical_state: physical_state 缺失行
+                missing_physical_form: physical_form 缺失行
+                neat_missing_molecular_weight: physical_form='neat' 但缺 molecular_weight
+                neat_liquid_missing_density: physical_form='neat' 且 physical_state='liquid' 但缺 density
+                beads_solution_missing_content: physical_form ∈ {beads, solution} 但缺 active_content
         """
-        total = self.count()
-
-        cursor = self._conn.execute(
-            "SELECT COUNT(*) FROM chemicals WHERE (cas_number IS NULL OR cas_number = '')"
+        # 中文名列内重复 (DB 上 substance 已有 UNIQUE COLLATE NOCASE, 通常为空; 用于发现历史脏数据)
+        duplicate_chinese_names = self._collect_duplicate_name_groups("substance")
+        # 英文名列内重复 (无 UNIQUE 约束, 是该检查的主要落点)
+        duplicate_english_names = self._collect_duplicate_name_groups(
+            "substance_english_name"
         )
-        no_cas = cursor.fetchone()[0]
 
-        cursor = self._conn.execute(
-            "SELECT COUNT(*) FROM chemicals WHERE "
-            "(substance IS NULL OR substance = '') AND "
-            "(substance_english_name IS NULL OR substance_english_name = '')"
+        # 物态缺失
+        missing_physical_state = self._collect_rows(
+            "physical_state IS NULL OR physical_state = ''"
         )
-        no_name = cursor.fetchone()[0]
-
-        cursor = self._conn.execute(
-            "SELECT cas_number, COUNT(*) as cnt FROM chemicals "
-            "WHERE cas_number IS NOT NULL AND cas_number != '' "
-            "GROUP BY cas_number HAVING cnt > 1"
+        # 形态缺失
+        missing_physical_form = self._collect_rows(
+            "physical_form IS NULL OR physical_form = ''"
         )
-        duplicated_cas = [dict(row) for row in cursor.fetchall()]
 
+        # neat 缺 molecular_weight (要求 physical_form 已填)
+        neat_missing_mw = self._collect_rows(
+            "physical_form = 'neat' AND molecular_weight IS NULL"
+        )
+        # neat 且 liquid 缺 density (要求 physical_form/state 已填)
+        neat_liquid_missing_density = self._collect_rows(
+            "physical_form = 'neat' AND physical_state = 'liquid' AND density IS NULL"
+        )
+        # beads/solution 缺 active_content
+        beads_solution_missing_content = self._collect_rows(
+            "physical_form IN ('beads', 'solution') "
+            "AND (active_content IS NULL OR active_content = '')"
+        )
         return {
-            "total": total,
-            "no_cas": no_cas,
-            "no_name": no_name,
-            "duplicated_cas": duplicated_cas,
+            "duplicate_chinese_names": duplicate_chinese_names,
+            "duplicate_english_names": duplicate_english_names,
+            "missing_physical_state": missing_physical_state,
+            "missing_physical_form": missing_physical_form,
+            "neat_missing_molecular_weight": neat_missing_mw,
+            "neat_liquid_missing_density": neat_liquid_missing_density,
+            "beads_solution_missing_content": beads_solution_missing_content,
         }
+
+    def _collect_rows(self, where_clause: str) -> List[Dict[str, Any]]:
+        """
+        功能:
+            按 where 子句拉取全部命中行, 返回 dict 列表.
+        参数:
+            where_clause: str, SQL WHERE 子句 (不含 WHERE 关键字).
+        返回:
+            List[Dict[str, Any]], 命中的行数据列表, 按 id 升序.
+        """
+        cursor = self._conn.execute(
+            f"SELECT * FROM chemicals WHERE {where_clause} ORDER BY id ASC"
+        )
+        return [self._row_to_dict(row) for row in cursor.fetchall()]
+
+    def _collect_duplicate_name_groups(self, column: str) -> List[Dict[str, Any]]:
+        """
+        功能:
+            在指定名称列内查找重复值, 返回每个重复值对应的全部行.
+        参数:
+            column: str, 'substance' 或 'substance_english_name'.
+        返回:
+            List[Dict[str, Any]], 每项为 {"name": str, "rows": List[Dict]}.
+        """
+        # 先找出现次数 >1 的名称
+        cursor = self._conn.execute(
+            f"SELECT {column} AS name FROM chemicals "
+            f"WHERE {column} IS NOT NULL AND {column} != '' "
+            f"GROUP BY {column} HAVING COUNT(*) > 1 ORDER BY {column}"
+        )
+        duplicate_names = [row["name"] for row in cursor.fetchall()]
+
+        # 再为每个重复名称拉取全部行
+        groups: List[Dict[str, Any]] = []
+        for name in duplicate_names:
+            cursor = self._conn.execute(
+                f"SELECT * FROM chemicals WHERE {column} = ? ORDER BY id ASC",
+                (name,),
+            )
+            groups.append(
+                {
+                    "name": name,
+                    "rows": [self._row_to_dict(row) for row in cursor.fetchall()],
+                }
+            )
+        return groups
 
     # ===================== 带重复检查的插入 =====================
 

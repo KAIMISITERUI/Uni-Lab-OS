@@ -30,11 +30,19 @@ export interface ChemicalListResponse {
   items: ChemicalRow[]
 }
 
+export interface DuplicateNameGroup {
+  name: string
+  rows: ChemicalRow[]
+}
+
 export interface IntegrityReport {
-  total: number
-  no_cas: number
-  no_name: number
-  duplicated_cas: { cas_number: string; cnt: number }[]
+  duplicate_chinese_names: DuplicateNameGroup[]
+  duplicate_english_names: DuplicateNameGroup[]
+  missing_physical_state: ChemicalRow[]
+  missing_physical_form: ChemicalRow[]
+  neat_missing_molecular_weight: ChemicalRow[]
+  neat_liquid_missing_density: ChemicalRow[]
+  beads_solution_missing_content: ChemicalRow[]
 }
 
 export interface LookupResponse {
@@ -115,11 +123,6 @@ export async function lookupChemical(payload: {
 
 export async function fetchIntegrity(): Promise<IntegrityReport> {
   const { data } = await http.get<IntegrityReport>('/api/integrity')
-  return data
-}
-
-export async function deduplicate(): Promise<{ deleted: number }> {
-  const { data } = await http.post<{ deleted: number }>('/api/deduplicate')
   return data
 }
 

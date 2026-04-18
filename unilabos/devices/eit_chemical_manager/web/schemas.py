@@ -75,13 +75,30 @@ class ChemicalListResponse(BaseModel):
     items: List[ChemicalOut]
 
 
-class IntegrityReport(BaseModel):
-    """功能: check_integrity 的响应模型."""
+class DuplicateNameGroup(BaseModel):
+    """
+    功能:
+        同名行分组, 一组对应一个重复的名称值与命中该名称的全部行.
+    """
 
-    total: int
-    no_cas: int
-    no_name: int
-    duplicated_cas: List[Dict[str, Any]]
+    name: str
+    rows: List[ChemicalOut]
+
+
+class IntegrityReport(BaseModel):
+    """
+    功能:
+        check_integrity 的响应模型, 含 7 类问题清单.
+        每条问题项均为完整 ChemicalOut, 便于前端跳转编辑.
+    """
+
+    duplicate_chinese_names: List[DuplicateNameGroup]
+    duplicate_english_names: List[DuplicateNameGroup]
+    missing_physical_state: List[ChemicalOut]
+    missing_physical_form: List[ChemicalOut]
+    neat_missing_molecular_weight: List[ChemicalOut]
+    neat_liquid_missing_density: List[ChemicalOut]
+    beads_solution_missing_content: List[ChemicalOut]
 
 
 class LookupRequest(BaseModel):
@@ -140,12 +157,6 @@ class PrepareResponse(BaseModel):
     derived_row_id: Optional[int] = None
     recipe: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
-
-
-class DeduplicateResponse(BaseModel):
-    """功能: 去重操作响应."""
-
-    deleted: int
 
 
 class DeleteResponse(BaseModel):
