@@ -9,7 +9,7 @@ import csv
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..config.setting import Settings
 from ..controller.chemical_db import ChemicalDB
@@ -316,18 +316,39 @@ class ChemicalManager:
             "chemicalbook_record_path": base_result.get("chemicalbook_record_path", ""),
         }
 
-    # ===================== 导出 =====================
+    # ===================== 导出 / 导入 =====================
+
+    def _collect_export_rows_and_fields(self) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """
+        功能:
+            从数据库聚合导出所需的行数据与字段列表.
+            第一行入序保证核心列靠前, 后续行新增的 extra_json 展开列追加到末尾.
+        返回:
+            Tuple[List[Dict], List[str]], (行数据, 字段名按出现顺序排列).
+        """
+        rows = self._db.iter_all()
+        if len(rows) == 0:
+            return [], []
+
+        fieldnames: List[str] = list(rows[0].keys())
+        seen = set(fieldnames)
+        for row in rows[1:]:
+            for key in row.keys():
+                if key not in seen:
+                    seen.add(key)
+                    fieldnames.append(key)
+        return rows, fieldnames
 
     def export_to_csv(self, output_path: str) -> int:
         """
         功能:
-            将化学品库导出为 CSV 文件.
+            将化学品库导出为 CSV 文件, 采用 utf-8-sig 编码保证 Excel 打开中文正常.
         参数:
             output_path: str, 输出文件路径.
         返回:
             int, 导出的行数.
         """
-        rows = self._db.iter_all()
+        rows, fieldnames = self._collect_export_rows_and_fields()
         if len(rows) == 0:
             logger.warning("化学品库为空, 无数据可导出")
             return 0
@@ -335,8 +356,6 @@ class ChemicalManager:
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
 
-        # 使用第一行的 key 作为 CSV 表头
-        fieldnames = list(rows[0].keys())
         with open(output, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -345,6 +364,69 @@ class ChemicalManager:
 
         logger.info("化学品库已导出到 CSV: path=%s, 行数=%d", output_path, len(rows))
         return len(rows)
+
+    def export_to_xlsx(self, output_path: str) -> int:
+        """
+        功能:
+            将化学品库导出为 xlsx 文件, 使用 openpyxl 直接写入.
+        参数:
+            output_path: str, 输出文件路径.
+        返回:
+            int, 导出的行数.
+        """
+        import openpyxl
+
+        rows, fieldnames = self._collect_export_rows_and_fields()
+        if len(rows) == 0:
+            logger.warning("化学品库为空, 无数据可导出")
+            return 0
+
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+        wb = openpyxl.Workbook()
+        try:
+            ws = wb.active
+            ws.title = "chemicals"
+            ws.append(fieldnames)
+            for row in rows:
+                # openpyxl 只接受基础类型, dict/list 等直接转 str 避免异常
+                values = []
+                for name in fieldnames:
+                    val = row.get(name)
+                    if val is not None and not isinstance(val, (str, int, float, bool)):
+                        val = str(val)
+                    values.append(val)
+                ws.append(values)
+            wb.save(str(output))
+        finally:
+            wb.close()
+
+        logger.info("化学品库已导出到 XLSX: path=%s, 行数=%d", output_path, len(rows))
+        return len(rows)
+
+    def import_to_library(
+        self,
+        file_path: str,
+        dry_run: bool = False,
+    ) -> Dict[str, int]:
+        """
+        功能:
+            从 xlsx 或 csv 文件向化学品库追加化学品, 自动根据后缀分派.
+            重复行按 CAS / substance 检查后跳过, 不做源文件备份.
+        参数:
+            file_path: str, 源文件路径, 以 .xlsx 或 .csv 结尾.
+            dry_run: bool, True 时仅统计不写入.
+        返回:
+            Dict[str, int], 包含 migrated, skipped, failed 三项计数.
+        """
+        from ..utils.importer import import_to_library as _do_import
+
+        return _do_import(
+            file_path=file_path,
+            db_path=str(self._settings.db_path),
+            dry_run=dry_run,
+        )
 
     def deduplicate(self) -> int:
         """
@@ -363,6 +445,254 @@ class ChemicalManager:
             Dict[str, Any], 完整性检查结果.
         """
         return self._db.check_integrity()
+
+    # ===================== 合成工站专用 Python API =====================
+
+    # 合成工站需要的字段投影, 其他列在这里被裁剪, 避免无关字段渗透到调用方
+    _SYNTHESIS_FIELDS = (
+        "chemical_id",
+        "cas_number",
+        "substance",
+        "substance_english_name",
+        "physical_state",
+        "physical_form",
+        "storage_location",
+        "density",
+        "molecular_weight",
+        "active_content",
+        "smiles",
+        "brand",
+        "package_size",
+    )
+
+    @classmethod
+    def _project_synthesis_fields(cls, row_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        功能:
+            从行数据中抽取合成工站所需的字段投影.
+        参数:
+            row_data: Dict[str, Any], ChemicalDB 返回的完整行数据.
+        返回:
+            Dict[str, Any], 仅包含合成工站关心字段的字典.
+        """
+        return {field: row_data.get(field) for field in cls._SYNTHESIS_FIELDS}
+
+    def get_by_substance(self, substance: str) -> Dict[str, Any]:
+        """
+        功能:
+            按中文名精确查询单条化学品记录, 依赖表级 UNIQUE 约束.
+        参数:
+            substance: str, 中文名.
+        返回:
+            Dict[str, Any], 化学品行数据(含合成工站投影字段).
+        异常:
+            KeyError: 未找到该中文名.
+        """
+        normalized = str(substance or "").strip()
+        if normalized == "":
+            raise KeyError("化学品库查询失败: substance 为空")
+
+        row = self._db.find_by_substance_exact(normalized)
+        if row is None:
+            raise KeyError(f"化学品库未找到: {normalized}")
+        return self._project_synthesis_fields(row)
+
+    def exists(self, substance: str) -> bool:
+        """
+        功能:
+            判断中文名是否存在于化学品库中.
+        参数:
+            substance: str, 中文名.
+        返回:
+            bool, True 表示存在.
+        """
+        normalized = str(substance or "").strip()
+        if normalized == "":
+            return False
+        return self._db.find_by_substance_exact(normalized) is not None
+
+    def get_many_by_substances(
+        self,
+        substances: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        功能:
+            批量按中文名查询, 一次 SQL 取回全部行, 任一名称未命中即抛 KeyError.
+            内部对输入去重(大小写不敏感).
+        参数:
+            substances: List[str], 中文名列表, 允许重复.
+        返回:
+            Dict[str, Dict[str, Any]], 键为调用方原样传入的 substance.
+        异常:
+            KeyError: 存在未命中的名称, args 含完整缺失列表.
+        """
+        # 归一化并去除空项, 同时保留原始字符串顺序
+        normalized_list: List[str] = []
+        seen: set = set()
+        for name in substances or []:
+            stripped = str(name or "").strip()
+            if stripped == "":
+                continue
+            lower_key = stripped.lower()
+            if lower_key in seen:
+                continue
+            seen.add(lower_key)
+            normalized_list.append(stripped)
+
+        if not normalized_list:
+            return {}
+
+        raw_result = self._db.find_many_by_substances(normalized_list)
+
+        # 校验命中完整性, 缺失一次性暴露
+        missing = [name for name in normalized_list if name not in raw_result]
+        if missing:
+            raise KeyError(f"化学品库缺失: {missing}")
+
+        return {
+            name: self._project_synthesis_fields(row_data)
+            for name, row_data in raw_result.items()
+        }
+
+    def resolve_english_to_chinese(
+        self,
+        english_names: List[str],
+    ) -> Dict[str, str]:
+        """
+        功能:
+            批量把英文名映射为中文名, 忽略大小写, 缺失一次性抛 KeyError.
+        参数:
+            english_names: List[str], 英文名列表.
+        返回:
+            Dict[str, str], 键保留调用方传入的原样英文名, 值为中文名.
+        异常:
+            KeyError: 任一英文名未命中.
+        """
+        # 先在本地构建一张全库的英文名→中文名索引, 用单次 iter_all 避免 N+1 查询
+        lookup: Dict[str, str] = {}
+        for row in self._db.iter_all():
+            english = str(row.get("substance_english_name") or "").strip()
+            chinese = str(row.get("substance") or "").strip()
+            if english == "" or chinese == "":
+                continue
+            lookup[english.lower()] = chinese
+
+        result: Dict[str, str] = {}
+        missing: List[str] = []
+        for raw in english_names or []:
+            stripped = str(raw or "").strip()
+            if stripped == "":
+                continue
+            hit = lookup.get(stripped.lower())
+            if hit is None:
+                missing.append(stripped)
+                continue
+            result[stripped] = hit
+
+        if missing:
+            raise KeyError(f"化学品库英文名未命中: {missing}")
+        return result
+
+    def list_all_for_synthesis(self) -> List[Dict[str, Any]]:
+        """
+        功能:
+            返回合成工站所需字段投影的全量化学品列表.
+            字段集合见 _SYNTHESIS_FIELDS.
+        返回:
+            List[Dict[str, Any]], 每项为投影后的字段字典.
+        """
+        return [
+            self._project_synthesis_fields(row)
+            for row in self._db.iter_all()
+        ]
+
+    def set_storage_location(
+        self,
+        substance: str,
+        storage_location: str,
+    ) -> None:
+        """
+        功能:
+            更新指定化学品的存储位置, 仅供 Web UI 与运维脚本使用.
+        参数:
+            substance: str, 中文名.
+            storage_location: str, 新的存储位置编码.
+        返回:
+            None.
+        异常:
+            KeyError: 未找到 substance.
+        """
+        normalized = str(substance or "").strip()
+        if normalized == "":
+            raise KeyError("化学品存储位置更新失败: substance 为空")
+
+        updated = self._db.update_by_substance(
+            normalized,
+            {"storage_location": str(storage_location or "").strip()},
+        )
+        if updated is False:
+            raise KeyError(f"化学品库未找到: {normalized}")
+
+    def set_chemical_id(self, substance: str, chemical_id: Any) -> None:
+        """
+        功能:
+            回写工站硬件分配的 chemical_id (fid) 到 SQLite.
+        参数:
+            substance: str, 中文名.
+            chemical_id: Any, 工站硬件 fid, 允许 int 或 str, 统一保存为字符串.
+        返回:
+            None.
+        异常:
+            KeyError: 未找到 substance.
+        """
+        normalized = str(substance or "").strip()
+        if normalized == "":
+            raise KeyError("chemical_id 回写失败: substance 为空")
+        if chemical_id is None or str(chemical_id).strip() == "":
+            raise KeyError(f"chemical_id 回写失败: 值为空, substance={normalized}")
+
+        updated = self._db.update_by_substance(
+            normalized,
+            {"chemical_id": str(chemical_id).strip()},
+        )
+        if updated is False:
+            raise KeyError(f"化学品库未找到: {normalized}")
+
+    def set_chemical_ids_batch(self, mapping: Dict[str, Any]) -> int:
+        """
+        功能:
+            批量回写 chemical_id. 逐条执行并在遇到任一缺失名称时抛 KeyError,
+            已更新的行通过事务回滚还原.
+        参数:
+            mapping: Dict[str, Any], {substance: chemical_id}.
+        返回:
+            int, 实际更新行数.
+        异常:
+            KeyError: 存在未命中的 substance, args 含完整缺失列表.
+        """
+        if not mapping:
+            return 0
+
+        # 预扫描一遍确认全部命中, 再在事务中执行 UPDATE, 避免部分写入
+        cleaned: Dict[str, str] = {}
+        for key, value in mapping.items():
+            name = str(key or "").strip()
+            id_value = str(value).strip() if value is not None else ""
+            if name == "" or id_value == "":
+                continue
+            cleaned[name] = id_value
+
+        if not cleaned:
+            return 0
+
+        present = self._db.find_many_by_substances(list(cleaned.keys()))
+        missing = [name for name in cleaned.keys() if name not in present]
+        if missing:
+            raise KeyError(f"化学品库缺失, chemical_id 批量回写中止: {missing}")
+
+        updated_count = self._db.update_chemical_ids_batch(cleaned)
+        logger.info("批量回写 chemical_id 完成, 更新行数: %d", updated_count)
+        return updated_count
 
     # ===================== 私有方法 =====================
 

@@ -269,6 +269,10 @@ backup/
 *.backup
 *.backup2
 
+# EIT chemical manager web frontend build artifacts
+unilabos/devices/eit_chemical_manager/web/frontend/node_modules/
+unilabos/devices/eit_chemical_manager/web/frontend/dist/
+
 # Claude Code local settings
 **/.claude/settings.local.json
 

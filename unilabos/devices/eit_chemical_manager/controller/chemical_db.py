@@ -12,16 +12,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config.constants import CORE_COLUMNS, NUMERIC_COLUMNS
+from ..driver.exceptions import ValidationError
 
 logger = logging.getLogger("ChemicalDB")
 
+# 数据库 schema 版本, 与 PRAGMA user_version 对应
+_SCHEMA_VERSION = 1
+
 # 建表 SQL
+# substance 列加 UNIQUE COLLATE NOCASE 约束, 保证中文名全库唯一且大小写不敏感
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS chemicals (
     id                         INTEGER PRIMARY KEY AUTOINCREMENT,
     cas_number                 TEXT,
     chemical_id                TEXT,
-    substance                  TEXT,
+    substance                  TEXT UNIQUE COLLATE NOCASE,
     substance_english_name     TEXT,
     other_name                 TEXT,
     brand                      TEXT,
@@ -72,12 +77,143 @@ class ChemicalDB:
     def _ensure_schema(self) -> None:
         """
         功能:
-            确保数据库表与索引已创建.
+            确保数据库表与索引已创建, 并按需执行 schema 迁移.
         """
+        # 先迁移旧库, 再执行 CREATE IF NOT EXISTS, 保证新库直接带约束且旧库会被重建
+        self._migrate_unique_substance_v1()
         self._conn.execute(_CREATE_TABLE_SQL)
         for index_sql in _CREATE_INDEXES_SQL:
             self._conn.execute(index_sql)
         self._conn.commit()
+
+    def _migrate_unique_substance_v1(self) -> None:
+        """
+        功能:
+            把 chemicals 表的 substance 列升级为 UNIQUE COLLATE NOCASE 约束.
+            若探测到已存在的重名记录, 直接抛 RuntimeError 要求人工清理.
+            不提供自动合并或静默丢弃, 以避免业务数据丢失.
+        返回:
+            None.
+        异常:
+            RuntimeError: 旧库中存在 substance 重名, 需人工处理后再启动.
+        """
+        # 读当前 schema 版本, 已迁移则跳过
+        cursor = self._conn.execute("PRAGMA user_version;")
+        current_version = cursor.fetchone()[0]
+        if int(current_version) >= _SCHEMA_VERSION:
+            return
+
+        # 表不存在表示首次初始化, 无需迁移, 直接写版本号
+        cursor = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='chemicals';"
+        )
+        if cursor.fetchone() is None:
+            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION};")
+            self._conn.commit()
+            return
+
+        # 若 substance 列已带 UNIQUE 约束, 仅刷新版本号
+        if self._substance_column_is_unique() is True:
+            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION};")
+            self._conn.commit()
+            return
+
+        # 探测重名, 命中即中断迁移, 等待人工清理
+        cursor = self._conn.execute(
+            """
+            SELECT substance, COUNT(*) AS cnt FROM chemicals
+            WHERE substance IS NOT NULL AND substance != ''
+            GROUP BY LOWER(substance) HAVING cnt > 1
+            """
+        )
+        duplicates = cursor.fetchall()
+        if len(duplicates) > 0:
+            duplicate_list = [
+                f"{row['substance']}({row['cnt']} 条)" for row in duplicates
+            ]
+            logger.error(
+                "化学品库存在 substance 重名, 需人工清理后再启动, 重名列表: %s",
+                duplicate_list,
+            )
+            raise RuntimeError(
+                "化学品库 substance 列存在重名, 迁移已中止. "
+                f"请先在 Web UI 或 CLI 中清理以下条目: {duplicate_list}"
+            )
+
+        # 重建表结构以添加 UNIQUE 约束
+        logger.info("开始执行化学品库 schema 迁移: 为 substance 列添加 UNIQUE 约束")
+        try:
+            self._conn.execute("BEGIN")
+            self._conn.execute("""
+                CREATE TABLE chemicals_new (
+                    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cas_number                 TEXT,
+                    chemical_id                TEXT,
+                    substance                  TEXT UNIQUE COLLATE NOCASE,
+                    substance_english_name     TEXT,
+                    other_name                 TEXT,
+                    brand                      TEXT,
+                    package_size               TEXT,
+                    storage_location           TEXT,
+                    molecular_weight           REAL,
+                    density                    REAL,
+                    physical_state             TEXT,
+                    physical_form              TEXT,
+                    active_content             TEXT,
+                    smiles                     TEXT,
+                    extra_json                 TEXT,
+                    chemicalbook_record_path   TEXT,
+                    created_at                 TEXT DEFAULT (datetime('now')),
+                    updated_at                 TEXT DEFAULT (datetime('now'))
+                );
+            """)
+            # 明确列出字段, 避免 SELECT * 因未来列序变化出错
+            self._conn.execute("""
+                INSERT INTO chemicals_new (
+                    id, cas_number, chemical_id, substance, substance_english_name,
+                    other_name, brand, package_size, storage_location,
+                    molecular_weight, density, physical_state, physical_form,
+                    active_content, smiles, extra_json, chemicalbook_record_path,
+                    created_at, updated_at
+                )
+                SELECT
+                    id, cas_number, chemical_id, substance, substance_english_name,
+                    other_name, brand, package_size, storage_location,
+                    molecular_weight, density, physical_state, physical_form,
+                    active_content, smiles, extra_json, chemicalbook_record_path,
+                    created_at, updated_at
+                FROM chemicals
+            """)
+            self._conn.execute("DROP TABLE chemicals;")
+            self._conn.execute("ALTER TABLE chemicals_new RENAME TO chemicals;")
+            for index_sql in _CREATE_INDEXES_SQL:
+                self._conn.execute(index_sql)
+            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION};")
+            self._conn.commit()
+        except Exception as exc:
+            self._conn.rollback()
+            logger.exception("化学品库 schema 迁移失败, 已回滚")
+            raise RuntimeError(f"化学品库 schema 迁移失败: {exc}") from exc
+
+        logger.info("化学品库 schema 迁移完成, substance 列已带 UNIQUE 约束")
+
+    def _substance_column_is_unique(self) -> bool:
+        """
+        功能:
+            判断 chemicals 表的 substance 列是否已经存在 UNIQUE 约束.
+        返回:
+            bool, True 表示已带 UNIQUE 约束.
+        """
+        cursor = self._conn.execute("PRAGMA index_list('chemicals');")
+        for index_row in cursor.fetchall():
+            # index_list 返回 seq, name, unique, origin, partial
+            if int(index_row["unique"]) != 1:
+                continue
+            col_cursor = self._conn.execute(f"PRAGMA index_info('{index_row['name']}');")
+            col_names = [c["name"] for c in col_cursor.fetchall()]
+            if col_names == ["substance"]:
+                return True
+        return False
 
     def close(self) -> None:
         """
@@ -153,13 +289,22 @@ class ChemicalDB:
             row_data: Dict[str, Any], 行数据.
         返回:
             int, 新行 id.
+        异常:
+            ValidationError: 违反唯一性约束, 例如 substance 重名.
         """
         values = self._prepare_insert_values(row_data)
         columns = list(values.keys())
         placeholders = ", ".join(["?"] * len(columns))
         column_names = ", ".join(columns)
         sql = f"INSERT INTO chemicals ({column_names}) VALUES ({placeholders})"
-        cursor = self._conn.execute(sql, [values[col] for col in columns])
+        try:
+            cursor = self._conn.execute(sql, [values[col] for col in columns])
+        except sqlite3.IntegrityError as exc:
+            # 唯一性约束冲突, 抛 ValidationError 让上层按业务错误处理
+            conflict_substance = str(values.get("substance") or "").strip()
+            raise ValidationError(
+                f"化学品写入失败, substance 重名或触发唯一约束: {conflict_substance}"
+            ) from exc
         self._conn.commit()
         return cursor.lastrowid
 
@@ -187,6 +332,8 @@ class ChemicalDB:
             updates: Dict[str, Any], 要更新的字段.
         返回:
             bool, True 表示更新成功.
+        异常:
+            ValidationError: 触发唯一性约束, 例如改名为已有 substance.
         """
         values = self._prepare_insert_values(updates)
         values["updated_at"] = "datetime('now')"
@@ -200,7 +347,13 @@ class ChemicalDB:
                 params.append(val)
         params.append(row_id)
         sql = f"UPDATE chemicals SET {', '.join(set_parts)} WHERE id = ?"
-        cursor = self._conn.execute(sql, params)
+        try:
+            cursor = self._conn.execute(sql, params)
+        except sqlite3.IntegrityError as exc:
+            conflict_substance = str(values.get("substance") or "").strip()
+            raise ValidationError(
+                f"化学品更新失败, substance 重名或触发唯一约束: {conflict_substance}"
+            ) from exc
         self._conn.commit()
         return cursor.rowcount > 0
 
@@ -321,6 +474,135 @@ class ChemicalDB:
                 if match is not None:
                     return label_text, target_value, match["id"]
         return None
+
+    # ===================== 合成工站专用精确查询与按名更新 =====================
+
+    def find_by_substance_exact(self, substance: str) -> Optional[Dict[str, Any]]:
+        """
+        功能:
+            按 substance 中文名精确匹配(依赖 COLLATE NOCASE 大小写不敏感).
+            依赖表级 UNIQUE 约束保证最多命中一条.
+        参数:
+            substance: str, 中文名.
+        返回:
+            Optional[Dict[str, Any]], 命中时返回行数据, 否则 None.
+        """
+        normalized = str(substance or "").strip()
+        if normalized == "":
+            return None
+        cursor = self._conn.execute(
+            "SELECT * FROM chemicals WHERE substance = ? LIMIT 1",
+            (normalized,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_dict(row)
+
+    def find_many_by_substances(
+        self,
+        substances: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        功能:
+            按 substance 列表一次性查询, 返回 {substance_原样: row_data}.
+            内部对输入去重(大小写不敏感). 未命中的名称不出现在返回值中, 由上层判断.
+        参数:
+            substances: List[str], 中文名列表.
+        返回:
+            Dict[str, Dict[str, Any]], 键保留调用方传入的原始字符串.
+        """
+        if not substances:
+            return {}
+
+        # 去重时按小写折叠, 保留首次出现的原样字符串
+        seen_lower: Dict[str, str] = {}
+        for name in substances:
+            stripped = str(name or "").strip()
+            if stripped == "":
+                continue
+            key_lower = stripped.lower()
+            if key_lower not in seen_lower:
+                seen_lower[key_lower] = stripped
+
+        if not seen_lower:
+            return {}
+
+        # 构造 IN 子句, substance 列已带 COLLATE NOCASE, 比较自动忽略大小写
+        placeholders = ", ".join(["?"] * len(seen_lower))
+        sql = f"SELECT * FROM chemicals WHERE substance IN ({placeholders})"
+        cursor = self._conn.execute(sql, list(seen_lower.values()))
+        rows = cursor.fetchall()
+
+        # 用查询结果的小写名映射回调用方传入的原样字符串
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            row_substance = str(row["substance"] or "").strip()
+            original = seen_lower.get(row_substance.lower())
+            if original is None:
+                continue
+            result[original] = self._row_to_dict(row)
+        return result
+
+    def update_chemical_ids_batch(self, mapping: Dict[str, str]) -> int:
+        """
+        功能:
+            单事务批量更新 chemical_id. 调用前上层需已保证所有 substance 存在.
+        参数:
+            mapping: Dict[str, str], {substance: chemical_id}, 值必须为非空字符串.
+        返回:
+            int, 实际更新行数.
+        """
+        if not mapping:
+            return 0
+
+        updated_count = 0
+        try:
+            self._conn.execute("BEGIN")
+            for substance_name, chemical_id_value in mapping.items():
+                cursor = self._conn.execute(
+                    "UPDATE chemicals SET chemical_id = ?, updated_at = datetime('now') "
+                    "WHERE substance = ?",
+                    (chemical_id_value, substance_name),
+                )
+                if cursor.rowcount > 0:
+                    updated_count += 1
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            logger.exception("批量回写 chemical_id 失败, 已回滚")
+            raise
+
+        return updated_count
+
+    def update_by_substance(self, substance: str, updates: Dict[str, Any]) -> bool:
+        """
+        功能:
+            按 substance 中文名定位并更新指定字段, 用于 Web UI 编辑与
+            合成工站 chemical_id 回写.
+        参数:
+            substance: str, 中文名.
+            updates: Dict[str, Any], 要更新的字段.
+        返回:
+            bool, True 表示命中并更新成功.
+        """
+        normalized = str(substance or "").strip()
+        if normalized == "":
+            return False
+        values = self._prepare_insert_values(updates)
+        if not values:
+            return False
+
+        set_parts = [f"{col} = ?" for col in values.keys()]
+        set_parts.append("updated_at = datetime('now')")
+        sql = (
+            f"UPDATE chemicals SET {', '.join(set_parts)} "
+            "WHERE substance = ?"
+        )
+        params = list(values.values()) + [normalized]
+        cursor = self._conn.execute(sql, params)
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     # ===================== 批量操作 =====================
 
