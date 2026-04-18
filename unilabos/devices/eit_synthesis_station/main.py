@@ -13,7 +13,6 @@ logger = logging.getLogger("InteractiveCLI")
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_TASK_TPL = ROOT / "sheet" / "reaction_template.xlsx"
-DEFAULT_CHEM_DB = ROOT / "sheet" / "chemical_list.xlsx"
 DEFAULT_TEMPLATE_IN = ROOT / "sheet" / "batch_in_tray.xlsx"
 
 # 任务状态码 -> 中文名称
@@ -261,21 +260,19 @@ def _menu_quick_workflow(manager):
         # 收集所有工作流共用的文件路径
         if choice in ("1"):
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
-            chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
 
         if choice == "1":
             # 提交任务流程
             steps = [
-                ("对齐化学品库", lambda: manager.align_chemicals_with_file(chem_db)),
-                ("上传任务到工站", lambda: manager.create_task_by_file(task_tpl, chem_db)),
-                ("物料核算", lambda: manager.check_resource_for_task(task_tpl, chem_db)),
+                ("同步化学品库到工站", lambda: manager.sync_chemicals_to_station()),
+                ("上传任务到工站", lambda: manager.create_task_by_file(task_tpl)),
+                ("物料核算", lambda: manager.check_resource_for_task(task_tpl)),
             ]
             _run_workflow(steps, quick=True)
 
         elif choice == "2":
             # AGV执行流程
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
-            chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
             steps = [
                 ("AGV上料", lambda: manager.batch_in_tray_with_agv_transfer()),
                 ("启动任务", lambda: manager.start_task()),
@@ -319,7 +316,7 @@ def _menu_quick_workflow(manager):
 def _menu_step_by_step(manager):
     """全流程分步进行子菜单"""
     options = [
-        ("1", "对齐化学品库"),
+        ("1", "同步化学品库到工站"),
         ("2", "上传任务到工站"),
         ("3", "物料核算"),
         ("4", "AGV上料"),
@@ -340,16 +337,13 @@ def _menu_step_by_step(manager):
         if choice == "0":
             return
         elif choice == "1":
-            chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
-            _safe_run(manager.align_chemicals_with_file, chem_db)
+            _safe_run(manager.sync_chemicals_to_station)
         elif choice == "2":
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
-            chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
-            _safe_run(manager.create_task_by_file, task_tpl, chem_db)
+            _safe_run(manager.create_task_by_file, task_tpl)
         elif choice == "3" or choice == "5":
             task_tpl = _input_file_path("任务模板路径", DEFAULT_TASK_TPL)
-            chem_db = _input_file_path("化学品库路径", DEFAULT_CHEM_DB)
-            _safe_run(manager.check_resource_for_task, task_tpl, chem_db)
+            _safe_run(manager.check_resource_for_task, task_tpl)
         elif choice == "4":
             _safe_run(manager.batch_in_tray_with_agv_transfer)
         elif choice == "6":
@@ -426,8 +420,7 @@ def _menu_chemical_library(manager):
         None.
     """
     options = [
-        ("1", "导出工站化学品到CSV"),
-        ("2", "从CSV导入化学品到工站"),
+        ("1", "同步化学品库到工站 (并回写 chemical_id)"),
         ("0", "返回上级菜单"),
     ]
 
@@ -438,11 +431,7 @@ def _menu_chemical_library(manager):
         if choice == "0":
             return
         elif choice == "1":
-            path = _input_with_default("导出文件路径", "chemicals_list_export.csv")
-            _safe_run(manager.export_chemical_list_to_file, path)
-        elif choice == "2":
-            path = _input_with_default("导入CSV文件路径", "add_chemical_list.csv")
-            _safe_run(manager.sync_chemicals_from_file, path)
+            _safe_run(manager.sync_chemicals_to_station)
         else:
             print("无效选择, 请重新输入")
 

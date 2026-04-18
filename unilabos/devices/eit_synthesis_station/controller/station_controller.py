@@ -4782,26 +4782,171 @@ class SynthesisStationController:
         except Exception:
             return 0.0
 
+    def _collect_chemical_names(
+        self,
+        params: Dict[str, Any],
+        headers: List[str],
+        data_rows: List[List[Any]],
+    ) -> List[str]:
+        """
+        功能:
+            扫描任务模板与参数, 收集所有会被查询的化学品中文名.
+            覆盖试剂列、内标种类、稀释液种类、闪滤液种类, 排除占位符 "加磁子".
+        参数:
+            params: Dict[str, Any], 实验全局参数.
+            headers: List[str], 表头.
+            data_rows: List[List[Any]], 实验数据行.
+        返回:
+            List[str], 去重后的中文名列表.
+        """
+        names: List[str] = []
+        seen: Set[str] = set()
+
+        def _append(candidate: Any) -> None:
+            value = str(candidate or "").strip()
+            if value == "" or value == "0" or value == "加磁子":
+                return
+            if value in seen:
+                return
+            seen.add(value)
+            names.append(value)
+
+        # 试剂名列: 命中条件与 build_task_payload 内的列扫描保持一致,
+        # 仅匹配名字列, 排除"试剂量_N"这种数量列
+        for col_idx, header_text in enumerate(headers):
+            header_str = str(header_text)
+            if "试剂" not in header_str:
+                continue
+            if "量" in header_str:
+                continue
+            for row_vals in data_rows:
+                if col_idx < len(row_vals):
+                    _append(row_vals[col_idx])
+
+        # 参数中的单体化学品字段
+        for key in ("内标种类", "稀释液种类", "闪滤液种类"):
+            _append(params.get(key, ""))
+
+        return names
+
+    @staticmethod
+    def _adapt_manager_row_to_chem_info(
+        row: Dict[str, Any],
+        fallback_substance: str,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            把 ChemicalManager 返回的行数据适配为 controller 内部使用的
+            chem_info 字典. 将 density 重命名为 "density (g/mL)", 归一化
+            physical_state 与 physical_form 为小写.
+        参数:
+            row: Dict[str, Any], ChemicalManager 返回的投影行数据.
+            fallback_substance: str, 当行中 substance 为空时的回退名称.
+        返回:
+            Dict[str, Any], controller 内部的 chem_info.
+        """
+        return {
+            "chemical_id": row.get("chemical_id"),
+            "substance": row.get("substance") or fallback_substance,
+            "substance_english_name": row.get("substance_english_name"),
+            "physical_state": str(row.get("physical_state") or "").strip().lower(),
+            "physical_form": str(row.get("physical_form") or "").strip().lower(),
+            "density (g/mL)": row.get("density"),
+            "molecular_weight": row.get("molecular_weight"),
+            "active_content": row.get("active_content"),
+        }
+
+    def _build_chemical_db_from_manager(
+        self,
+        names: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        功能:
+            从 ChemicalManager 批量取化学品记录, 适配成 controller 内部使用的
+            chemical_db 结构. 任一名称缺失立即抛 ValidationError, 不做兜底填充.
+            用于任务生成等需求侧场景, 缺失化学品必须阻断流程.
+        参数:
+            names: List[str], 中文名列表.
+        返回:
+            Dict[str, Dict[str, Any]], {substance: chem_info}.
+        异常:
+            ValidationError: 化学品库中不存在某些名称.
+        """
+        if not names:
+            return {}
+
+        from unilabos.devices.eit_chemical_manager.manager.chemical_manager import (
+            ChemicalManager,
+        )
+
+        cm = ChemicalManager.get_shared()
+        try:
+            raw_rows = cm.get_many_by_substances(list(names))
+        except KeyError as exc:
+            missing = exc.args[0] if exc.args else names
+            raise ValidationError(f"化学品库缺失: {missing}") from exc
+
+        return {
+            substance_name: self._adapt_manager_row_to_chem_info(row, substance_name)
+            for substance_name, row in raw_rows.items()
+        }
+
+    def _build_chemical_db_soft(
+        self,
+        names: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        功能:
+            软查询版: 返回化学品库中命中的名称, 缺失不报错只记日志.
+            适用于资源核查场景, 工站库存可能含未登记化学品.
+        参数:
+            names: List[str], 中文名列表.
+        返回:
+            Dict[str, Dict[str, Any]], 仅命中的名称进入结果.
+        """
+        if not names:
+            return {}
+
+        from unilabos.devices.eit_chemical_manager.manager.chemical_manager import (
+            ChemicalManager,
+        )
+
+        cm = ChemicalManager.get_shared()
+        raw_rows = cm.db.find_many_by_substances(list(names))
+        missing = [name for name in names if name not in raw_rows]
+        if len(missing) > 0:
+            self._logger.debug("资源核查: 化学品库未登记的库存项 %s", missing)
+
+        return {
+            substance_name: self._adapt_manager_row_to_chem_info(row, substance_name)
+            for substance_name, row in raw_rows.items()
+        }
+
     def build_task_payload(
         self,
         params: Dict[str, Any],
         headers: List[str],
         data_rows: List[List[Any]],
-        chemical_db: Dict[str, Any]
     ) -> JsonDict:
         """
         功能:
             将结构化的实验数据转换为 AddTask API 请求体.
             兼容同一试剂列中同时出现固体与液体的情况: 若检测到混用, 自动拆分为多个虚拟列(固体/液体/其他, 可选磁子列),
             以保证后续加料排序与布局行号映射正确.
+            化学品信息不再由调用方注入, 内部直接从 ChemicalManager 批量查询,
+            缺失名称立刻抛 ValidationError.
         参数:
             params: Dict[str, Any], 实验全局参数(反应时间、温度、反应规模、反应器类型、内标信息等).
             headers: List[str], 实验数据表头列表.
             data_rows: List[List[Any]], 实验数据行(每行为值列表).
-            chemical_db: Dict[str, Any], 化学品信息字典.
         返回:
             JsonDict, AddTask 请求体.
+        异常:
+            ValidationError: 模板引用的化学品在化学品库中缺失.
         """
+        # 统一从化学品库取数, 缺失名称此处直接报错, 避免后续逻辑跑出坏任务
+        needed_names = self._collect_chemical_names(params, headers, data_rows)
+        chemical_db = self._build_chemical_db_from_manager(needed_names)
 
         def _safe_float(value: Any, default_val: float) -> float:
             try:
@@ -5772,7 +5917,6 @@ class SynthesisStationController:
         self,
         task_payload: JsonDict,
         resource_rows: List[JsonDict],
-        chemical_db: Dict[str, Dict[str, Any]],
         task_id: Optional[int] = None,
     ) -> JsonDict:
         """
@@ -5781,7 +5925,6 @@ class SynthesisStationController:
         参数:
             task_payload: Dict, build_task_payload 生成的任务数据(当前版本未使用, 保留接口兼容).
             resource_rows: List[Dict], get_resource_info 的返回值(当前版本未使用, 保留接口兼容).
-            chemical_db: Dict[str, Dict[str, Any]], 化学品密度与物态数据(当前版本未使用, 保留接口兼容).
             task_id: int, 实验ID, 用于调用 BatchCheckTask API, 不可为空.
         返回:
             Dict[str, Any], 包含耗材需求、药品需求、库存差值、缺失与冗余列表.
@@ -5946,21 +6089,37 @@ class SynthesisStationController:
         self,
         task_payload: JsonDict,
         resource_rows: List[JsonDict],
-        chemical_db: Dict[str, Dict[str, Any]],
         task_id: Optional[int] = None,
     ) -> JsonDict:
         """
         功能:
             基于任务配置与站内资源统计药品与耗材需求, 对比库存给出缺口与冗余, 并跳过以 TB 开头的过渡舱资源.
+            化学品密度与物态从 ChemicalManager 内部按需查询, 不再由调用方注入.
         参数:
             task_payload: Dict, build_task_payload 生成的任务数据.
             resource_rows: List[Dict], get_resource_info 的返回值.
-            chemical_db: Dict[str, Dict[str, Any]], 化学品密度与物态数据, 用于单位换算.
             task_id: Optional[int], 实验ID, 用于二次校验任务资源, 默认为 None.
         返回:
             Dict[str, Any], 包含耗材需求、药品需求、库存差值、缺失与冗余列表.
+        异常:
+            ValidationError: layout 引用的化学品在化学品库中缺失.
         """
         layout_list = task_payload.get("layout_list") or []
+
+        # 构建 chemical_db: 名称来源于 layout 引用(需求侧) + resource_rows 库存侧.
+        # layout 侧在 build_task_payload 已强制校验过, 库存侧可能存在未登记项,
+        # 未命中的化学品不进入 chemical_db, 上层 .get(name, {}) 自然回退.
+        _needed_names: Set[str] = set()
+        for _layout_item in layout_list:
+            _sub = str((_layout_item.get("process_json") or {}).get("substance") or "").strip()
+            if _sub != "":
+                _needed_names.add(_sub)
+        for _row in resource_rows:
+            for _detail in _row.get("substance_details") or []:
+                _sub = str(_detail.get("substance") or "").strip()
+                if _sub != "":
+                    _needed_names.add(_sub)
+        chemical_db = self._build_chemical_db_soft(sorted(_needed_names))
         experiment_num = int(task_payload.get("task_setup", {}).get("experiment_num", 0))
 
         def _safe_float(val: Any) -> float:

@@ -193,72 +193,48 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         return all_sheets[fallback_sheet_name]
 
     # ---------- 1. 化合物库文件处理 ----------
-    def export_chemical_list_to_file(self, output_path: str) -> None:
+    def sync_chemicals_to_station(self, auto_delete: bool = True) -> JsonDict:
         """
         功能:
-            获取所有化学品并导出到 CSV 文件
+            从 ChemicalManager 拉取全量化学品定义, 调用父类对齐工站硬件,
+            并把硬件返回的 chemical_id / fid 回写到 SQLite. 实现化学品库
+            → 工站硬件 → 化学品库的闭环同步.
         参数:
-            output_path: 输出路径
+            auto_delete: bool, 是否删除工站内多余的化学品, 默认 True.
         返回:
-            None
+            Dict[str, Any], 包含 total/updated_rows/id_written 的统计.
         """
-        path = Path(output_path)
-        chemical_info = self.get_all_chemical_list()
-        chemical_list = chemical_info.get("chemical_list", [])
+        from unilabos.devices.eit_chemical_manager.manager.chemical_manager import (
+            ChemicalManager,
+        )
 
-        if not chemical_list:
-            logger.warning("化学品列表为空，未写入文件")
-            return
+        cm = ChemicalManager.get_shared()
+        rows = cm.list_all_for_synthesis()
+        if len(rows) == 0:
+            logger.warning("化学品库为空, 无内容可同步到工站")
+            return {"total": 0, "updated_rows": 0, "id_written": 0}
 
-        fieldnames = [
-            "fid", "name", "sssi", "cas", "element", "state",
-            "concentration_str", "chemical_properties", "preparation_method"
-        ]
-        
-        # 确保目录存在
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # 父类 align_chemicals_from_data 将访问工站硬件 API, 回填 chemical_id / fid
+        updated_rows = self.align_chemicals_from_data(rows, auto_delete=auto_delete)
 
-        with path.open("w", newline="", encoding="utf-8-sig") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
-            writer.writeheader()
-            for item in chemical_list:
-                writer.writerow(item)
-        
-        logger.info(f"化学品列表已导出至: {path.resolve()}")
+        # 从回填结果中收集中文名 -> chemical_id 映射
+        id_mapping: Dict[str, Any] = {}
+        for row in updated_rows:
+            substance = str(row.get("substance") or row.get("name") or "").strip()
+            if substance == "":
+                continue
+            new_id = row.get("chemical_id") or row.get("fid")
+            if new_id is None or str(new_id).strip() == "":
+                continue
+            id_mapping[substance] = new_id
 
-    def sync_chemicals_from_file(self, file_path: str, overwrite: bool = False) -> None:
-        """
-        功能:
-            读取 CSV 文件并通过父类同步化学品到工站
-        参数:
-            file_path: CSV 文件路径
-            overwrite: 是否覆盖更新
-        返回:
-            None
-        """
-        path = Path(file_path)
-        if not path.exists():
-            # 生成模板
-            header = ["name", "cas", "element", "state", "concentration_str", "chemical_properties", "preparation_method"]
-            with path.open("w", newline="", encoding="utf-8-sig") as f:
-                csv.writer(f).writerow(header)
-            logger.warning(f"文件不存在，已生成模板: {path}")
-            return
-
-        # 读取并清洗数据
-        items: List[JsonDict] = []
-        with path.open("r", newline="", encoding="utf-8-sig") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                name = (row.get("name") or "").strip()
-                state = (row.get("state") or "").strip()
-                if name and state:
-                    # 过滤空值键
-                    clean_item = {k: v.strip() for k, v in row.items() if v and str(v).strip()}
-                    items.append(clean_item)
-        
-        # 调用父类逻辑处理
-        self.sync_chemicals_from_data(items, overwrite=overwrite)
+        id_written = cm.set_chemical_ids_batch(id_mapping) if id_mapping else 0
+        logger.info("化学品同步到工站完成, 回写 chemical_id 行数: %s", id_written)
+        return {
+            "total": len(rows),
+            "updated_rows": len(updated_rows),
+            "id_written": id_written,
+        }
 
     def check_chemical_library_by_file(self, file_path: str) -> Dict[str, List[str]]:
         """
@@ -365,41 +341,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             safe_workbook_save(wb, file_path)
         finally:
             wb.close()
-
-    def align_chemicals_with_file(self, file_path: str, auto_delete: bool = True) -> None:
-        """
-        功能:
-            读取 Excel/CSV 文件，调用父类对齐逻辑，并将结果(fid)写回文件
-        参数:
-            file_path: 文件路径
-            auto_delete: 是否删除不在文件中的工站化学品
-        返回:
-            None
-        """
-        path = Path(file_path)
-        if not path.exists():
-            raise FileNotFoundError(f"未找到化学品对齐文件: {path}")
-
-        # 读取文件内容为 List[Dict]
-        df = pd.read_excel(path) if path.suffix in ['.xlsx', '.xls'] else pd.read_csv(path)
-        # 将 NaN 替换为空字符串
-        df = df.fillna("")
-        rows = df.to_dict(orient='records')
-        header = df.columns.tolist()
-
-        # 调用父类进行对齐，父类会修改 rows 中的数据(如回填 chemical_id)
-        updated_rows = self.align_chemicals_from_data(rows, auto_delete=auto_delete)
-
-        # 写回文件
-        new_df = pd.DataFrame(updated_rows)
-        # 保持原有列顺序，如果增加了新列(如 chemical_id 之前没有)，这会包含它
-        if path.suffix == '.csv':
-            new_df.to_csv(path, index=False, encoding="utf-8-sig")
-        else:
-            safe_excel_write(new_df, path, index=False)
-            self._beautify_excel_database(path)  # 保存后再美化
-        
-        logger.info(f"化学品对齐完成并回写文件: {path}")
 
     # ---------- 2. 上料动作 ----------
 
@@ -939,58 +880,24 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         return None, None, None
 
     # ---------- 3. 任务生成文件处理 ----------
-    def create_task_by_file(self, template_path: str, chemical_db_path: str) -> JsonDict:
+    def create_task_by_file(self, template_path: str) -> JsonDict:
         """
         功能:
-            读取任务模板和化学品库，解析为中间数据，调用父类生成任务 Payload 并提交
+            读取任务模板, 解析为中间数据, 调用父类生成任务 Payload 并提交.
+            化学品信息由 ChemicalManager 在 build_task_payload 内部统一查询.
         参数:
-            template_path: 实验模板路径
-            chemical_db_path: 化学品库路径
+            template_path: 实验模板路径.
         返回:
-            Dict: 任务创建结果
+            Dict, 任务创建结果.
         """
         t_path = Path(template_path)
-        c_path = Path(chemical_db_path)
 
         # 1. 检查并生成模板
         if not t_path.exists():
             self._generate_reaction_template(t_path)
             raise FileNotFoundError(f"已生成模板 {t_path}，请填写后重试")
 
-        if not c_path.exists():
-            raise FileNotFoundError(f"未找到化学品库文件: {c_path}")
-
-        # 2. 读取化学品库 -> Dict
-        chem_df = self._read_table_file_with_required_columns(
-            c_path,
-            required_columns=["substance"],
-        )
-        chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
-
-        def _pick(row, *keys, default=None):
-            for k in keys:
-                if k in row and pd.notna(row[k]):
-                    return row[k]
-            return default
-
-        chemical_db: Dict[str, Dict[str, Any]] = {}
-        for _, r in chem_df.iterrows():
-            row = {k: r.get(k) for k in chem_df.columns}
-            name = str(_pick(row, "substance", "name", "chemical_name", default="") or "").strip()
-            if not name:
-                continue
-
-            # 小写后的列名
-            chemical_db[name] = {
-                "chemical_id": _pick(row, "chemical_id"),
-                "molecular_weight": _pick(row, "molecular_weight", "mw"),
-                "physical_state": str(_pick(row, "physical_state", "state", default="") or "").strip().lower(),
-                "density (g/mL)": _pick(row, "density (g/ml)", "density(g/ml)", "density_g_ml", "density", default=None),
-                "physical_form": str(_pick(row, "physical_form", default="") or "").strip().lower(),
-                "active_content": _pick(row, "active_content","active_content(mmol/ml or wt%)" ,"active_content(mol/l or wt%)", default="" ),
-            }
-
-        # 3. 读取任务模板 -> params(Dict), headers(List), data_rows(List[List])
+        # 2. 读取任务模板 -> params(Dict), headers(List), data_rows(List[List])
         wb = load_workbook(t_path, data_only=True)
         try:
             ws, header_row, exp_no_col = self._select_task_template_sheet(wb, header_keyword="实验编号")
@@ -1072,8 +979,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
                 data_rows.append(row_vals)
 
-            # 4. 调用父类纯逻辑生成 Payload
-            task_payload = self.build_task_payload(params, headers, data_rows, chemical_db)
+            # 4. 调用父类纯逻辑生成 Payload, 化学品在内部从 ChemicalManager 取
+            task_payload = self.build_task_payload(params, headers, data_rows)
 
             # 5. 提交任务信息到工站
             try:
@@ -1308,51 +1215,22 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             wb.close()
 
     # ---------- 4. 物料核算 ----------
-    def check_resource_for_task(self, template_path: str, chemical_db_path: str, auto_generate_batch_file: bool = True) -> JsonDict:
+    def check_resource_for_task(self, template_path: str, auto_generate_batch_file: bool = True) -> JsonDict:
         """
         功能:
-            读取实验模板与化学品库, 构建任务 Payload, 获取站内资源并比对是否满足实验需求。
+            读取实验模板, 构建任务 Payload, 获取站内资源并比对是否满足实验需求.
+            化学品信息由 ChemicalManager 在 build_task_payload / analyze_resource_readiness
+            内部统一查询.
         参数:
-            template_path: 实验模板文件路径(xlsx/csv)。
-            chemical_db_path: 化学品库文件路径(xlsx/csv)。
-            auto_generate_batch_file: 是否自动生成上料文件, 默认为 True。
+            template_path: 实验模板文件路径(xlsx/csv).
+            auto_generate_batch_file: 是否自动生成上料文件, 默认为 True.
         返回:
-            Dict, analyze_resource_readiness 的结果, 包含需求、库存、缺失与冗余信息。
+            Dict, analyze_resource_readiness 的结果, 包含需求、库存、缺失与冗余信息.
         """
         t_path = Path(template_path)
-        c_path = Path(chemical_db_path)
 
         if not t_path.exists():
             raise FileNotFoundError(f"未找到实验模板文件: {t_path}")
-        if not c_path.exists():
-            raise FileNotFoundError(f"未找到化学品库文件: {c_path}")
-
-        chem_df = self._read_table_file_with_required_columns(
-            c_path,
-            required_columns=["substance"],
-        )
-        chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
-
-        def _pick(row, *keys, default=None):
-            for k in keys:
-                if k in row and pd.notna(row[k]):
-                    return row[k]
-            return default
-
-        chemical_db: Dict[str, Dict[str, Any]] = {}
-        for _, r in chem_df.iterrows():
-            row = {k: r.get(k) for k in chem_df.columns}
-            name = str(_pick(row, "substance", "name", "chemical_name", default="") or "").strip()
-            if not name:
-                continue
-            chemical_db[name] = {
-                "chemical_id": _pick(row, "chemical_id"),
-                "molecular_weight": _pick(row, "molecular_weight", "mw"),
-                "physical_state": str(_pick(row, "physical_state", "state", default="") or "").strip().lower(),
-                "density (g/mL)": _pick(row, "density (g/ml)", "density(g/ml)", "density_g_ml", "density", default=None),
-                "physical_form": str(_pick(row, "physical_form", default="") or "").strip().lower(),
-                "active_content": _pick(row, "active_content", "active_content(mmol/ml or wt%)", "active_content(mol/l or wt%)", default=""),
-            }
 
         wb = load_workbook(t_path, data_only=True)
         ws, header_row, exp_no_col = self._select_task_template_sheet(wb, header_keyword="实验编号")
@@ -1420,9 +1298,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 row_vals.append("" if v is None else v)
             data_rows.append(row_vals)
 
-        task_payload = self.build_task_payload(params, headers, data_rows, chemical_db)
+        task_payload = self.build_task_payload(params, headers, data_rows)
         resource_rows = self.get_resource_info()
-        result = self.analyze_resource_readiness(task_payload, resource_rows, chemical_db, task_id=task_id)
+        result = self.analyze_resource_readiness(task_payload, resource_rows, task_id=task_id)
 
         # 自动保存物料核算结果
         if self._data_manager and task_id:
@@ -1493,26 +1371,21 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             logger.info("没有缺失的物资, 无需生成上料文件")
             return
 
-        # 3. 读取chemical_list.xlsx
-        chemical_list_path = MODULE_ROOT / "sheet" / "chemical_list.xlsx"
-        if not chemical_list_path.exists():
-            raise FileNotFoundError(f"未找到化学品列表文件: {chemical_list_path}")
-
-        chem_df = self._read_table_file_with_required_columns(
-            chemical_list_path,
-            required_columns=["substance", "physical_state", "storage_location"],
+        # 3. 从 ChemicalManager 拉取化学品库, 构造 substance -> 物态/位置映射
+        from unilabos.devices.eit_chemical_manager.manager.chemical_manager import (
+            ChemicalManager,
         )
-        chem_df = chem_df.fillna("")
 
-        # 创建物质名到信息的映射
+        cm = ChemicalManager.get_shared()
         chemical_dict = {}
-        for _, row in chem_df.iterrows():
-            substance = str(row.get("substance", "")).strip()
-            if substance:
-                chemical_dict[substance] = {
-                    "physical_state": str(row.get("physical_state", "")).strip().lower(),
-                    "storage_location": str(row.get("storage_location", "")).strip()
-                }
+        for row in cm.list_all_for_synthesis():
+            substance = str(row.get("substance") or "").strip()
+            if substance == "":
+                continue
+            chemical_dict[substance] = {
+                "physical_state": str(row.get("physical_state") or "").strip().lower(),
+                "storage_location": str(row.get("storage_location") or "").strip(),
+            }
 
         # 4. 准备料盘规格信息和位置管理
         # TB 位共 8 个, 上料完成后空出可复用; 货架共 3 行 × 4 列 = 12 个位置
@@ -2300,7 +2173,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
     # ---------- 7. Unilab 接口（待修改） ----------
     def submit_experiment_task(
         self,
-        chemical_db_path: str,
         task_name: str = "Unilab_Auto_Job",
         reaction_type: str = "heat",
         duration: str = "8",
@@ -2317,8 +2189,8 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         """
         功能:
             提交 Unilab 流程编排任务, 按行数据动态生成表头, 兼容包含"加磁子"的列.
+            化学品信息由 ChemicalManager 在 build_task_payload 内部统一查询.
         参数:
-            chemical_db_path: str, 化学品库文件路径.
             task_name: str, 任务名称.
             reaction_type: str, 反应类型.
             duration: str, 反应时间, 必须带单位, 如 "8h" 或 "30min".
@@ -2334,37 +2206,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         返回:
             Dict[str, Any], 提交成功后返回的任务 ID.
         """
-        c_path = Path(chemical_db_path)
-        if c_path.exists() is False:
-            raise FileNotFoundError(f"未找到化学品库文件: {c_path}")
-
-        chem_df = self._read_table_file_with_required_columns(
-            c_path,
-            required_columns=["substance"],
-        )
-        chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
-
-        def _pick(row, *keys, default=None):
-            for k in keys:
-                if k in row and pd.notna(row[k]):
-                    return row[k]
-            return default
-
-        chemical_db: Dict[str, Dict[str, Any]] = {}
-        for _, r in chem_df.iterrows():
-            row = {k: r.get(k) for k in chem_df.columns}
-            name = str(_pick(row, "substance", "name", "chemical_name", default="") or "").strip()
-            if name == "":
-                continue
-            chemical_db[name] = {
-                "chemical_id": _pick(row, "chemical_id"),
-                "molecular_weight": _pick(row, "molecular_weight", "mw"),
-                "physical_state": str(_pick(row, "physical_state", "state", default="") or "").strip().lower(),
-                "density (g/mL)": _pick(row, "density (g/ml)", "density(g/ml)", "density_g_ml", "density", default=None),
-                "physical_form": str(_pick(row, "physical_form", default="") or "").strip().lower(),
-                "active_content": _pick(row, "active_content", "active_content(mmol/ml or wt%)", "active_content(mol/l or wt%)", default=""),
-            }
-
         if auto_magnet is True:
             auto_magnet_text = "是"
         else:
@@ -2436,7 +2277,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             normalized_rows.append(padded_values)
 
         try:
-            task_payload = self.build_task_payload(params, headers, normalized_rows, chemical_db)
+            task_payload = self.build_task_payload(params, headers, normalized_rows)
         except AttributeError as exc:
             raise Exception("无法找到 build_task_payload 方法, 请检查 StationController 定义") from exc
 

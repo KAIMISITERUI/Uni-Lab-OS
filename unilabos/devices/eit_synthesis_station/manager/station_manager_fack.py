@@ -99,30 +99,18 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         return pd.DataFrame()
 
     # ---------- 1. 化合物库文件处理 ----------
-    def export_chemical_list_to_file(self, output_path: str) -> None:
+    def sync_chemicals_to_station(self, auto_delete: bool = True) -> JsonDict:
         """
         功能:
-            获取所有化学品并导出到 CSV 文件
+            fake 版: 从 ChemicalManager 拉取化学品库, 对齐工站硬件并回写 chemical_id.
         参数:
-            output_path: 输出路径
+            auto_delete: bool, 是否删除工站多余化学品.
         返回:
-            None
+            Dict[str, Any], 含 total / updated_rows / id_written 的统计.
         """
-        logger.info("虚假执行 export_chemical_list_to_file, output_path=%s", output_path)
+        logger.info("虚假执行 sync_chemicals_to_station, auto_delete=%s", auto_delete)
         time.sleep(5)
-
-    def sync_chemicals_from_file(self, file_path: str, overwrite: bool = False) -> None:
-        """
-        功能:
-            读取 CSV 文件并通过父类同步化学品到工站
-        参数:
-            file_path: CSV 文件路径
-            overwrite: 是否覆盖更新
-        返回:
-            None
-        """
-        logger.info("虚假执行 sync_chemicals_from_file, file_path=%s, overwrite=%s", file_path, overwrite)
-        time.sleep(5)
+        return {"total": 0, "updated_rows": 0, "id_written": 0}
 
     def check_chemical_library_by_file(self, file_path: str) -> Dict[str, List[str]]:
         """
@@ -161,19 +149,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             None
         """
         logger.info("虚假执行 _beautify_excel_database, file_path=%s", file_path)
-        time.sleep(5)
-
-    def align_chemicals_with_file(self, file_path: str, auto_delete: bool = True) -> None:
-        """
-        功能:
-            读取 Excel/CSV 文件，调用父类对齐逻辑，并将结果(fid)写回文件
-        参数:
-            file_path: 文件路径
-            auto_delete: 是否删除不在文件中的工站化学品
-        返回:
-            None
-        """
-        logger.info("虚假执行 align_chemicals_with_file, file_path=%s, auto_delete=%s", file_path, auto_delete)
         time.sleep(5)
 
     # ---------- 2. 上料动作 ----------
@@ -305,17 +280,17 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         return (None, None, None)
 
     # ---------- 3. 任务生成文件处理 ----------
-    def create_task_by_file(self, template_path: str, chemical_db_path: str) -> JsonDict:
+    def create_task_by_file(self, template_path: str) -> JsonDict:
         """
         功能:
-            读取任务模板和化学品库，解析为中间数据，调用父类生成任务 Payload 并提交
+            读取任务模板, 解析为中间数据, 调用父类生成任务 Payload 并提交.
+            化学品信息由 ChemicalManager 内部查询.
         参数:
-            template_path: 实验模板路径
-            chemical_db_path: 化学品库路径
+            template_path: 实验模板路径.
         返回:
-            Dict: 任务创建结果
+            Dict, 任务创建结果.
         """
-        logger.info("虚假执行 create_task_by_file, template_path=%s, chemical_db_path=%s", template_path, chemical_db_path)
+        logger.info("虚假执行 create_task_by_file, template_path=%s", template_path)
         time.sleep(5)
         return "fake_task_id"
 
@@ -328,18 +303,18 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         time.sleep(5)
 
     # ---------- 4. 物料核算 ----------
-    def check_resource_for_task(self, template_path: str, chemical_db_path: str, auto_generate_batch_file: bool = True) -> JsonDict:
+    def check_resource_for_task(self, template_path: str, auto_generate_batch_file: bool = True) -> JsonDict:
         """
         功能:
-            读取实验模板与化学品库, 构建任务 Payload, 获取站内资源并比对是否满足实验需求。
+            读取实验模板, 构建任务 Payload, 获取站内资源并比对是否满足实验需求.
+            化学品信息由 ChemicalManager 内部查询.
         参数:
-            template_path: 实验模板文件路径(xlsx/csv)。
-            chemical_db_path: 化学品库文件路径(xlsx/csv)。
-            auto_generate_batch_file: 是否自动生成上料文件, 默认为 True。
+            template_path: 实验模板文件路径(xlsx/csv).
+            auto_generate_batch_file: 是否自动生成上料文件, 默认为 True.
         返回:
-            Dict, analyze_resource_readiness 的结果, 包含需求、库存、缺失与冗余信息。
+            Dict, analyze_resource_readiness 的结果.
         """
-        logger.info("虚假执行 check_resource_for_task, template_path=%s, chemical_db_path=%s, auto_generate_batch_file=%s", template_path, chemical_db_path, auto_generate_batch_file)
+        logger.info("虚假执行 check_resource_for_task, template_path=%s, auto_generate_batch_file=%s", template_path, auto_generate_batch_file)
         time.sleep(5)
         return {"success": True, "resource_ready": True, "errors": [], "warnings": [], "message": "虚假资源检查完成"}
 
@@ -461,7 +436,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
     # ---------- 7. Unilab 接口（待修改） ----------
     def submit_experiment_task(
         self,
-        chemical_db_path: str,
         task_name: str = "Unilab_Auto_Job",
         reaction_type: str = "heat",
         duration: str = "8",
@@ -477,9 +451,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
     ) -> JsonDict:
         """
         功能:
-            提交 Unilab 流程编排任务, 按行数据动态生成表头, 兼容包含“加磁子”的列.
+            提交 Unilab 流程编排任务, 按行数据动态生成表头, 兼容包含"加磁子"的列.
+            化学品信息由 ChemicalManager 内部查询.
         参数:
-            chemical_db_path: str, 化学品库文件路径.
             task_name: str, 任务名称.
             reaction_type: str, 反应类型.
             duration: str, 反应时间, 必须带单位, 如 "8h" 或 "30min".
@@ -491,11 +465,11 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             internal_std_name: str, 内标名称.
             stir_time_after_std: str, 内标加入后搅拌时间(min).
             diluent_name: str, 稀释液名称.
-            rows: List[List[Any]], 行数据矩阵, 第1列为实验编号, 其余列为试剂或“加磁子”.
+            rows: List[List[Any]], 行数据矩阵.
         返回:
             Dict[str, Any], 提交成功后返回的任务 ID.
         """
-        logger.info("虚假执行 submit_experiment_task, chemical_db_path=%s, task_name=%s", chemical_db_path, task_name)
+        logger.info("虚假执行 submit_experiment_task, task_name=%s", task_name)
         time.sleep(5)
         return "fake_task_id"
 

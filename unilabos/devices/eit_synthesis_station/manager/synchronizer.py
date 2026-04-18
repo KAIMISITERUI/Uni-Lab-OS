@@ -8,9 +8,7 @@ import time
 import re
 import json
 import traceback
-import zipfile
 from pathlib import Path
-from xml.etree import ElementTree as ET
 from typing import Dict, Any, List, Optional, Tuple
 from unilabos.devices.workstation.workstation_base import WorkstationBase, ResourceSynchronizer
 from unilabos.utils.log import logger
@@ -740,90 +738,20 @@ class EITSynthesisResourceSynchronizer(ResourceSynchronizer):
                 return cached
             nonlocal name_map
             if name_map is None:
+                # 从 ChemicalManager 构建 英文名 -> 中文名 映射, 同时存小写副本便于忽略大小写查询
+                from unilabos.devices.eit_chemical_manager.manager.chemical_manager import (
+                    ChemicalManager,
+                )
+
+                cm = ChemicalManager.get_shared()
                 name_map = {}
-                sheet_path = Path(__file__).resolve().parent.parent / "sheet" / "chemical_list.xlsx"
-                if not sheet_path.exists():
-                    logger.warning(f"[同步→硬件] 未找到化学品映射表: {sheet_path}")
-                else:
-                    try:
-                        with zipfile.ZipFile(sheet_path) as zf:
-                            shared = zf.read("xl/sharedStrings.xml") if "xl/sharedStrings.xml" in zf.namelist() else None
-                            sheet = zf.read("xl/worksheets/sheet1.xml")
-                    except Exception as exc:
-                        logger.warning(f"[同步→硬件] 读取化学品映射表失败: {exc}")
-                    else:
-                        ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-                        if shared:
-                            try:
-                                shared_root = ET.fromstring(shared)
-                                strings = [
-                                    (si.find(".//a:t", ns).text if si.find(".//a:t", ns) is not None else "")
-                                    for si in shared_root.findall("a:si", ns)
-                                ]
-                            except Exception:
-                                strings = []
-                        else:
-                            strings = []
-                        sheet_root = ET.fromstring(sheet)
-                        sheet_data = sheet_root.find(".//a:sheetData", ns)
-                        if sheet_data is not None:
-                            header: Dict[int, str] = {}
-                            english_idx = None
-                            substance_idx = None
-                            for row_idx, row in enumerate(sheet_data.findall("a:row", ns), start=1):
-                                row_values: Dict[int, str] = {}
-                                for cell in row.findall("a:c", ns):
-                                    ref = cell.get("r") or ""
-                                    if ref == "":
-                                        continue
-                                    letters = "".join(ch for ch in ref if ch.isalpha()).upper()
-                                    col_idx = 0
-                                    for ch in letters:
-                                        col_idx = col_idx * 26 + (ord(ch) - ord("A") + 1)
-                                    col_idx -= 1
-                                    cell_type = cell.get("t")
-                                    if cell_type == "inlineStr":
-                                        inline = cell.find("a:is/a:t", ns)
-                                        value = inline.text if inline is not None else None
-                                    else:
-                                        value_node = cell.find("a:v", ns)
-                                        if value_node is None:
-                                            value = None
-                                        else:
-                                            text = value_node.text or ""
-                                            if cell_type == "s":
-                                                try:
-                                                    value = strings[int(text)]
-                                                except Exception:
-                                                    value = None
-                                            else:
-                                                value = text
-                                    if value is None:
-                                        continue
-                                    row_values[col_idx] = str(value).strip()
-
-                                if not row_values:
-                                    continue
-
-                                if row_idx == 1:
-                                    header = {idx: val for idx, val in row_values.items() if val != ""}
-                                    for idx, name in header.items():
-                                        if name == "substance_english_name":
-                                            english_idx = idx
-                                        elif name == "substance":
-                                            substance_idx = idx
-                                    if english_idx is None or substance_idx is None:
-                                        logger.warning("[同步→硬件] 化学品映射表缺少 substance_english_name 或 substance 列")
-                                        break
-                                    continue
-
-                                if english_idx is None or substance_idx is None:
-                                    break
-                                english = row_values.get(english_idx, "").strip()
-                                substance = row_values.get(substance_idx, "").strip()
-                                if english and substance:
-                                    name_map.setdefault(english, substance)
-                                    name_map.setdefault(english.lower(), substance)
+                for entry in cm.list_all_for_synthesis():
+                    english = str(entry.get("substance_english_name") or "").strip()
+                    substance = str(entry.get("substance") or "").strip()
+                    if english == "" or substance == "":
+                        continue
+                    name_map.setdefault(english, substance)
+                    name_map.setdefault(english.lower(), substance)
                 self._chemical_name_map = name_map
             name = raw_name
             mapped = name_map.get(name) or name_map.get(name.lower())

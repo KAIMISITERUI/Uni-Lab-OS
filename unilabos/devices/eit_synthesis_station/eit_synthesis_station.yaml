@@ -3,12 +3,11 @@ eit_synthesis_station:
   - eit_synthesis_station
   class:
     action_value_mappings:
-      align_chemicals_with_file:
+      sync_chemicals_to_station:
         feedback: {}
         goal: {}
         goal_default:
           auto_delete: true
-          file_path: unilabos/devices/eit_synthesis_station/sheet/chemical_list.xlsx
         handles: {}
         result: {}
         schema:
@@ -20,15 +19,12 @@ eit_synthesis_station:
                 auto_delete:
                   default: true
                   type: boolean
-                file_path:
-                  type: string
-              required:
-              - file_path
+              required: []
               type: object
             result: {}
           required:
           - goal
-          title: align_chemicals_with_file参数
+          title: sync_chemicals_to_station参数
           type: object
         type: UniLabJsonCommand
       auto_unload_trays_to_agv:
@@ -308,7 +304,6 @@ eit_synthesis_station:
         goal: {}
         goal_default:
           auto_generate_batch_file: true
-          chemical_db_path: unilabos/devices/eit_synthesis_station/sheet/chemical_list.xlsx
           template_path: unilabos/devices/eit_synthesis_station/sheet/reaction_template.xlsx
         handles: {}
         result: {}
@@ -321,13 +316,10 @@ eit_synthesis_station:
                 auto_generate_batch_file:
                   default: true
                   type: boolean
-                chemical_db_path:
-                  type: string
                 template_path:
                   type: string
               required:
               - template_path
-              - chemical_db_path
               type: object
             result: {}
           required:
@@ -339,7 +331,6 @@ eit_synthesis_station:
         feedback: {}
         goal: {}
         goal_default:
-          chemical_db_path: unilabos/devices/eit_synthesis_station/sheet/chemical_list.xlsx
           template_path: unilabos/devices/eit_synthesis_station/sheet/reaction_template.xlsx
         handles: {}
         result: {}
@@ -349,13 +340,10 @@ eit_synthesis_station:
             feedback: {}
             goal:
               properties:
-                chemical_db_path:
-                  type: string
                 template_path:
                   type: string
               required:
               - template_path
-              - chemical_db_path
               type: object
             result: {}
           required:
@@ -484,7 +472,6 @@ eit_synthesis_station:
         goal: {}
         goal_default:
           auto_magnet: true
-          chemical_db_path: null
           diluent_name: ''
           duration: '8'
           fixed_order: false
@@ -507,8 +494,6 @@ eit_synthesis_station:
                 auto_magnet:
                   default: true
                   type: boolean
-                chemical_db_path:
-                  type: string
                 diluent_name:
                   default: ''
                   type: string
@@ -541,8 +526,7 @@ eit_synthesis_station:
                 temperature:
                   default: '40'
                   type: string
-              required:
-              - chemical_db_path
+              required: []
               type: object
             result: {}
           required:
