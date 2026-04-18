@@ -401,66 +401,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         
         logger.info(f"化学品对齐完成并回写文件: {path}")
 
-    # ---------- 化学品库管理: 委托给 eit_chemical_manager 驱动 ----------
-
-    def search_chemical_in_library(self, query, query_type, excel_path=None):
-        """
-        功能:
-            查询化学品库, 委托给 eit_chemical_manager 驱动.
-        参数:
-            query: str, 查询关键词.
-            query_type: str, 查询类型 (cas / name / smiles).
-            excel_path: 兼容旧接口, 已忽略.
-        返回:
-            list, 匹配结果列表.
-        """
-        from eit_chemical_manager.manager.chemical_manager import ChemicalManager
-        return ChemicalManager.get_shared().search(query, query_type)
-
-    def lookup_and_append_chemical_unified(self, query, query_type, excel_path=None):
-        """
-        功能:
-            在线查询并添加化学品到化学品库, 委托给 eit_chemical_manager 驱动.
-        参数:
-            query: str, 查询关键词.
-            query_type: str, 查询类型 (cas / name / smiles).
-            excel_path: 兼容旧接口, 已忽略.
-        返回:
-            dict 或 None, 添加结果.
-        """
-        from eit_chemical_manager.manager.chemical_manager import ChemicalManager
-        return ChemicalManager.get_shared().lookup_and_append(query, query_type)
-
-    def prepare_solution_or_beads(
-        self, identifier, prepared_form, *,
-        solvent_name="", active_content,
-        target_volume_ml=None, target_active_mmol=None,
-        excel_path=None,
-    ):
-        """
-        功能:
-            配置溶液或 beads 并添加到化学品库, 委托给 eit_chemical_manager 驱动.
-        参数:
-            identifier: str, 母体化合物标识 (CAS 号).
-            prepared_form: str, 派生形态 (solution / beads).
-            solvent_name: str, 溶剂名称 (仅 solution).
-            active_content: float, 浓度或载量.
-            target_volume_ml: float, 目标体积 (仅 solution).
-            target_active_mmol: float, 目标活性 (仅 beads).
-            excel_path: 兼容旧接口, 已忽略.
-        返回:
-            dict 或 None, 配制结果.
-        """
-        from eit_chemical_manager.manager.chemical_manager import ChemicalManager
-        return ChemicalManager.get_shared().prepare_solution_or_beads(
-            identifier=identifier,
-            prepared_form=prepared_form,
-            solvent_name=solvent_name,
-            active_content=active_content,
-            target_volume_ml=target_volume_ml,
-            target_active_mmol=target_active_mmol,
-        )
-
     # ---------- 2. 上料动作 ----------
 
     def _read_batch_in_records(self, file_path: str) -> List[Dict[str, str]]:

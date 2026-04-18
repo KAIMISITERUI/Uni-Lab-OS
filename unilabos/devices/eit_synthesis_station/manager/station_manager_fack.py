@@ -176,40 +176,6 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info("虚假执行 align_chemicals_with_file, file_path=%s, auto_delete=%s", file_path, auto_delete)
         time.sleep(5)
 
-    # ---------- 化学品库管理: 委托给 eit_chemical_manager 驱动 ----------
-
-    def search_chemical_in_library(self, query, query_type, excel_path=None):
-        """
-        功能:
-            虚假执行: 查询化学品库.
-        """
-        logger.info("虚假执行 search_chemical_in_library: query=%s, type=%s", query, query_type)
-        time.sleep(5)
-        return []
-
-    def lookup_and_append_chemical_unified(self, query, query_type, excel_path=None):
-        """
-        功能:
-            虚假执行: 在线查询并添加化学品.
-        """
-        logger.info("虚假执行 lookup_and_append_chemical_unified: query=%s, type=%s", query, query_type)
-        time.sleep(5)
-        return None
-
-    def prepare_solution_or_beads(
-        self, identifier, prepared_form, *,
-        solvent_name="", active_content,
-        target_volume_ml=None, target_active_mmol=None,
-        excel_path=None,
-    ):
-        """
-        功能:
-            虚假执行: 配置溶液或 beads.
-        """
-        logger.info("虚假执行 prepare_solution_or_beads")
-        time.sleep(5)
-        return {"success": True, "message": "虚假配制完成"}
-
     # ---------- 2. 上料动作 ----------
 
     def _read_batch_in_records(self, file_path: str) -> List[Dict[str, str]]:

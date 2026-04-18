@@ -418,9 +418,8 @@ def _menu_status_query(manager):
 def _menu_chemical_library(manager):
     """
     功能:
-        化学品库管理子菜单.
-        工站相关操作 (导出/导入到平台) 保留在此处,
-        本地化学品库管理 (查询/添加/配置/去重/迁移) 桥接到 eit_chemical_manager 驱动.
+        工站化学品 CSV 导入导出菜单.
+        本地化学品库管理已提升为 eit_hub 一级菜单 4, 不再在此处提供入口.
     参数:
         manager: SynthesisStationManager 实例.
     返回:
@@ -429,7 +428,6 @@ def _menu_chemical_library(manager):
     options = [
         ("1", "导出工站化学品到CSV"),
         ("2", "从CSV导入化学品到工站"),
-        ("3", "本地化学品库管理"),
         ("0", "返回上级菜单"),
     ]
 
@@ -445,9 +443,6 @@ def _menu_chemical_library(manager):
         elif choice == "2":
             path = _input_with_default("导入CSV文件路径", "add_chemical_list.csv")
             _safe_run(manager.sync_chemicals_from_file, path)
-        elif choice == "3":
-            from eit_chemical_manager.main import chemical_library_menu
-            chemical_library_menu(manager)
         else:
             print("无效选择, 请重新输入")
 
