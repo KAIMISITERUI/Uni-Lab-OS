@@ -156,24 +156,24 @@ onMounted(load)
       </template>
 
       <el-table v-loading="loading" :data="rows" border stripe size="small">
-        <el-table-column prop="id" label="ID" width="70" sortable />
-        <el-table-column label="结构式" width="140" align="center">
+        <el-table-column prop="id" label="ID" width="70" sortable align="center" header-align="center" />
+        <el-table-column label="结构式" width="140" align="center" header-align="center">
           <template #default="{ row }">
             <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
           </template>
         </el-table-column>
-        <el-table-column prop="substance" label="中文名" min-width="140" sortable />
-        <el-table-column prop="substance_english_name" label="英文名" min-width="160" />
-        <el-table-column prop="cas_number" label="CAS" width="120" />
-        <el-table-column prop="chemical_id" label="工站 fid" width="100" />
-        <el-table-column prop="storage_location" label="储位" width="110" />
-        <el-table-column prop="physical_state" label="物态" width="80" />
-        <el-table-column prop="physical_form" label="形态" width="100" />
-        <el-table-column prop="density" label="density (g/mL)" width="120" />
-        <el-table-column prop="molecular_weight" label="MW" width="100" />
-        <el-table-column prop="brand" label="品牌" width="120" />
-        <el-table-column prop="package_size" label="规格" width="100" />
-        <el-table-column label="操作" fixed="right" width="180">
+        <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center" />
+        <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center" />
+        <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
+        <el-table-column prop="chemical_id" label="工站 fid" width="100" align="center" header-align="center" />
+        <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
+        <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
+        <el-table-column prop="physical_form" label="形态" width="100" align="center" header-align="center" />
+        <el-table-column prop="density" label="density (g/mL)" width="120" align="center" header-align="center" />
+        <el-table-column prop="molecular_weight" label="MW" width="100" align="center" header-align="center" />
+        <el-table-column prop="brand" label="品牌" width="120" align="center" header-align="center" />
+        <el-table-column prop="package_size" label="规格" width="100" align="center" header-align="center" />
+        <el-table-column label="操作" fixed="right" width="180" align="center" header-align="center">
           <template #default="{ row }">
             <el-button size="small" type="info" link @click="openDetail(row)">详情</el-button>
             <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
