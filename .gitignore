@@ -273,6 +273,7 @@ backup/
 unilabos/devices/eit_chemical_manager/web/frontend/node_modules/
 unilabos/devices/eit_chemical_manager/web/frontend/dist/
 unilabos/devices/eit_chemical_manager/web/frontend/public/rdkit/
+unilabos/devices/eit_chemical_manager/web/frontend/public/indigo-ketcher/
 
 # Claude Code local settings
 **/.claude/settings.local.json
