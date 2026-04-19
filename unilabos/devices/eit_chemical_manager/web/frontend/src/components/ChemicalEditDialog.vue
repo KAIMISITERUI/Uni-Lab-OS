@@ -117,7 +117,7 @@ async function onLookup() {
 
 async function submit() {
   if (!form.substance || String(form.substance).trim() === '') {
-    ElMessage.warning('substance (中文名) 必填')
+    ElMessage.warning('中文名必填')
     return
   }
   // 收集非空字段, 避免把空字符串写入数据库
@@ -176,7 +176,7 @@ async function submit() {
     </div>
 
     <el-form label-width="140px" :model="form">
-      <el-form-item label="substance (中文名)" required>
+      <el-form-item label="中文名" required>
         <el-input v-model="form.substance" placeholder="例: 乙醇" />
       </el-form-item>
       <el-form-item label="英文名">
