@@ -234,7 +234,7 @@ def build_prepared_chemical_row_data(
         solvent_name=solvent_name,
     )
 
-    derived_density = base_row_data.get("density (g/mL)")
+    derived_density = base_row_data.get("density")
     if normalized_form == "beads":
         derived_density = ""
 
@@ -249,10 +249,12 @@ def build_prepared_chemical_row_data(
         "package_size": "",
         "storage_location": "",
         "molecular_weight": base_row_data.get("molecular_weight"),
-        "density (g/mL)": derived_density,
+        # 键名与 CORE_COLUMNS 对齐, 与 build_append_row_data 保持一致
+        "density": derived_density,
         "physical_state": "liquid" if normalized_form == "solution" else "solid",
         "physical_form": normalized_form,
-        "active_content(mol/L or wt%)": numeric_active_content,
+        "active_content": numeric_active_content,
+        "smiles": base_row_data.get("smiles"),
     }
 
 
@@ -347,6 +349,7 @@ def _build_append_row_data(
     lookup_density = getattr(lookup_info, "density", None)
     lookup_melting_point = getattr(lookup_info, "melting_point", None)
     lookup_state = getattr(lookup_info, "physical_state", None)
+    lookup_smiles = getattr(lookup_info, "smiles", None)
 
     chemicalbook_cas = ""
     if isinstance(chemicalbook_record, dict) is True:
@@ -400,10 +403,12 @@ def _build_append_row_data(
         "package_size": "",
         "storage_location": "",
         "molecular_weight": molecular_weight,
-        "density (g/mL)": density_value,
+        # 键名与数据库 CORE_COLUMNS 对齐, 避免落入 extra_json
+        "density": density_value,
         "physical_state": physical_state,
         "physical_form": "neat",
-        "active_content(mol/L or wt%)": "",
+        "active_content": "",
+        "smiles": lookup_smiles,
     }
 
 

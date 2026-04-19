@@ -36,6 +36,7 @@ class ChemicalInfo:
     density: Optional[float] = None           # g/mL
     melting_point: Optional[float] = None     # celsius, 用于推断 physical_state
     physical_state: Optional[str] = None      # solid / liquid
+    smiles: Optional[str] = None              # PubChem CanonicalSMILES
 
     def to_dict(self) -> Dict:
         """
@@ -232,30 +233,39 @@ def _pubchem_get_cid_by_smiles(smiles: str, timeout: float = 15.0) -> Optional[i
     return None
 
 
-def _pubchem_get_properties(cid: int, timeout: float = 15.0) -> Tuple[Optional[str], Optional[float]]:
+def _pubchem_get_properties(
+    cid: int,
+    timeout: float = 15.0,
+) -> Tuple[Optional[str], Optional[float], Optional[str]]:
     """
     功能:
-        根据 CID 获取化合物的 IUPAC 名称和分子量.
+        根据 CID 获取化合物的 IUPAC 名称, 分子量与 SMILES.
+        SMILES 优先取 IsomericSMILES (保留立体信息), 退回 CanonicalSMILES.
     参数:
         cid: int, PubChem CID.
         timeout: float, 请求超时秒数.
     返回:
-        (iupac_name, molecular_weight), 各为 Optional.
+        (iupac_name, molecular_weight, smiles), 各为 Optional.
     """
-    url = f"{_PUBCHEM_BASE}/compound/cid/{cid}/property/MolecularWeight,IUPACName/JSON"
+    url = (
+        f"{_PUBCHEM_BASE}/compound/cid/{cid}"
+        f"/property/MolecularWeight,IUPACName,SMILES,ConnectivitySMILES/JSON"
+    )
     try:
         resp = requests.get(url, timeout=timeout)
         if resp.status_code != 200:
-            return None, None
+            return None, None, None
         data = resp.json()
         props = data.get("PropertyTable", {}).get("Properties", [{}])[0]
         iupac = props.get("IUPACName")
         mw_str = props.get("MolecularWeight")
         mw = float(mw_str) if mw_str is not None else None
-        return iupac, mw
+        # SMILES 含立体化学, ConnectivitySMILES 仅含连接性, 优先使用含立体的版本
+        smiles = props.get("SMILES") or props.get("ConnectivitySMILES")
+        return iupac, mw, smiles
     except (requests.RequestException, json.JSONDecodeError, ValueError, IndexError) as exc:
         logger.warning("PubChem 属性查询异常: %s", exc)
-    return None, None
+    return None, None, None
 
 
 def _pubchem_get_synonyms(cid: int, timeout: float = 15.0) -> List[str]:
@@ -546,9 +556,10 @@ def _query_pubchem_by_cid(cid: int, timeout: float = 15.0) -> Optional[ChemicalI
     info = ChemicalInfo()
 
     # 先取基础属性, 便于后续入库字段复用.
-    iupac, mw = _pubchem_get_properties(cid, timeout)
+    iupac, mw, smiles = _pubchem_get_properties(cid, timeout)
     info.substance_english_name = iupac
     info.molecular_weight = mw
+    info.smiles = smiles
 
     # PubChem 同义词里常含 CAS, 后续可用于补 Common Chemistry 与 ChemicalBook.
     synonyms = _pubchem_get_synonyms(cid, timeout)
@@ -663,9 +674,10 @@ def _merge_results(
     sources_for_en_name = [pubchem, common_chem]
     # molecular_weight: PubChem > Common Chemistry
     sources_for_mw = [pubchem, common_chem]
-    # density / melting_point: 仅 PubChem 提供
+    # density / melting_point / smiles: 仅 PubChem 提供
     sources_for_density = [pubchem]
     sources_for_mp = [pubchem]
+    sources_for_smiles = [pubchem]
 
     for src in sources_for_cas:
         if src is not None and src.cas_number is not None and merged.cas_number is None:
@@ -686,6 +698,10 @@ def _merge_results(
     for src in sources_for_mp:
         if src is not None and src.melting_point is not None and merged.melting_point is None:
             merged.melting_point = src.melting_point
+
+    for src in sources_for_smiles:
+        if src is not None and src.smiles is not None and merged.smiles is None:
+            merged.smiles = src.smiles
 
     return merged
 

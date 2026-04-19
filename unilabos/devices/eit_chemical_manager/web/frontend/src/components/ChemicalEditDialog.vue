@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import {
   type ChemicalRow,
   createChemical,
+  lookupChemical,
   updateChemical,
 } from '../api/chemicals'
 
@@ -41,11 +42,26 @@ const blankForm = (): Partial<ChemicalRow> => ({
 
 const form = reactive<Partial<ChemicalRow>>(blankForm())
 
+// 新增模式下的在线查询状态
+const lookupState = reactive<{
+  queryType: 'cas' | 'name' | 'smiles'
+  queryText: string
+  loading: boolean
+}>({
+  queryType: 'cas',
+  queryText: '',
+  loading: false,
+})
+
 watch(
   () => props.modelValue,
   (open) => {
     if (!open) return
     Object.assign(form, blankForm())
+    // 打开对话框时重置查询栏, 避免上次内容残留
+    lookupState.queryType = 'cas'
+    lookupState.queryText = ''
+    lookupState.loading = false
     if (props.mode === 'edit' && props.row) {
       Object.keys(form).forEach((key) => {
         ;(form as Record<string, unknown>)[key] = (props.row as Record<string, unknown>)[key] ?? ''
@@ -56,6 +72,47 @@ watch(
 
 function close() {
   emit('update:modelValue', false)
+}
+
+// 数值字段转换: 空值/NaN 统一为 null, 与 blankForm 保持一致
+function toNumberOrNull(val: unknown): number | null {
+  if (val === null || val === undefined || val === '') return null
+  const num = Number(val)
+  return Number.isFinite(num) ? num : null
+}
+
+async function onLookup() {
+  const q = lookupState.queryText.trim()
+  if (q === '') {
+    ElMessage.warning('请输入查询字符串')
+    return
+  }
+  lookupState.loading = true
+  try {
+    const resp = await lookupChemical({ query: q, query_type: lookupState.queryType })
+    if (!resp.success || !resp.row_data) {
+      ElMessage.warning(resp.message || '未找到化合物')
+      return
+    }
+    // 仅保留 form 已声明的字段, 避免 row_data 中的额外键污染保存 payload
+    const allowed = Object.keys(blankForm())
+    const numericKeys = new Set(['density', 'molecular_weight'])
+    allowed.forEach((key) => {
+      if (!(key in resp.row_data!)) return
+      const value = (resp.row_data as Record<string, unknown>)[key]
+      if (numericKeys.has(key)) {
+        ;(form as Record<string, unknown>)[key] = toNumberOrNull(value)
+      } else {
+        ;(form as Record<string, unknown>)[key] = value ?? ''
+      }
+    })
+    ElMessage.success('已填充查询结果, 请检查后保存')
+  } catch (err: unknown) {
+    const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    ElMessage.error(detail || (err as Error).message || '在线查询失败')
+  } finally {
+    lookupState.loading = false
+  }
 }
 
 async function submit() {
@@ -100,6 +157,24 @@ async function submit() {
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
     @close="close"
   >
+    <!-- 新增模式的在线查询栏: 查询结果直接填入下方表单, 用户检查后再保存 -->
+    <div v-if="mode === 'create'" class="lookup-bar">
+      <el-radio-group v-model="lookupState.queryType" size="small">
+        <el-radio value="cas">CAS</el-radio>
+        <el-radio value="name">名称</el-radio>
+        <el-radio value="smiles">SMILES</el-radio>
+      </el-radio-group>
+      <el-input
+        v-model="lookupState.queryText"
+        placeholder="例: 64-17-5 / Ethanol / CCO"
+        style="flex: 1"
+        @keyup.enter="onLookup"
+      />
+      <el-button type="primary" :loading="lookupState.loading" @click="onLookup">
+        在线查询
+      </el-button>
+    </div>
+
     <el-form label-width="140px" :model="form">
       <el-form-item label="substance (中文名)" required>
         <el-input v-model="form.substance" placeholder="例: 乙醇" />
@@ -158,3 +233,15 @@ async function submit() {
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.lookup-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+}
+</style>

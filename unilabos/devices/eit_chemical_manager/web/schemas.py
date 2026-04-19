@@ -104,7 +104,7 @@ class IntegrityReport(BaseModel):
 class LookupRequest(BaseModel):
     """
     功能:
-        在线查询入库请求.
+        在线查询预览请求.
     """
 
     query: str = Field(..., description="CAS / 名称 / SMILES")
@@ -114,13 +114,12 @@ class LookupRequest(BaseModel):
 class LookupResponse(BaseModel):
     """
     功能:
-        lookup_and_append 的统一响应. 命中重复时 duplicate=True 且 duplicate_substance 给出已有名称.
+        在线查询预览响应. 只返回候选行数据, 不包含入库结果.
+        前端在新增对话框中把 row_data 填入表单, 由用户检查后走标准
+        POST /api/chemicals 完成入库.
     """
 
     success: bool
-    duplicate: bool = False
-    duplicate_substance: Optional[str] = None
-    row_id: Optional[int] = None
     row_data: Optional[Dict[str, Any]] = None
     chemicalbook_status: Optional[str] = None
     chemicalbook_record_path: Optional[str] = None

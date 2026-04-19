@@ -10,7 +10,6 @@ import {
 } from '../api/chemicals'
 import ChemicalEditDialog from '../components/ChemicalEditDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
-import LookupDialog from '../components/LookupDialog.vue'
 
 const loading = ref(false)
 const total = ref(0)
@@ -34,7 +33,6 @@ const editDialog = reactive<{
   row: ChemicalRow | null
 }>({ visible: false, mode: 'create', row: null })
 
-const lookupDialogVisible = ref(false)
 const importDialogVisible = ref(false)
 
 async function load() {
@@ -133,7 +131,6 @@ onMounted(load)
           <el-button @click="query.q = ''; onSearch()">重置</el-button>
           <div style="flex: 1" />
           <el-button type="success" @click="openCreate">新增</el-button>
-          <el-button @click="lookupDialogVisible = true">在线查询入库</el-button>
           <el-button @click="importDialogVisible = true">从文件导入</el-button>
           <el-button @click="downloadCsv">导出 CSV</el-button>
           <el-button @click="downloadXlsx">导出 XLSX</el-button>
@@ -179,7 +176,6 @@ onMounted(load)
       :row="editDialog.row"
       @saved="onSaved"
     />
-    <LookupDialog v-model="lookupDialogVisible" @imported="load" />
     <ImportDialog v-model="importDialogVisible" @imported="load" />
   </div>
 </template>

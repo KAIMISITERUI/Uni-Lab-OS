@@ -333,42 +333,42 @@ def test_lookup_route_uses_manager(
     manager: ChemicalManager,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """功能: /api/lookup 调用 manager.lookup_and_append, 用 mock 避免发真实 HTTP."""
+    """功能: /api/lookup 调用 manager.lookup_preview, 用 mock 避免发真实 HTTP."""
     captured: Dict[str, Any] = {}
 
     def fake_lookup(self, query: str, query_type: str):
         captured["query"] = query
         captured["query_type"] = query_type
         return {
-            "row_id": 42,
-            "row_data": {"id": 42, "substance": "乙醇"},
+            "row_data": {"substance": "乙醇", "cas_number": "64-17-5"},
             "chemicalbook_status": "ok",
             "chemicalbook_record_path": "",
         }
 
-    monkeypatch.setattr(ChemicalManager, "lookup_and_append", fake_lookup)
+    monkeypatch.setattr(ChemicalManager, "lookup_preview", fake_lookup)
     r = client.post("/api/lookup", json={"query": "64-17-5", "query_type": "cas"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
-    assert body["duplicate"] is False
-    assert body["row_id"] == 42
+    assert body["row_data"]["substance"] == "乙醇"
+    assert body["chemicalbook_status"] == "ok"
     assert captured == {"query": "64-17-5", "query_type": "cas"}
 
 
-def test_lookup_route_handles_duplicate(
+def test_lookup_route_handles_empty_result(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """功能: 重复化合物时返回 duplicate=True."""
+    """功能: 查询未命中时路由返回 success=False 并附带 message."""
 
     def fake_lookup(self, query: str, query_type: str):
-        return {"duplicate": True, "duplicate_substance": "乙醇"}
+        return None
 
-    monkeypatch.setattr(ChemicalManager, "lookup_and_append", fake_lookup)
-    r = client.post("/api/lookup", json={"query": "ethanol", "query_type": "name"})
+    monkeypatch.setattr(ChemicalManager, "lookup_preview", fake_lookup)
+    r = client.post("/api/lookup", json={"query": "unknown", "query_type": "name"})
     assert r.status_code == 200
-    assert r.json()["duplicate"] is True
-    assert r.json()["duplicate_substance"] == "乙醇"
+    body = r.json()
+    assert body["success"] is False
+    assert body["message"]
 
 
 def test_token_required_when_env_set(

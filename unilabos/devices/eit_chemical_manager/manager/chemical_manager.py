@@ -120,30 +120,30 @@ class ChemicalManager:
         rows = self._db.search_by_name(normalized_query, is_cjk=is_cjk)
         return [{"row_id": r["id"], "row_data": r} for r in rows]
 
-    # ===================== 在线查询并入库 =====================
+    # ===================== 在线查询预览与入库 =====================
 
-    def lookup_and_append(
+    def lookup_preview(
         self,
         query: str,
         query_type: str,
     ) -> Optional[Dict[str, Any]]:
         """
         功能:
-            统一化学品在线查询并追加到化学品库的入口.
-            根据 query_type 路由到对应查询逻辑, 查询完成后补充 ChemicalBook
-            数据并追加到数据库. 重复时返回已有条目信息.
+            仅执行在线查询并构建候选行数据, 不写入数据库.
+            Web 新增界面的"在线查询"按钮以及 lookup_and_append 共用此预览逻辑.
         参数:
             query: str, 查询字符串 (CAS / 名称 / SMILES).
             query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
         返回:
-            Optional[Dict[str, Any]], 成功返回包含 row_data, row_id 等的结果字典.
-            重复时返回 duplicate 标记. 查询失败时返回 None.
+            Optional[Dict[str, Any]], 成功时返回
+            {row_data, chemicalbook_status, chemicalbook_record_path}, 未命中或
+            核心字段缺失返回 None.
         """
         from ..driver.chemical_lookup import is_cas_number, lookup_chemical_unified
 
         normalized_query = str(query or "").strip()
         if normalized_query == "":
-            logger.warning("化学品追加失败, 查询参数为空")
+            logger.warning("在线查询失败, 查询参数为空")
             return None
 
         if query_type not in self._VALID_QUERY_TYPES:
@@ -152,7 +152,7 @@ class ChemicalManager:
 
         info = lookup_chemical_unified(normalized_query, query_type)
 
-        # 提取 CAS
+        # 提取 CAS, 便于补充 ChemicalBook 记录
         resolved_cas = ""
         if info is not None and str(info.cas_number or "").strip() != "":
             resolved_cas = str(info.cas_number).strip()
@@ -182,13 +182,40 @@ class ChemicalManager:
             )
 
         if self._has_core_value(row_data) is False:
-            logger.warning("化学品追加失败, 未获取到可用核心字段: query=%s, type=%s", normalized_query, query_type)
+            logger.warning("在线查询未获取到可用核心字段: query=%s, type=%s", normalized_query, query_type)
             return None
 
-        # 写入 chemicalbook_record_path
+        # 写入 chemicalbook_record_path, 保持与原追加逻辑一致
         if chemicalbook_record_path != "":
             row_data["chemicalbook_record_path"] = chemicalbook_record_path
 
+        return {
+            "row_data": row_data,
+            "chemicalbook_status": chemicalbook_status,
+            "chemicalbook_record_path": chemicalbook_record_path,
+        }
+
+    def lookup_and_append(
+        self,
+        query: str,
+        query_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        功能:
+            在线查询 + 写入数据库的合并入口, 供 prepare_solution_or_beads 在
+            母体不存在时自动建库使用. 查询 + 行数据构建复用 lookup_preview.
+        参数:
+            query: str, 查询字符串 (CAS / 名称 / SMILES).
+            query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
+        返回:
+            Optional[Dict[str, Any]], 成功返回包含 row_data, row_id 等的结果字典.
+            重复时返回 {duplicate, duplicate_substance}. 未命中返回 None.
+        """
+        preview = self.lookup_preview(query, query_type)
+        if preview is None:
+            return None
+
+        row_data = preview["row_data"]
         new_id, duplicate_substance = self._db.insert_with_duplicate_check(row_data)
         if new_id is None:
             if duplicate_substance != "":
@@ -198,7 +225,7 @@ class ChemicalManager:
         summary_text = self._format_row_summary(row_data)
         logger.info(
             "已追加化合物到数据库: query=%s, type=%s, CAS=%s, 英文名=%s, %s, id=%d",
-            normalized_query,
+            str(query or "").strip(),
             query_type,
             row_data.get("cas_number"),
             row_data.get("substance_english_name"),
@@ -209,8 +236,8 @@ class ChemicalManager:
         return {
             "row_data": row_data,
             "row_id": new_id,
-            "chemicalbook_status": chemicalbook_status,
-            "chemicalbook_record_path": chemicalbook_record_path,
+            "chemicalbook_status": preview["chemicalbook_status"],
+            "chemicalbook_record_path": preview["chemicalbook_record_path"],
         }
 
     # ===================== 溶液/beads 配置 =====================
@@ -891,7 +918,7 @@ class ChemicalManager:
         )
 
         solute_volume_ml = None
-        density_text = str(base_row_data.get("density (g/mL)") or base_row_data.get("density") or "").strip()
+        density_text = str(base_row_data.get("density") or "").strip()
         physical_state = str(base_row_data.get("physical_state") or "").strip().lower()
         if physical_state == "liquid" and density_text != "":
             try:

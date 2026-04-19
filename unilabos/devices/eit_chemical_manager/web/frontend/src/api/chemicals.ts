@@ -47,9 +47,6 @@ export interface IntegrityReport {
 
 export interface LookupResponse {
   success: boolean
-  duplicate?: boolean
-  duplicate_substance?: string | null
-  row_id?: number | null
   row_data?: Record<string, unknown> | null
   chemicalbook_status?: string | null
   chemicalbook_record_path?: string | null
