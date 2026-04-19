@@ -60,7 +60,7 @@ function onEdit(): void {
           <el-descriptions-item label="CAS 号">
             {{ chemical.cas_number ?? '-' }}
           </el-descriptions-item>
-          <el-descriptions-item label="工站 fid">
+          <el-descriptions-item label="合成工站 fid">
             {{ chemical.chemical_id ?? '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="储位">

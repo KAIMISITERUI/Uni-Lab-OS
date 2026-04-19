@@ -165,7 +165,6 @@ onMounted(load)
         <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center" />
         <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center" />
         <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
-        <el-table-column prop="chemical_id" label="工站 fid" width="100" align="center" header-align="center" />
         <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
         <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
         <el-table-column prop="physical_form" label="形态" width="100" align="center" header-align="center" />

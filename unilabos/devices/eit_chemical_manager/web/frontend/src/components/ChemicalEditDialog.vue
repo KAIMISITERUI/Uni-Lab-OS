@@ -219,7 +219,7 @@ async function submit() {
       <el-form-item label="CAS 号">
         <el-input v-model="form.cas_number" placeholder="例: 64-17-5" />
       </el-form-item>
-      <el-form-item label="工站 chemical_id">
+      <el-form-item label="合成工站 fid">
         <el-input v-model="form.chemical_id" placeholder="对齐工站后回写" />
       </el-form-item>
       <el-form-item label="storage_location">
