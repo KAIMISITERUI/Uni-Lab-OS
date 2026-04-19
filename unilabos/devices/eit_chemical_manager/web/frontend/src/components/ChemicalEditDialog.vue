@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   type ChemicalRow,
@@ -7,6 +7,7 @@ import {
   lookupChemical,
   updateChemical,
 } from '../api/chemicals'
+import StructurePreview from './StructurePreview.vue'
 
 interface Props {
   modelValue: boolean
@@ -42,6 +43,33 @@ const blankForm = (): Partial<ChemicalRow> => ({
 
 const form = reactive<Partial<ChemicalRow>>(blankForm())
 
+// SMILES 预览使用 300ms 防抖, 避免输入过程中每次按键都调用 RDKit 渲染
+const previewSmiles = ref<string>('')
+let previewTimer: ReturnType<typeof setTimeout> | null = null
+
+function schedulePreviewUpdate(val: string | null | undefined): void {
+  if (previewTimer !== null) {
+    clearTimeout(previewTimer)
+  }
+  previewTimer = setTimeout(() => {
+    previewSmiles.value = (val ?? '').toString()
+    previewTimer = null
+  }, 300)
+}
+
+watch(
+  () => form.smiles,
+  (val) => {
+    schedulePreviewUpdate(val as string | null | undefined)
+  },
+)
+
+onBeforeUnmount(() => {
+  if (previewTimer !== null) {
+    clearTimeout(previewTimer)
+  }
+})
+
 // 新增模式下的在线查询状态
 const lookupState = reactive<{
   queryType: 'cas' | 'name' | 'smiles'
@@ -67,6 +95,12 @@ watch(
         ;(form as Record<string, unknown>)[key] = (props.row as Record<string, unknown>)[key] ?? ''
       })
     }
+    // 对话框重新打开时立即刷新预览, 避免沿用上一次弹窗的旧值
+    if (previewTimer !== null) {
+      clearTimeout(previewTimer)
+      previewTimer = null
+    }
+    previewSmiles.value = (form.smiles ?? '').toString()
   },
 )
 
@@ -221,7 +255,15 @@ async function submit() {
         <el-input v-model="form.package_size" />
       </el-form-item>
       <el-form-item label="SMILES">
-        <el-input v-model="form.smiles" />
+        <div class="smiles-field">
+          <el-input v-model="form.smiles" placeholder="例: CCO" />
+          <StructurePreview
+            class="smiles-preview"
+            :smiles="previewSmiles"
+            :width="320"
+            :height="220"
+          />
+        </div>
       </el-form-item>
       <el-form-item label="other_name">
         <el-input v-model="form.other_name" />
@@ -243,5 +285,14 @@ async function submit() {
   padding: 10px 12px;
   background: var(--el-fill-color-light);
   border-radius: 4px;
+}
+.smiles-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.smiles-preview {
+  align-self: flex-start;
 }
 </style>

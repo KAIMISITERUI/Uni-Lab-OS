@@ -272,6 +272,7 @@ backup/
 # EIT chemical manager web frontend build artifacts
 unilabos/devices/eit_chemical_manager/web/frontend/node_modules/
 unilabos/devices/eit_chemical_manager/web/frontend/dist/
+unilabos/devices/eit_chemical_manager/web/frontend/public/rdkit/
 
 # Claude Code local settings
 **/.claude/settings.local.json

@@ -9,7 +9,9 @@ import {
   listChemicals,
 } from '../api/chemicals'
 import ChemicalEditDialog from '../components/ChemicalEditDialog.vue'
+import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
+import StructurePreview from '../components/StructurePreview.vue'
 
 const loading = ref(false)
 const total = ref(0)
@@ -32,6 +34,12 @@ const editDialog = reactive<{
   mode: 'create' | 'edit'
   row: ChemicalRow | null
 }>({ visible: false, mode: 'create', row: null })
+
+// 详情弹窗状态, 单独于编辑弹窗, 支持从详情点击进入编辑
+const detailDialog = reactive<{
+  visible: boolean
+  row: ChemicalRow | null
+}>({ visible: false, row: null })
 
 const importDialogVisible = ref(false)
 
@@ -72,6 +80,16 @@ function openEdit(row: ChemicalRow) {
   editDialog.mode = 'edit'
   editDialog.row = row
   editDialog.visible = true
+}
+
+function openDetail(row: ChemicalRow) {
+  detailDialog.row = row
+  detailDialog.visible = true
+}
+
+// 详情弹窗点击"编辑"时, 关闭详情并打开编辑对话框
+function onDetailEdit(row: ChemicalRow) {
+  openEdit(row)
 }
 
 async function onDelete(row: ChemicalRow) {
@@ -139,6 +157,11 @@ onMounted(load)
 
       <el-table v-loading="loading" :data="rows" border stripe size="small">
         <el-table-column prop="id" label="ID" width="70" sortable />
+        <el-table-column label="结构式" width="140" align="center">
+          <template #default="{ row }">
+            <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
+          </template>
+        </el-table-column>
         <el-table-column prop="substance" label="中文名" min-width="140" sortable />
         <el-table-column prop="substance_english_name" label="英文名" min-width="160" />
         <el-table-column prop="cas_number" label="CAS" width="120" />
@@ -150,8 +173,9 @@ onMounted(load)
         <el-table-column prop="molecular_weight" label="MW" width="100" />
         <el-table-column prop="brand" label="品牌" width="120" />
         <el-table-column prop="package_size" label="规格" width="100" />
-        <el-table-column label="操作" fixed="right" width="140">
+        <el-table-column label="操作" fixed="right" width="180">
           <template #default="{ row }">
+            <el-button size="small" type="info" link @click="openDetail(row)">详情</el-button>
             <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
             <el-button size="small" type="danger" link @click="onDelete(row)">删除</el-button>
           </template>
@@ -175,6 +199,11 @@ onMounted(load)
       :mode="editDialog.mode"
       :row="editDialog.row"
       @saved="onSaved"
+    />
+    <ChemicalDetailDialog
+      v-model="detailDialog.visible"
+      :chemical="detailDialog.row"
+      @edit="onDetailEdit"
     />
     <ImportDialog v-model="importDialogVisible" @imported="load" />
   </div>

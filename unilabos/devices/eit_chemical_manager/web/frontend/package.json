@@ -15,7 +15,8 @@
     "pinia": "^2.2.4",
     "vue": "^3.5.12",
     "vue-router": "^4.4.5",
-    "@element-plus/icons-vue": "^2.3.1"
+    "@element-plus/icons-vue": "^2.3.1",
+    "@rdkit/rdkit": "2025.3.4-1.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.4",
