@@ -10,16 +10,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@rdkit/rdkit": "2025.3.4-1.0.0",
     "axios": "^1.7.7",
     "element-plus": "^2.8.6",
     "pinia": "^2.2.4",
     "vue": "^3.5.12",
-    "vue-router": "^4.4.5",
-    "@element-plus/icons-vue": "^2.3.1",
-    "@rdkit/rdkit": "2025.3.4-1.0.0"
+    "vue-router": "^4.4.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.4",
+    "indigo-ketcher": "^1.40.0",
+    "openchemlib": "^9.22.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vue-tsc": "^2.1.10"
