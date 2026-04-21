@@ -57,6 +57,7 @@ def interactive() -> None:
         print("2. 分析工站")
         print("3. AGV 工站")
         print("4. 化学品库管理")
+        print("5. 标签打印")
         print("0. 退出")
         print("================================================")
 
@@ -76,6 +77,9 @@ def interactive() -> None:
             continue
         if choice == "4":
             _run_station_menu("eit_chemical_manager.main", "化学品库")
+            continue
+        if choice == "5":
+            _run_station_menu("eit_label_printer.main", "标签打印")
             continue
 
         print("无效选择, 请重新输入")

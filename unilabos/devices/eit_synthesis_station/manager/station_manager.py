@@ -1928,9 +1928,9 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             LabelPrintService 实例.
         """
         if not hasattr(self, "_label_printer") or self._label_printer is None:
-            from ..printer import LabelPrintService
-            config_path = MODULE_ROOT / "printer" / "25x10x2.yaml"
-            self._label_printer = LabelPrintService(str(config_path))
+            from unilabos.devices.eit_label_printer.driver import LabelPrintService
+            # 默认使用 eit_label_printer 包内 profiles/25x10x2.yaml
+            self._label_printer = LabelPrintService()
         return self._label_printer
 
     def print_reagent_labels(self) -> None:

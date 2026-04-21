@@ -747,7 +747,6 @@ def _menu_label_print(manager):
     options = [
         ("1", "打印上料试剂标签"),
         ("2", "打印任务编号标签"),
-        ("3", "交互式自由打印"),
         ("0", "返回上级菜单"),
     ]
 
@@ -765,15 +764,6 @@ def _menu_label_print(manager):
             tid = _input_task_id(allow_none=False)
             if tid is not None:
                 _safe_run(manager.print_task_number_labels, tid)
-        elif choice == "3":
-            # 交互式自由打印 (复用 print_text.py 的 main 函数)
-            try:
-                from .printer.print_text import main as _print_text_main
-                _print_text_main()
-            except Exception as exc:
-                logger.error("交互式打印启动失败: %s", exc)
-                print(f"启动失败: {exc}")
-            _pause()
         else:
             print("无效选择, 请重新输入")
 

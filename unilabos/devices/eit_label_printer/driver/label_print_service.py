@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 功能:
-    TSC标签打印服务类. 封装print_text.py的核心功能为可复用接口.
+    TSC标签打印服务类. 封装print_engine.py的核心功能为可复用接口.
     支持中文, 自动缩放字号, 自动居中对齐, 兼容单列和多列标签纸.
 
 用法:
-    from eit_synthesis_station.printer import LabelPrintService
+    from unilabos.devices.eit_label_printer.driver import LabelPrintService
 
     svc = LabelPrintService("path/to/25x10x2.yaml")
     svc.connect()
@@ -17,7 +17,7 @@ import logging
 import os
 from typing import List, Optional
 
-from .print_text import (
+from .print_engine import (
     load_config,
     load_dll,
     check_printer_ready,
@@ -26,20 +26,20 @@ from .print_text import (
 
 logger = logging.getLogger(__name__)
 
-# 默认配置文件: 与本文件同目录下的 25x10x2.yaml
-_DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "25x10x2.yaml")
-# DLL 默认路径
-_DEFAULT_DLL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "libs", "TSCLIB.dll")
+# 默认配置: 与本文件的包同级 profiles/25x10x2.yaml 与 libs/TSCLIB.dll
+_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_CONFIG = os.path.join(_PACKAGE_ROOT, "profiles", "25x10x2.yaml")
+_DEFAULT_DLL = os.path.join(_PACKAGE_ROOT, "libs", "TSCLIB.dll")
 
 
 class LabelPrintService:
     """
     功能:
-        TSC标签打印服务. 基于print_text.py的windowsfontUnicode方案,
+        TSC标签打印服务. 基于print_engine.py的windowsfontUnicode方案,
         支持中文, 自动缩放字号, 自动居中对齐.
         兼容单列和多列标签纸, 按列数自动分组打印.
     参数:
-        config_path: str, 标签规格YAML配置文件路径. 默认使用 25x10x2.yaml.
+        config_path: str, 标签规格YAML配置文件路径. 默认使用包内 profiles/25x10x2.yaml.
     """
 
     def __init__(self, config_path: Optional[str] = None):

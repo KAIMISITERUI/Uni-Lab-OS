@@ -1,15 +1,13 @@
 """
 功能:
-    TSPL兼容标签打印机交互式打印脚本.
-    通过Windows打印机名称连接打印机, 用户输入文字后直接打印.
+    TSPL兼容标签打印引擎.
+    通过Windows打印机名称连接打印机, 负责 YAML 配置加载, DLL 调用,
+    自动布局计算, 多列标签排版, 以及单次作业的开关端口控制.
     支持TSC, 佳博(Gainscha)等TSPL兼容打印机.
-    纸张/字体/位置参数保存在config.yaml中.
+    纸张/字体/位置参数保存在 profiles/25x10x2.yaml 中.
 
 依赖:
     pyyaml (pip install pyyaml)
-
-用法:
-    python print_text.py
 """
 
 import ctypes
@@ -20,22 +18,15 @@ import sys
 
 import yaml
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-from devices_logging import configure_root_logging
-
-# ──────────────────────────── 日志配置 ────────────────────────────
-configure_root_logging(level="INFO")
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────── 常量 ────────────────────────────────
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(SCRIPT_DIR, "25x10x2.yaml")
-DLL_PATH = os.path.join(SCRIPT_DIR, "libs", "TSCLIB.dll")
+# 包根路径指向 eit_label_printer/, driver/ 同级的 profiles/, libs/
+_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_PATH = os.path.join(_PACKAGE_ROOT, "profiles", "25x10x2.yaml")
+DLL_PATH = os.path.join(_PACKAGE_ROOT, "libs", "TSCLIB.dll")
 
-# 默认配置, 首次运行时写入config.yaml
+# 默认配置, 首次运行时写入 YAML
 DEFAULT_CONFIG = {
     "printer": {
         "port": "Gprinter GP-1134T",  # Windows打印机名称
@@ -113,7 +104,7 @@ def load_dll(dll_path):
     返回:
         ctypes.WinDLL 实例
     """
-    if not os.path.exists(dll_path): 
+    if not os.path.exists(dll_path):
         logger.error("找不到DLL文件: %s", dll_path)
         sys.exit(1)
 
@@ -520,81 +511,3 @@ def close_printer(lib):
     """
     lib.closeport()
     logger.debug("打印机连接已关闭")
-
-
-def main():
-    """
-    功能:
-        交互式打印主循环.
-        加载配置和DLL, 连接打印机, 循环等待用户输入文字并打印.
-    """
-    logger.info("=== TSC交互式打印脚本启动 ===")
-
-    # 加载配置和DLL
-    config = load_config(CONFIG_PATH)
-    lib = load_dll(DLL_PATH)
-
-    # 启动时预检一次, 但不长期占用端口.
-    try:
-        check_printer_ready(lib, config)
-    except Exception as e:
-        logger.error("打印机初始化失败: %s", e)
-        sys.exit(1)
-
-    columns = config["paper"].get("columns", 1)
-
-    logger.info("打印机就绪, 等待输入...")
-    print("-" * 40)
-    if columns > 1:
-        print(f"当前配置: {columns}列标签, 每次需依次输入{columns}列内容")
-    print("输入要打印的文字后按回车即可打印")
-    print("输入 quit 退出程序")
-    print("-" * 40)
-
-    try:
-        while True:
-            texts = []
-            quit_flag = False
-
-            # 收集每列的输入内容
-            for col in range(columns):
-                try:
-                    if columns > 1:
-                        prompt = f"\n请输入第{col + 1}列内容: "
-                    else:
-                        prompt = "\n请输入打印内容: "
-                    text = input(prompt).strip()
-                except EOFError:
-                    quit_flag = True
-                    break
-
-                if text.lower() == "quit":
-                    quit_flag = True
-                    break
-
-                texts.append(text)
-
-            if quit_flag:
-                break
-
-            # 检查是否所有列都为空
-            if all(t == "" for t in texts):
-                print("输入为空, 请重新输入")
-                continue
-
-            try:
-                execute_print_job(lib, config, texts)
-                print(f"已打印: {' | '.join(texts)}")
-            except Exception as e:
-                logger.error("打印失败: %s", e)
-                print(f"打印出错: {e}, 请检查打印机连接")
-
-    except KeyboardInterrupt:
-        print("\n检测到中断信号")
-
-    finally:
-        logger.info("=== 脚本已退出 ===")
-
-
-if __name__ == "__main__":
-    main()

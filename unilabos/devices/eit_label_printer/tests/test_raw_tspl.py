@@ -4,7 +4,7 @@
     用于验证佳博1134T是否支持TSPL指令集.
 
 用法:
-    python test_raw_tspl.py
+    python -m unilabos.devices.eit_label_printer.tests.test_raw_tspl
 """
 
 import ctypes

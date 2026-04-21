@@ -8,8 +8,8 @@
 import unittest
 from unittest.mock import MagicMock, call, patch
 
-from eit_synthesis_station.printer.label_print_service import LabelPrintService
-from eit_synthesis_station.printer.print_text import execute_print_job
+from unilabos.devices.eit_label_printer.driver.label_print_service import LabelPrintService
+from unilabos.devices.eit_label_printer.driver.print_engine import execute_print_job
 
 
 SAMPLE_CONFIG = {
@@ -76,7 +76,7 @@ class TestPrintJobSession(unittest.TestCase):
         self.assertEqual(lib.printlabelW.call_count, 1)
         self.assertEqual(lib.closeport.call_count, 1)
 
-    @patch("eit_synthesis_station.printer.print_text.print_text", side_effect=RuntimeError("boom"))
+    @patch("unilabos.devices.eit_label_printer.driver.print_engine.print_text", side_effect=RuntimeError("boom"))
     def test_execute_print_job_closes_port_when_print_failed(self, mock_print_text):
         """
         功能:
@@ -98,10 +98,10 @@ class TestLabelPrintService(unittest.TestCase):
         验证服务层按单次作业提交打印任务.
     """
 
-    @patch("eit_synthesis_station.printer.label_print_service.load_config", return_value=SAMPLE_CONFIG)
-    @patch("eit_synthesis_station.printer.label_print_service.load_dll")
-    @patch("eit_synthesis_station.printer.label_print_service.check_printer_ready")
-    @patch("eit_synthesis_station.printer.label_print_service.execute_print_job")
+    @patch("unilabos.devices.eit_label_printer.driver.label_print_service.load_config", return_value=SAMPLE_CONFIG)
+    @patch("unilabos.devices.eit_label_printer.driver.label_print_service.load_dll")
+    @patch("unilabos.devices.eit_label_printer.driver.label_print_service.check_printer_ready")
+    @patch("unilabos.devices.eit_label_printer.driver.label_print_service.execute_print_job")
     def test_print_label_uses_independent_job_per_copy(
         self,
         mock_execute_print_job,
