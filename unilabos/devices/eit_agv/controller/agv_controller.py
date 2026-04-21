@@ -2386,10 +2386,10 @@ class AGVController:
             主要逻辑:
                 - 在PP5且电量<low_battery_pct时, 进入CP6充电.
                 - 在PP5且电量>=low_battery_pct时, 继续在PP5待命.
-                - 在CP6且电量>90%时, 返回PP5待命.
+                - 在CP6且电量>85%时, 返回PP5待命.
                 - 在CP6且电量<low_battery_pct且未在充电时, 执行CP6->PP5->CP6充电循环.
                 - 在CP6且电量<low_battery_pct且已在充电时, 跳过进出站.
-                - 在CP6且电量在low_battery_pct~90%之间时, 继续在CP6待命.
+                - 在CP6且电量在low_battery_pct~85%之间时, 继续在CP6待命.
                 - 既不在PP5也不在CP6时, 视为工作途中并跳过本次检查.
         参数:
             low_battery_pct: 低电量阈值(百分比), 默认80, 即电量低于80%触发充电.
@@ -2660,8 +2660,8 @@ class AGVController:
         返回:
             Dict[str, Any], 标准化检查结果.
         """
-        if battery_level > 0.9:
-            logger.info("步骤3: AGV在CP6且电量高于90%, 准备返回PP5待命")
+        if battery_level > 0.85:
+            logger.info("步骤3: AGV在CP6且电量高于85%, 准备返回PP5待命")
             move_result = self._safe_navigate_to_station_detailed(
                 station_id="PP5",
                 stage_prefix="cp6_to_pp5",
@@ -2678,7 +2678,7 @@ class AGVController:
                 return self._build_pp5_cp6_result(
                     status="error",
                     action="move_to_pp5",
-                    message=f"电量{battery_level * 100:.1f}%高于90%, 但从CP6移动到PP5失败",
+                    message=f"电量{battery_level * 100:.1f}%高于85%, 但从CP6移动到PP5失败",
                     step_trace=step_trace,
                     failure=failure,
                     battery_level=battery_level,
@@ -2701,7 +2701,7 @@ class AGVController:
             return self._build_pp5_cp6_result(
                 status="success",
                 action="cp6_to_pp5_after_charge",
-                message=f"电量{battery_level * 100:.1f}%高于90%, 已从CP6返回PP5待命",
+                message=f"电量{battery_level * 100:.1f}%高于85%, 已从CP6返回PP5待命",
                 step_trace=step_trace,
                 battery_level=battery_level,
                 current_station=current_station_id,
@@ -2984,7 +2984,7 @@ class AGVController:
                 charging=False,
             )
 
-        # 电量在low_threshold~90%之间, 查询是否正在充电
+        # 电量在low_threshold~85%之间, 查询是否正在充电
         charging_at_standby = False
         battery_standby_result = self._query_battery_status_detailed(
             simple=False,
@@ -3004,7 +3004,7 @@ class AGVController:
         return self._build_pp5_cp6_result(
             status="success",
             action="standby_at_cp6",
-            message=f"电量{battery_level * 100:.1f}%未高于90%, 继续在CP6待命",
+            message=f"电量{battery_level * 100:.1f}%未高于85%, 继续在CP6待命",
             step_trace=step_trace,
             battery_level=battery_level,
             current_station=current_station_id,
@@ -3068,6 +3068,14 @@ class AGVController:
             f"重试间隔: {retry_wait_minutes}分钟, 低电量阈值: {low_battery_pct}%"
         )
 
+        # 表示检查完成后 AGV 已/将处于 CP6 充电流程的 action, 需 1 分钟高频复查防止冲过离站阈值
+        charging_actions = {
+            "pp5_to_cp6_for_charge",
+            "already_charging",
+            "charge_cycle_completed",
+            "charge_cycle_completed_no_charging",
+        }
+
         while True:
             try:
                 result = self.auto_charge_pp5_cp6_check(low_battery_pct=low_battery_pct)
@@ -3076,9 +3084,13 @@ class AGVController:
                 self._log_auto_charge_pp5_cp6_result_summary(result)
 
                 if status == "success":
-                    if result.get("current_station") == "CP6" and result.get("charging") is True:
+                    is_charging_cycle = (
+                        action in charging_actions
+                        or (result.get("current_station") == "CP6" and result.get("charging") is True)
+                    )
+                    if is_charging_cycle:
                         wait_seconds = 60
-                        logger.info("AGV在CP6充电中, 1分钟后再次检查电量...")
+                        logger.info(f"AGV处于充电状态(action={action}), 1分钟后再次检查电量...")
                     else:
                         wait_seconds = interval_minutes * 60
                         logger.info(f"检查成功(action={action}), 等待{interval_minutes}分钟后进行下次检查...")
