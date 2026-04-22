@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onActivated, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Plus, Refresh, Upload } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
 import {
   type AnalysisInstrumentKey,
+  type AnalysisMethodsRow,
   type AnalysisSampleRow,
   type AnalysisStatusRow,
+  fetchAnalysisMethods,
   fetchAnalysisStatus,
   submitAnalysisTables,
 } from '../api/analysis'
@@ -51,40 +53,20 @@ const rackOptions = Array.from({ length: 6 }, (_item, index) => {
   }
 })
 const rackValues = rackOptions.map((option) => option.value)
-const analysisColumns: Array<Record<string, unknown>> = csvHeaders.map((header) => {
-  if (header === 'RackCode') {
-    return {
-      data: header,
-      type: 'autocomplete',
-      source: rackValues,
-      strict: false,
-      allowInvalid: true,
-      width: 150,
-    }
-  }
-  if (header === 'VialPos') {
-    return {
-      data: header,
-      type: 'numeric',
-      allowInvalid: true,
-      width: 120,
-      numericFormat: { pattern: '0' },
-    }
-  }
-  if (header === 'SmplInjVol') {
-    return {
-      data: header,
-      type: 'numeric',
-      allowInvalid: true,
-      width: 130,
-    }
-  }
-  return {
-    data: header,
-    type: 'text',
-    width: 200,
-  }
+
+const methodOptions = reactive<Record<AnalysisInstrumentKey, string[]>>({
+  gc_ms: [],
+  uplc_qtof: [],
+  hplc: [],
 })
+
+const analysisColumnsByInstrument = computed<Record<AnalysisInstrumentKey, Array<Record<string, unknown>>>>(
+  () => ({
+    gc_ms: buildAnalysisColumns('gc_ms'),
+    uplc_qtof: buildAnalysisColumns('uplc_qtof'),
+    hplc: buildAnalysisColumns('hplc'),
+  }),
+)
 
 const tables = reactive<Record<AnalysisInstrumentKey, AnalysisTableRow[]>>({
   gc_ms: createEmptyRows(),
@@ -137,14 +119,98 @@ function createEmptyRows(count = 12): AnalysisTableRow[] {
   return rows
 }
 
-async function loadStatus() {
+function buildAnalysisColumns(instrument: AnalysisInstrumentKey): Array<Record<string, unknown>> {
+  return csvHeaders.map((header) => {
+    if (header === 'AcqMethod') {
+      return {
+        data: header,
+        type: 'dropdown',
+        source: createMethodSource(instrument),
+        strict: false,
+        allowInvalid: true,
+        width: 200,
+      }
+    }
+    if (header === 'RackCode') {
+      return {
+        data: header,
+        type: 'dropdown',
+        source: rackSource,
+        strict: false,
+        allowInvalid: true,
+        width: 150,
+      }
+    }
+    if (header === 'VialPos') {
+      return {
+        data: header,
+        type: 'numeric',
+        allowInvalid: true,
+        width: 120,
+        numericFormat: { pattern: '0' },
+      }
+    }
+    if (header === 'SmplInjVol') {
+      return {
+        data: header,
+        type: 'numeric',
+        allowInvalid: true,
+        width: 130,
+      }
+    }
+    return {
+      data: header,
+      type: 'text',
+      width: 200,
+    }
+  })
+}
+
+function rackSource(_query: string, process: (choices: string[]) => void) {
+  process([...rackValues])
+}
+
+function createMethodSource(instrument: AnalysisInstrumentKey) {
+  return (_query: string, process: (choices: string[]) => void) => {
+    process([...methodOptions[instrument]])
+  }
+}
+
+async function refreshAnalysisContent() {
   statusLoading.value = true
   try {
-    statusRows.value = await fetchAnalysisStatus()
+    const [statusResult, methodsResult] = await Promise.allSettled([
+      fetchAnalysisStatus(),
+      fetchAnalysisMethods(),
+    ])
+    if (statusResult.status === 'fulfilled') {
+      statusRows.value = statusResult.value
+    } else {
+      ElMessage.error(getErrorMessage(statusResult.reason))
+    }
+    if (methodsResult.status === 'fulfilled') {
+      applyMethodRows(methodsResult.value)
+    } else {
+      ElMessage.error(getErrorMessage(methodsResult.reason))
+    }
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
     statusLoading.value = false
+  }
+}
+
+function applyMethodRows(rows: AnalysisMethodsRow[]) {
+  const errors: string[] = []
+  for (const row of rows) {
+    if (row.error.trim() !== '') {
+      errors.push(`${row.name}: ${row.error}`)
+      continue
+    }
+    methodOptions[row.instrument] = row.methods
+  }
+  if (errors.length > 0) {
+    ElMessage.error(`方法列表刷新失败: ${errors.join('; ')}`)
   }
 }
 
@@ -205,7 +271,7 @@ function clearActiveTable() {
 }
 
 function onJobFinished(_job: JobState) {
-  loadStatus()
+  refreshAnalysisContent()
 }
 
 function statusTagType(row: AnalysisStatusRow): 'success' | 'warning' | 'danger' | 'info' {
@@ -332,8 +398,8 @@ function normalizeNumberCell(value: unknown, integerOnly: boolean): CellValue {
   return numericValue
 }
 
-onMounted(() => {
-  loadStatus()
+onActivated(() => {
+  refreshAnalysisContent()
 })
 
 watch(activeInstrument, () => {
@@ -369,7 +435,7 @@ watch(
       <div class="panel-title">
         <h2>分析样品表</h2>
         <div class="button-row">
-          <el-button :icon="Refresh" :loading="statusLoading" @click="loadStatus">刷新状态</el-button>
+          <el-button :icon="Refresh" :loading="statusLoading" @click="refreshAnalysisContent">刷新</el-button>
           <el-button :icon="Plus" @click="addRow">新增行</el-button>
           <el-button :icon="Delete" @click="deleteActiveRow">删除行</el-button>
           <el-button @click="clearActiveTable">清空表格</el-button>
@@ -391,7 +457,7 @@ watch(
               :key="instrument.key"
               :model-value="tables[instrument.key]"
               :col-headers="[...csvHeaders]"
-              :columns="analysisColumns"
+              :columns="analysisColumnsByInstrument[instrument.key]"
               :height="500"
               stretch-h="all"
               @selected-row="selectedRow = $event"

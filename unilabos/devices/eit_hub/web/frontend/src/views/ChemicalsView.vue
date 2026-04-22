@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onActivated, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   type ChemicalRow,
@@ -127,7 +127,7 @@ function downloadXlsx() {
   window.location.href = exportXlsxUrl()
 }
 
-onMounted(load)
+onActivated(load)
 </script>
 
 <template>

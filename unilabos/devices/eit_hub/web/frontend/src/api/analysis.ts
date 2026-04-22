@@ -12,6 +12,15 @@ export interface AnalysisStatusRow {
   error?: string
 }
 
+export interface AnalysisMethodsRow {
+  instrument: AnalysisInstrumentKey
+  name: string
+  host: string
+  port: number
+  methods: string[]
+  error: string
+}
+
 export interface AnalysisSampleRow {
   SampleName: string | number | null
   AcqMethod: string | number | null
@@ -35,6 +44,11 @@ export interface AnalysisSubmitResponse {
 
 export async function fetchAnalysisStatus(): Promise<AnalysisStatusRow[]> {
   const { data } = await http.get<{ items: AnalysisStatusRow[] }>('/api/analysis/status')
+  return data.items
+}
+
+export async function fetchAnalysisMethods(): Promise<AnalysisMethodsRow[]> {
+  const { data } = await http.get<{ items: AnalysisMethodsRow[] }>('/api/analysis/methods')
   return data.items
 }
 

@@ -94,7 +94,11 @@ function saveToken() {
       </header>
 
       <main class="content-scroll">
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <KeepAlive>
+            <component :is="Component" />
+          </KeepAlive>
+        </RouterView>
       </main>
     </section>
 

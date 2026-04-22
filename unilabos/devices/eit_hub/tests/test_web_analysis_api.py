@@ -69,6 +69,14 @@ class FakeZhidaClient:
         "uplc-host": "Offline",
         "hplc-host": "Error",
     }
+    methods_by_host: Dict[str, Dict[str, Any]] = {
+        "gc-host": {"result": "OK", "message": [" gc-method-a ", "gc-method-b", ""]},
+        "uplc-host": {
+            "result": "OK",
+            "message": "[\"280_12min.mtl\",\"300_15min.mtl\"]",
+        },
+        "hplc-host": {"result": "OK", "message": ["hplc-method-a"]},
+    }
 
     def __init__(self, host: str, port: int, timeout: float) -> None:
         self.host = host
@@ -84,6 +92,15 @@ class FakeZhidaClient:
         """
         return self.status_by_host[self.host]
 
+    def get_methods(self) -> Dict[str, Any]:
+        """
+        功能:
+            按 host 返回测试方法列表响应.
+        返回:
+            Dict[str, Any], get_methods 协议响应.
+        """
+        return self.methods_by_host[self.host]
+
     def close(self) -> None:
         """
         功能:
@@ -92,6 +109,24 @@ class FakeZhidaClient:
             None.
         """
         return None
+
+
+class FakePartialFailureZhidaClient(FakeZhidaClient):
+    """
+    功能:
+        提供单台方法列表查询失败的测试客户端.
+    """
+
+    def get_methods(self) -> Dict[str, Any]:
+        """
+        功能:
+            UPLC_QTOF 返回失败响应, 其它仪器沿用正常方法列表.
+        返回:
+            Dict[str, Any], get_methods 协议响应.
+        """
+        if self.host == "uplc-host":
+            return {"result": "Error", "message": "Project 未打开"}
+        return super().get_methods()
 
 
 @pytest.fixture()
@@ -205,6 +240,51 @@ def test_status_returns_three_analysis_devices(
     assert items[1]["connected"] is False
     assert items[2]["status"] == "Error"
     assert items[2]["connected"] is False
+
+
+def test_methods_returns_three_analysis_devices_with_parsed_methods(
+    api_client: tuple[TestClient, FakeAnalysisController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能:
+        验证方法列表接口按固定仪器顺序返回, 并解析列表和 JSON 列表字符串.
+    """
+    client, _fake_controller = api_client
+    monkeypatch.setattr(analysis, "ZhidaClient", FakeZhidaClient)
+
+    response = client.get("/api/analysis/methods")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["instrument"] for item in items] == ["gc_ms", "uplc_qtof", "hplc"]
+    assert items[0]["methods"] == ["gc-method-a", "gc-method-b"]
+    assert items[1]["methods"] == ["280_12min.mtl", "300_15min.mtl"]
+    assert items[2]["methods"] == ["hplc-method-a"]
+    assert [item["error"] for item in items] == ["", "", ""]
+
+
+def test_methods_keeps_other_devices_when_one_device_fails(
+    api_client: tuple[TestClient, FakeAnalysisController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能:
+        验证单台仪器方法查询失败时返回该仪器错误, 其它仪器方法列表不受影响.
+    """
+    client, _fake_controller = api_client
+    monkeypatch.setattr(analysis, "ZhidaClient", FakePartialFailureZhidaClient)
+
+    response = client.get("/api/analysis/methods")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert items[0]["methods"] == ["gc-method-a", "gc-method-b"]
+    assert items[0]["error"] == ""
+    assert items[1]["methods"] == []
+    assert items[1]["error"] != ""
+    assert items[2]["methods"] == ["hplc-method-a"]
+    assert items[2]["error"] == ""
 
 
 def test_submit_rejects_invalid_rack_code(

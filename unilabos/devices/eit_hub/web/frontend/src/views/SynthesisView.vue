@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
@@ -225,6 +225,19 @@ function onJobFinished(_job: JobState) {
   loadDashboard()
 }
 
+function startDashboardPolling() {
+  stopDashboardPolling()
+  loadDashboard()
+  dashboardTimer = window.setInterval(loadDashboard, 5000)
+}
+
+function stopDashboardPolling() {
+  if (dashboardTimer !== undefined) {
+    window.clearInterval(dashboardTimer)
+    dashboardTimer = undefined
+  }
+}
+
 function stateLabel(code: number | null): string {
   const map: Record<number, string> = {
     0: '空闲',
@@ -326,16 +339,11 @@ function formatReagentPosition(
   return `${layoutCode} / ${well}`
 }
 
-onMounted(() => {
-  loadDashboard()
-  dashboardTimer = window.setInterval(loadDashboard, 5000)
-})
+onActivated(startDashboardPolling)
 
-onBeforeUnmount(() => {
-  if (dashboardTimer !== undefined) {
-    window.clearInterval(dashboardTimer)
-  }
-})
+onDeactivated(stopDashboardPolling)
+
+onBeforeUnmount(stopDashboardPolling)
 </script>
 
 <template>

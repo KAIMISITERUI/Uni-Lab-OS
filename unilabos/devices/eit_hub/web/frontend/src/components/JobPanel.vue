@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { CircleCheck, CircleClose, Loading, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { fetchJob, type JobState } from '../api/synthesis'
@@ -15,6 +15,7 @@ const emit = defineEmits<{
 
 const job = ref<JobState | null>(null)
 const loading = ref(false)
+const isActive = ref(false)
 let timer: number | undefined
 
 const statusText = computed(() => {
@@ -64,6 +65,9 @@ async function loadJob() {
 }
 
 function startPolling() {
+  if (props.jobId === '') {
+    return
+  }
   stopPolling()
   loadJob()
   timer = window.setInterval(loadJob, 1200)
@@ -79,12 +83,23 @@ function stopPolling() {
 watch(
   () => props.jobId,
   () => {
-    if (props.jobId !== '') {
+    if (isActive.value === true && props.jobId !== '') {
       startPolling()
     }
   },
-  { immediate: true },
 )
+
+onActivated(() => {
+  isActive.value = true
+  if (props.jobId !== '') {
+    startPolling()
+  }
+})
+
+onDeactivated(() => {
+  isActive.value = false
+  stopPolling()
+})
 
 onBeforeUnmount(stopPolling)
 </script>
@@ -131,4 +146,3 @@ onBeforeUnmount(stopPolling)
     </template>
   </div>
 </template>
-

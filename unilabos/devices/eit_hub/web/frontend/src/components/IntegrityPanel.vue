@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onActivated, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   type ChemicalRow,
@@ -92,7 +92,7 @@ const totalIssues = computed(() => {
   )
 })
 
-onMounted(refresh)
+onActivated(refresh)
 </script>
 
 <template>

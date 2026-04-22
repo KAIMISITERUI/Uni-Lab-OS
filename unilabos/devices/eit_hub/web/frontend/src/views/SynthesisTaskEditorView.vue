@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheck,
@@ -53,7 +53,6 @@ const spreadsheetColumns = computed<Array<Record<string, unknown>>>(() => {
         source: chemicalNameSource,
         strict: false,
         allowInvalid: true,
-        trimDropdown: false,
         width: 220,
       }
     }
@@ -287,7 +286,7 @@ function normalizeSpreadsheetRow(row: SpreadsheetRow, width: number): unknown[] 
   return values.slice(0, width)
 }
 
-onMounted(() => {
+onActivated(() => {
   loadTemplate()
 })
 

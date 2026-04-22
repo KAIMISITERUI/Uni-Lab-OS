@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -140,6 +141,22 @@ def get_analysis_status(
     return {"items": statuses}
 
 
+@router.get("/methods")
+def get_analysis_methods(
+    controller: AnalysisStationController = Depends(get_analysis_controller),
+) -> JsonDict:
+    """
+    功能:
+        查询 GC-MS, UPLC_QTOF, HPLC 三台分析仪器当前 Project 的采集方法列表.
+    返回:
+        Dict[str, Any], 包含三台仪器的方法列表和单台查询错误.
+    """
+    items: List[JsonDict] = []
+    for config in _get_device_configs(controller):
+        items.append(_read_device_methods(config))
+    return {"items": items}
+
+
 @router.post("/submit")
 def submit_analysis_tables(
     payload: AnalysisSubmitRequest = Body(...),
@@ -254,6 +271,90 @@ def _read_device_status(config: JsonDict) -> JsonDict:
     if error_message != "":
         result["error"] = error_message
     return result
+
+
+def _read_device_methods(config: JsonDict) -> JsonDict:
+    """
+    功能:
+        调用单台分析仪器的 get_methods 接口并整理为前端下拉选项.
+    参数:
+        config: Dict[str, Any], 仪器连接配置.
+    返回:
+        Dict[str, Any], 仪器方法列表响应, 查询失败时 methods 为空并写入 error.
+    """
+    client = ZhidaClient(
+        host=str(config["host"]),
+        port=int(config["port"]),
+        timeout=float(config["timeout"]),
+    )
+    methods: List[str] = []
+    error_message = ""
+    try:
+        response = client.get_methods()
+        methods = _parse_methods_response(response)
+    except Exception as exc:
+        logger.exception("分析仪器方法列表查询失败, instrument=%s", config["instrument"])
+        error_message = str(exc)
+    finally:
+        client.close()
+
+    return {
+        "instrument": config["instrument"],
+        "name": config["name"],
+        "host": config["host"],
+        "port": config["port"],
+        "methods": methods,
+        "error": error_message,
+    }
+
+
+def _parse_methods_response(response: Any) -> List[str]:
+    """
+    功能:
+        校验智达 get_methods 响应并提取方法名称.
+    参数:
+        response: Any, ZhidaClient.get_methods 返回值.
+    返回:
+        List[str], 已去除首尾空白和空项的方法名称列表.
+    """
+    if isinstance(response, dict) is False:
+        raise ValueError("方法列表响应格式无效.")
+
+    result = str(response.get("result", "")).strip()
+    if result.upper() != "OK":
+        raise ValueError(f"方法列表响应失败: {response}")
+
+    raw_methods = _parse_methods_message(response.get("message"))
+    methods: List[str] = []
+    for method in raw_methods:
+        text = str(method).strip()
+        if text == "":
+            continue
+        methods.append(text)
+    return methods
+
+
+def _parse_methods_message(message: Any) -> List[Any]:
+    """
+    功能:
+        解析 get_methods 的 message 字段, 仅接受列表或 JSON 列表字符串.
+    参数:
+        message: Any, 协议响应中的 message 字段.
+    返回:
+        List[Any], 原始方法名称列表.
+    """
+    if isinstance(message, list) is True:
+        return message
+    if isinstance(message, str) is False:
+        raise ValueError("方法列表 message 必须为列表或 JSON 列表字符串.")
+
+    try:
+        parsed = json.loads(message)
+    except json.JSONDecodeError as exc:
+        raise ValueError("方法列表 message 不是有效的 JSON 列表字符串.") from exc
+    if isinstance(parsed, list) is False:
+        raise ValueError("方法列表 message 必须解析为 JSON 列表.")
+    return parsed
 
 
 def _validate_tables(
