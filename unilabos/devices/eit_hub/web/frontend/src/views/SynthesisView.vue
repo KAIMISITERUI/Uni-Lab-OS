@@ -1,49 +1,61 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import {
-  Box,
-  CircleCheck,
-  Connection,
-  DocumentChecked,
-  Download,
-  Minus,
-  Plus,
-  Refresh,
-  Upload,
-  VideoPlay,
-} from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
 import {
   type DashboardData,
   type JobState,
-  type ReactionTemplate,
-  checkResource,
+  type OuterDoorAction,
   fetchDashboard,
-  fetchReactionTemplate,
-  runSynthesisAction,
-  saveReactionTemplate,
-  submitReactionTemplate,
+  controlOuterDoor,
+  controlW1Shelf,
+  initSynthesisDevice,
 } from '../api/synthesis'
 import { listChemicals, type ChemicalRow } from '../api/chemicals'
 import { getErrorMessage } from '../api/http'
+import StructurePreview from '../components/StructurePreview.vue'
 
-const activeTab = ref('overview')
+interface ReagentOccurrence {
+  amount: string
+  position: string
+  trayType: string
+}
+
+interface ReagentDisplayRow {
+  substance: string
+  structureSmiles: string
+  occurrences: ReagentOccurrence[]
+}
+
 const dashboard = ref<DashboardData | null>(null)
-const templateData = ref<ReactionTemplate | null>(null)
 const currentJobId = ref('')
 const dashboardLoading = ref(false)
-const templateLoading = ref(false)
 const actionLoading = ref('')
-const chemicalLoading = ref(false)
-const chemicalOptions = ref<ChemicalRow[]>([])
+const reagentStructureMap = ref<Record<string, string>>({})
 let dashboardTimer: number | undefined
 
-const actionParams = reactive({
-  task_id: '',
-  water_limit_ppm: 10,
-  oxygen_limit_ppm: 10,
+const w1Params = reactive({
+  position: 'W-1-1',
+  action: 'outside' as 'outside' | 'home',
 })
+
+const reagentResourceTypeCodes = new Set([201000600, 201000730, 201000502, 201000503, 220000023])
+const consumableCardConfigs = [
+  { resourceType: 201000726, label: '2 mL 反应试管' },
+  { resourceType: 201000712, label: '反应密封盖' },
+  { resourceType: 201000711, label: '2 mL 试管磁子' },
+  { resourceType: 201000512, label: '5 mL Tip 头' },
+  { resourceType: 201000731, label: '1 mL Tip 头' },
+  { resourceType: 201000815, label: '50 μL Tip 头' },
+  { resourceType: 201000727, label: '闪滤瓶内瓶' },
+  { resourceType: 201000728, label: '闪滤瓶外瓶' },
+]
+const w1ShelfPositions = ['W-1-1', 'W-1-3', 'W-1-5', 'W-1-7']
+const w1ShelfActions = [
+  { label: '推出', value: 'outside' },
+  { label: '复位', value: 'home' },
+]
 
 const stationStateText = computed(() => stateLabel(dashboard.value?.station_state ?? null))
 
@@ -54,12 +66,82 @@ const dashboardErrors = computed(() => {
   return Object.entries(dashboard.value.errors || {}).map(([key, value]) => `${key}: ${value}`)
 })
 
-const reagentPairCount = computed(() => templateData.value?.reagent_pair_count || 0)
+const visibleDeviceStatus = computed(() => {
+  return (dashboard.value?.device_status || []).filter((row) => {
+    return row.device_name !== '手套箱箱体环境'
+  })
+})
+
+const reagentResources = computed(() => {
+  return (dashboard.value?.resources || []).filter((row) => isReagentResource(row))
+})
+
+const reagentDisplayRows = computed(() => {
+  const rowMap = new Map<string, ReagentDisplayRow>()
+  for (const resource of reagentResources.value) {
+    const details = Array.isArray(resource.substance_details) ? resource.substance_details : []
+    for (const item of details) {
+      if (typeof item !== 'object' || item === null) {
+        continue
+      }
+      const detail = item as Record<string, unknown>
+      const substance = String(detail.substance || '').trim()
+      if (substance === '') {
+        continue
+      }
+      const key = normalizeChemicalName(substance)
+      if (rowMap.has(key) === false) {
+        rowMap.set(key, {
+          substance,
+          structureSmiles: reagentStructureMap.value[key] || '',
+          occurrences: [],
+        })
+      }
+      rowMap.get(key)?.occurrences.push({
+        amount: String(detail.value || '--'),
+        position: formatReagentPosition(resource, detail),
+        trayType: String(resource.resource_type_name || '--'),
+      })
+    }
+  }
+  return Array.from(rowMap.values())
+})
+
+const consumableCards = computed(() => {
+  const countMap = new Map<number, number>()
+  for (const row of dashboard.value?.resources || []) {
+    const code = Number(row.resource_type)
+    if (Number.isFinite(code) === false) {
+      continue
+    }
+    const count = Number(row.count)
+    countMap.set(code, (countMap.get(code) || 0) + (Number.isFinite(count) ? count : 0))
+  }
+  return consumableCardConfigs.map((config) => ({
+    ...config,
+    count: countMap.get(config.resourceType) || 0,
+  }))
+})
+
+const outerDoorAction = computed(() => {
+  const device = (dashboard.value?.device_status || []).find((row) => row.device_name === '过渡舱外门')
+  const status = String(device?.status || '').toUpperCase()
+  const statusCode = Number(device?.status_code)
+  if (status === 'OPEN' || statusCode === 3) {
+    return { action: 'close' as const, label: '关闭外门', type: 'warning' }
+  }
+  if (status === 'CLOSE' || statusCode === 4) {
+    return { action: 'open' as const, label: '打开外门', type: 'success' }
+  }
+  return null
+})
 
 async function loadDashboard() {
   dashboardLoading.value = true
   try {
-    dashboard.value = await fetchDashboard()
+    const data = await fetchDashboard()
+    dashboard.value = data
+    void loadReagentStructures(data.resources || [])
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -67,78 +149,42 @@ async function loadDashboard() {
   }
 }
 
-async function loadTemplate() {
-  templateLoading.value = true
-  try {
-    templateData.value = await fetchReactionTemplate()
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error))
-  } finally {
-    templateLoading.value = false
-  }
-}
-
-async function searchChemicals(query: string) {
-  chemicalLoading.value = true
-  try {
-    const data = await listChemicals({
-      q: query.trim() !== '' ? query.trim() : undefined,
-      query_type: 'name',
-      page: 1,
-      page_size: 30,
-    })
-    chemicalOptions.value = data.items
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error))
-  } finally {
-    chemicalLoading.value = false
-  }
-}
-
-async function saveTemplate() {
-  if (templateData.value === null) {
+async function loadReagentStructures(resources: Array<Record<string, unknown>>) {
+  const names = collectReagentNames(resources)
+  const missingNames = names.filter((name) => {
+    return reagentStructureMap.value[normalizeChemicalName(name)] === undefined
+  })
+  if (missingNames.length === 0) {
     return
   }
-  try {
-    templateData.value = await saveReactionTemplate(templateData.value)
-    ElMessage.success('模板已保存')
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error))
-  }
+
+  const nextMap = { ...reagentStructureMap.value }
+  await Promise.all(
+    missingNames.map(async (name) => {
+      const key = normalizeChemicalName(name)
+      try {
+        const response = await listChemicals({
+          q: name,
+          query_type: 'name',
+          page: 1,
+          page_size: 10,
+        })
+        const chemical = pickChemicalByName(name, response.items)
+        nextMap[key] = String(chemical?.smiles || '')
+      } catch {
+        nextMap[key] = ''
+      }
+    }),
+  )
+  reagentStructureMap.value = nextMap
 }
 
-async function submitTemplate() {
-  if (templateData.value === null) {
-    return
-  }
+async function runDeviceInit() {
+  actionLoading.value = 'device_init'
   try {
-    const data = await submitReactionTemplate(templateData.value)
+    const data = await initSynthesisDevice()
     currentJobId.value = data.job_id
-    ElMessage.success('提交任务已进入后台')
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error))
-  }
-}
-
-async function runResourceCheck() {
-  if (templateData.value === null) {
-    return
-  }
-  try {
-    const data = await checkResource(templateData.value)
-    currentJobId.value = data.job_id
-    ElMessage.success('物料核算已进入后台')
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error))
-  }
-}
-
-async function runAction(actionName: string) {
-  actionLoading.value = actionName
-  try {
-    const data = await runSynthesisAction(actionName, buildActionParams(actionName))
-    currentJobId.value = data.job_id
-    ElMessage.success('动作已进入后台')
+    ElMessage.success('设备初始化已进入后台')
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -146,25 +192,33 @@ async function runAction(actionName: string) {
   }
 }
 
-function buildActionParams(actionName: string): Record<string, unknown> {
-  const params: Record<string, unknown> = {}
-  const taskActions = new Set([
-    'start_task',
-    'wait_task',
-    'batch_out_task_empty',
-    'run_analysis',
-    'poll_analysis',
-    'print_task_number_labels',
-  ])
-  if (taskActions.has(actionName) && actionParams.task_id.trim() !== '') {
-    params.task_id = actionParams.task_id.trim()
+async function runOuterDoor(action: OuterDoorAction) {
+  actionLoading.value = `outer_door_${action}`
+  try {
+    const data = await controlOuterDoor(action)
+    currentJobId.value = data.job_id
+    ElMessage.success('外门操作已进入后台')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
   }
-  if (actionName === 'start_task') {
-    params.water_limit_ppm = actionParams.water_limit_ppm
-    params.oxygen_limit_ppm = actionParams.oxygen_limit_ppm
-    params.check_glovebox_env = true
+}
+
+async function runW1Shelf() {
+  actionLoading.value = 'control_w1_shelf'
+  try {
+    const data = await controlW1Shelf({
+      position: w1Params.position,
+      action: w1Params.action,
+    })
+    currentJobId.value = data.job_id
+    ElMessage.success('W1 操作已进入后台')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
   }
-  return params
 }
 
 function onJobFinished(_job: JobState) {
@@ -206,76 +260,71 @@ function formatValue(value: unknown, suffix = ''): string {
   return `${value}${suffix}`
 }
 
-function isYesNoParam(name: string): boolean {
-  return ['等待目标温度', '固定加料顺序', '自动加磁子'].includes(name)
-}
-
-function isReactorParam(name: string): boolean {
-  return name === '反应器类型'
-}
-
-function setExperimentCount(count: number) {
-  if (templateData.value === null) {
-    return
+function formatOneDecimalPpm(value: unknown): string {
+  if (value === null || value === undefined || value === '') {
+    return '--'
   }
-  const width = templateData.value.headers.length
-  const nextRows: unknown[][] = []
-  for (let index = 0; index < count; index += 1) {
-    const source = templateData.value.rows[index]
-    const row = Array.isArray(source) ? [...source] : []
-    while (row.length < width) {
-      row.push('')
+  const numericValue = Number(value)
+  if (Number.isFinite(numericValue) === false) {
+    return '--'
+  }
+  return `${numericValue.toFixed(1)} ppm`
+}
+
+function isReagentResource(row: Record<string, unknown>): boolean {
+  const code = Number(row.resource_type)
+  if (Number.isFinite(code) && reagentResourceTypeCodes.has(code)) {
+    return true
+  }
+  const resourceTypeName = String(row.resource_type_name || '')
+  return resourceTypeName.includes('试剂瓶托盘') || resourceTypeName.includes('粉桶托盘')
+}
+
+function collectReagentNames(resources: Array<Record<string, unknown>>): string[] {
+  const names = new Map<string, string>()
+  for (const resource of resources) {
+    if (isReagentResource(resource) === false) {
+      continue
     }
-    row[0] = index + 1
-    nextRows.push(row.slice(0, width))
+    const details = Array.isArray(resource.substance_details) ? resource.substance_details : []
+    for (const item of details) {
+      if (typeof item !== 'object' || item === null) {
+        continue
+      }
+      const substance = String((item as Record<string, unknown>).substance || '').trim()
+      if (substance !== '') {
+        names.set(normalizeChemicalName(substance), substance)
+      }
+    }
   }
-  templateData.value.rows = nextRows
+  return Array.from(names.values())
 }
 
-function addReagentPair() {
-  if (templateData.value === null) {
-    return
-  }
-  templateData.value.headers.push('试剂', '试剂量')
-  for (const row of templateData.value.rows) {
-    row.push('', '')
-  }
-  templateData.value.reagent_pair_count += 1
+function normalizeChemicalName(value: unknown): string {
+  return String(value || '').trim().replace(/\s+/g, '').toLowerCase()
 }
 
-function removeReagentPair() {
-  if (templateData.value === null) {
-    return
-  }
-  if (templateData.value.reagent_pair_count <= 1) {
-    ElMessage.warning('至少保留一组试剂列')
-    return
-  }
-  templateData.value.headers.splice(templateData.value.headers.length - 2, 2)
-  for (const row of templateData.value.rows) {
-    row.splice(row.length - 2, 2)
-  }
-  templateData.value.reagent_pair_count -= 1
+function pickChemicalByName(name: string, rows: ChemicalRow[]): ChemicalRow | null {
+  const key = normalizeChemicalName(name)
+  return (
+    rows.find((row) => normalizeChemicalName(row.substance) === key) ||
+    rows.find((row) => normalizeChemicalName(row.other_name) === key) ||
+    rows[0] ||
+    null
+  )
 }
 
-function isReagentNameColumn(header: string, index: number): boolean {
-  if (index === 0) {
-    return false
+function formatReagentPosition(
+  resource: Record<string, unknown>,
+  detail: Record<string, unknown>,
+): string {
+  const layoutCode = String(resource.layout_code || '--')
+  const well = String(detail.well || '').trim()
+  if (well === '') {
+    return layoutCode
   }
-  return header.includes('试剂') && header.includes('量') === false
+  return `${layoutCode} / ${well}`
 }
-
-const actions = [
-  { name: 'upload_task_flow', label: '上传任务流程', icon: Upload, type: 'primary' },
-  { name: 'sync_chemicals', label: '同步化学品库', icon: Connection, type: '' },
-  { name: 'batch_in_agv', label: 'AGV 上料', icon: Download, type: '' },
-  { name: 'start_task', label: '启动任务', icon: VideoPlay, type: 'success' },
-  { name: 'wait_task', label: '等待完成', icon: CircleCheck, type: '' },
-  { name: 'batch_out_task_empty', label: '任务下料', icon: Box, type: '' },
-  { name: 'auto_unload_to_agv', label: 'AGV 下料', icon: Download, type: '' },
-  { name: 'run_analysis', label: '提交分析', icon: DocumentChecked, type: '' },
-  { name: 'poll_analysis', label: '谱图处理', icon: Refresh, type: '' },
-]
 
 onMounted(() => {
   loadDashboard()
@@ -291,10 +340,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="view-stack">
-    <el-tabs v-model="activeTab">
-      <el-tab-pane label="总览" name="overview">
-        <div class="view-stack">
-          <section class="metrics-grid">
+    <section class="metrics-grid">
             <div class="metric">
               <div class="metric-label">工站状态</div>
               <div class="metric-value">{{ stationStateText }}</div>
@@ -303,14 +349,14 @@ onBeforeUnmount(() => {
             <div class="metric">
               <div class="metric-label">水含量</div>
               <div class="metric-value">
-                {{ formatValue(dashboard?.glovebox_env?.water_content, ' ppm') }}
+                {{ formatOneDecimalPpm(dashboard?.glovebox_env?.water_content) }}
               </div>
               <div class="metric-note">手套箱</div>
             </div>
             <div class="metric">
               <div class="metric-label">氧含量</div>
               <div class="metric-value">
-                {{ formatValue(dashboard?.glovebox_env?.oxygen_content, ' ppm') }}
+                {{ formatOneDecimalPpm(dashboard?.glovebox_env?.oxygen_content) }}
               </div>
               <div class="metric-note">手套箱</div>
             </div>
@@ -321,7 +367,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="metric-note">环境监测</div>
             </div>
-          </section>
+    </section>
 
           <el-alert
             v-for="errorText in dashboardErrors"
@@ -338,172 +384,323 @@ onBeforeUnmount(() => {
                 刷新
               </el-button>
             </div>
-            <div class="table-wrap">
-              <el-table :data="dashboard?.resources || []" border stripe height="360">
-                <el-table-column prop="layout_code" label="位置" width="120" />
-                <el-table-column prop="resource_type_name" label="托盘类型" min-width="180" />
-                <el-table-column prop="count" label="数量" width="90" align="center" />
-                <el-table-column label="物质详情" min-width="260">
-                  <template #default="{ row }">
-                    <span>
-                      {{
-                        (row.substance_details || [])
-                          .map((item: Record<string, unknown>) => item.substance)
-                          .filter(Boolean)
-                          .join(', ') || '--'
-                      }}
-                    </span>
-                  </template>
-                </el-table-column>
-              </el-table>
+            <div class="resource-stack">
+              <div class="resource-group">
+                <div class="consumable-card-grid">
+                  <div
+                    v-for="card in consumableCards"
+                    :key="card.resourceType"
+                    class="consumable-card"
+                  >
+                    <div class="consumable-card-content">
+                      <div class="consumable-card-label">{{ card.label }}</div>
+                      <div class="consumable-card-count">{{ card.count }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="resource-group">
+                <div class="table-wrap">
+                  <el-table class="reagent-table" :data="reagentDisplayRows" border stripe height="420">
+                    <el-table-column label="结构式" width="142" align="center">
+                      <template #default="{ row }">
+                        <StructurePreview
+                          :smiles="row.structureSmiles"
+                          :width="118"
+                          :height="86"
+                        />
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="substance" label="物质名称" min-width="260" align="center" />
+                    <el-table-column label="物质的量" width="140" align="center">
+                      <template #default="{ row }">
+                        <div class="reagent-occurrence-list">
+                          <div
+                            v-for="(item, index) in row.occurrences"
+                            :key="`${item.position}-${index}`"
+                          >
+                            {{ item.amount }}
+                          </div>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="位置" width="170" align="center">
+                      <template #default="{ row }">
+                        <div class="reagent-occurrence-list">
+                          <div
+                            v-for="(item, index) in row.occurrences"
+                            :key="`${item.position}-${index}`"
+                          >
+                            {{ item.position }}
+                          </div>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="托盘种类" min-width="180" align="center">
+                      <template #default="{ row }">
+                        <div class="reagent-occurrence-list">
+                          <div
+                            v-for="(item, index) in row.occurrences"
+                            :key="`${item.position}-${index}`"
+                          >
+                            {{ item.trayType }}
+                          </div>
+                        </div>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
             </div>
           </section>
 
-          <section class="two-column">
+          <section class="two-column overview-status-actions">
             <div class="panel">
               <div class="panel-title">
                 <h3>设备状态</h3>
               </div>
-              <el-table :data="dashboard?.device_status || []" border stripe height="300">
-                <el-table-column prop="device_name" label="设备" min-width="140" />
-                <el-table-column label="状态" width="120" align="center">
-                  <template #default="{ row }">
-                    <el-tag :type="statusTagType(row.status_code)">
-                      {{ row.status || row.status_code }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-              </el-table>
+              <div class="device-status-grid">
+                <div
+                  v-for="device in visibleDeviceStatus"
+                  :key="String(device.device_name)"
+                  class="device-status-item"
+                >
+                  <span class="device-status-name">{{ device.device_name }}</span>
+                  <el-tag :type="statusTagType(device.status_code)">
+                    {{ device.status || device.status_code }}
+                  </el-tag>
+                </div>
+              </div>
             </div>
 
             <div class="panel">
               <div class="panel-title">
-                <h3>最近任务</h3>
+                <h3>其它操作</h3>
               </div>
-              <el-table :data="dashboard?.recent_tasks || []" border stripe height="300">
-                <el-table-column prop="task_id" label="任务 ID" width="100" />
-                <el-table-column prop="task_name" label="任务名称" min-width="180" />
-                <el-table-column prop="status" label="状态码" width="100" align="center" />
-              </el-table>
+              <div class="other-actions">
+                <el-button
+                  class="init-action-button"
+                  type="primary"
+                  :loading="actionLoading === 'device_init'"
+                  @click="runDeviceInit"
+                >
+                  设备初始化
+                </el-button>
+                <div class="operation-group">
+                  <div class="operation-title">过渡舱外门</div>
+                  <div class="operation-row">
+                    <el-button
+                      v-if="outerDoorAction !== null"
+                      :type="outerDoorAction.type"
+                      :loading="actionLoading === `outer_door_${outerDoorAction.action}`"
+                      @click="runOuterDoor(outerDoorAction.action)"
+                    >
+                      {{ outerDoorAction.label }}
+                    </el-button>
+                    <el-button v-else disabled>
+                      外门状态未知
+                    </el-button>
+                  </div>
+                </div>
+                <div class="operation-group">
+                  <div class="operation-title">W1 排货架</div>
+                  <el-form label-position="top">
+                    <div class="w1-form">
+                      <el-form-item label="位置">
+                        <el-select v-model="w1Params.position">
+                          <el-option
+                            v-for="position in w1ShelfPositions"
+                            :key="position"
+                            :label="position"
+                            :value="position"
+                          />
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="动作">
+                        <el-select v-model="w1Params.action">
+                          <el-option
+                            v-for="action in w1ShelfActions"
+                            :key="action.value"
+                            :label="action.label"
+                            :value="action.value"
+                          />
+                        </el-select>
+                      </el-form-item>
+                      <el-button
+                        class="w1-execute-button"
+                        :loading="actionLoading === 'control_w1_shelf'"
+                        @click="runW1Shelf"
+                      >
+                        执行 W1 操作
+                      </el-button>
+                    </div>
+                  </el-form>
+                </div>
+              </div>
             </div>
           </section>
-        </div>
-      </el-tab-pane>
-
-      <el-tab-pane label="流程操作" name="actions">
-        <div class="view-stack">
-          <section class="panel">
-            <div class="panel-title">
-              <h2>工站动作</h2>
-            </div>
-            <el-form label-position="top">
-              <div class="action-params">
-                <el-form-item label="任务 ID">
-                  <el-input v-model="actionParams.task_id" placeholder="留空时由底层逻辑自动选择" />
-                </el-form-item>
-                <el-form-item label="水含量阈值 ppm">
-                  <el-input-number v-model="actionParams.water_limit_ppm" :min="0" />
-                </el-form-item>
-                <el-form-item label="氧含量阈值 ppm">
-                  <el-input-number v-model="actionParams.oxygen_limit_ppm" :min="0" />
-                </el-form-item>
-              </div>
-            </el-form>
-            <div class="action-grid">
-              <el-button
-                v-for="action in actions"
-                :key="action.name"
-                :type="action.type"
-                :icon="action.icon"
-                :loading="actionLoading === action.name"
-                @click="runAction(action.name)"
-              >
-                {{ action.label }}
-              </el-button>
-            </div>
-          </section>
-        </div>
-      </el-tab-pane>
-    </el-tabs>
 
     <JobPanel v-if="currentJobId !== ''" :job-id="currentJobId" @finished="onJobFinished" />
   </div>
 </template>
 
 <style scoped>
-.param-panel {
+.resource-stack {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.resource-group {
+  display: grid;
+  min-width: 0;
+}
+
+.consumable-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
+  gap: 12px;
+}
+
+.consumable-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  min-height: 88px;
+  padding: 16px 18px;
+  background: #f3f8ff;
+  border: 1px solid #e3ebf8;
+  border-radius: 8px;
+}
+
+.consumable-card-content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.consumable-card-label {
+  overflow: hidden;
+  color: #738196;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.consumable-card-count {
+  color: #172033;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.reagent-occurrence-list {
   display: grid;
   gap: 4px;
-  min-width: 0;
-  max-height: 680px;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.param-section {
-  margin-top: 8px;
-  padding: 8px 10px;
-  color: #12325a;
-  font-size: 13px;
-  font-weight: 700;
-  border: 1px solid #dce5f0;
-  border-radius: 8px;
-  background: #eef4fb;
-}
-
-.edit-grid {
-  width: max-content;
-  min-width: 100%;
-  border-collapse: collapse;
-}
-
-.edit-grid th,
-.edit-grid td {
-  width: 168px;
-  min-width: 168px;
-  padding: 8px;
-  border: 1px solid #dce5f0;
-  background: #ffffff;
-}
-
-.edit-grid th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  color: #172033;
-  font-size: 13px;
-  background: #eef4fb;
-}
-
-.edit-grid th:first-child,
-.edit-grid td:first-child {
-  width: 96px;
-  min-width: 96px;
+  justify-items: center;
+  color: #24344d;
+  line-height: 1.45;
   text-align: center;
 }
 
-.action-params {
-  display: grid;
-  grid-template-columns: minmax(180px, 260px) 180px 180px;
-  gap: 12px;
-  align-items: end;
+.reagent-table :deep(.cell) {
+  display: flex;
+  justify-content: center;
 }
 
-.action-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
-  gap: 12px;
+.overview-status-actions {
+  grid-template-columns: minmax(560px, 1.35fr) minmax(320px, 0.65fr);
 }
 
-.action-grid .el-button {
+.device-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 10px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.device-status-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 10px;
+  background: #f7f9fc;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+}
+
+.device-status-name {
+  overflow: hidden;
+  color: #24344d;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.other-actions {
+  display: grid;
+  gap: 14px;
+}
+
+.other-actions .el-button {
   justify-content: flex-start;
-  height: 44px;
+  min-height: 40px;
   margin-left: 0;
 }
 
+.init-action-button,
+.operation-row .el-button,
+.w1-execute-button {
+  justify-content: center !important;
+}
+
+.operation-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.operation-title {
+  color: #34445d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.operation-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.w1-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(128px, 0.8fr);
+  gap: 10px;
+  align-items: end;
+}
+
+.w1-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.w1-execute-button {
+  width: 100%;
+  min-height: 32px;
+}
+
 @media (max-width: 860px) {
-  .action-params,
-  .action-grid {
+  .overview-status-actions,
+  .device-status-grid,
+  .operation-row,
+  .w1-form {
     grid-template-columns: 1fr;
   }
 }

@@ -60,14 +60,6 @@ function saveToken() {
           <el-icon><Cpu /></el-icon>
           <span>合成工站</span>
         </RouterLink>
-        <RouterLink class="nav-link" to="/chemicals">
-          <el-icon><Files /></el-icon>
-          <span>化学品库</span>
-        </RouterLink>
-        <RouterLink class="nav-link nav-sub" to="/chemical-integrity">
-          <el-icon><Document /></el-icon>
-          <span>完整性维护</span>
-        </RouterLink>
         <RouterLink class="nav-link" to="/analysis">
           <el-icon><Monitor /></el-icon>
           <span>分析工站</span>
@@ -75,6 +67,10 @@ function saveToken() {
         <RouterLink class="nav-link" to="/agv">
           <el-icon><Van /></el-icon>
           <span>AGV 工站</span>
+        </RouterLink>
+        <RouterLink class="nav-link" to="/chemicals">
+          <el-icon><Files /></el-icon>
+          <span>化学品库</span>
         </RouterLink>
         <RouterLink class="nav-link" to="/synthesis-task-editor">
           <el-icon><EditPen /></el-icon>

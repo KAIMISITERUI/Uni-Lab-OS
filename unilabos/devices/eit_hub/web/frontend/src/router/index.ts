@@ -12,21 +12,9 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '合成工站' },
   },
   {
-    path: '/chemicals',
-    name: 'chemicals',
-    component: () => import('../views/ChemicalsView.vue'),
-    meta: { title: '化学品库' },
-  },
-  {
-    path: '/chemical-integrity',
-    name: 'chemical-integrity',
-    component: () => import('../views/IntegrityView.vue'),
-    meta: { title: '完整性维护' },
-  },
-  {
     path: '/analysis',
     name: 'analysis',
-    component: () => import('../views/PlaceholderView.vue'),
+    component: () => import('../views/AnalysisView.vue'),
     meta: { title: '分析工站' },
   },
   {
@@ -34,6 +22,12 @@ const routes: RouteRecordRaw[] = [
     name: 'agv',
     component: () => import('../views/PlaceholderView.vue'),
     meta: { title: 'AGV 工站' },
+  },
+  {
+    path: '/chemicals',
+    name: 'chemicals',
+    component: () => import('../views/ChemicalsView.vue'),
+    meta: { title: '化学品库' },
   },
   {
     path: '/synthesis-task-editor',

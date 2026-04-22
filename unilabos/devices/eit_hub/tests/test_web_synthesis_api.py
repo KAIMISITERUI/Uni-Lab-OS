@@ -33,6 +33,9 @@ class FakeSynthesisManager:
         self.resource_check_path: Optional[str] = None
         self.entered_event: Optional[threading.Event] = None
         self.release_event: Optional[threading.Event] = None
+        self.device_init_calls = 0
+        self.door_ops: list[str] = []
+        self.w1_calls: list[tuple[str, str]] = []
 
     def station_state(self) -> int:
         """功能: 返回测试工站状态."""
@@ -77,6 +80,41 @@ class FakeSynthesisManager:
         """
         self.resource_check_path = template_path
         return {"ready": True, "auto_generate_batch_file": auto_generate_batch_file}
+
+    def device_init(self) -> Dict[str, Any]:
+        """
+        功能:
+            返回测试设备初始化结果.
+        返回:
+            Dict[str, Any], 初始化结果.
+        """
+        self.device_init_calls += 1
+        return {"success": True}
+
+    def open_close_door(self, op: str) -> Dict[str, Any]:
+        """
+        功能:
+            记录过渡舱外门开关动作.
+        参数:
+            op: str, 开门或关门动作.
+        返回:
+            Dict[str, Any], 动作结果.
+        """
+        self.door_ops.append(op)
+        return {"success": True, "op": op}
+
+    def control_w1_shelf(self, position: str, action: str) -> Dict[str, Any]:
+        """
+        功能:
+            记录 W1 排货架控制动作.
+        参数:
+            position: str, W1 排货架位置.
+            action: str, 推出或复位动作.
+        返回:
+            Dict[str, Any], 动作结果.
+        """
+        self.w1_calls.append((position, action))
+        return {"success": True, "position": position, "action": action}
 
 
 @pytest.fixture()
@@ -173,6 +211,99 @@ def test_resource_check_uses_default_path(
     assert job["result"]["ready"] is True
     assert job["result"]["auto_generate_batch_file"] is True
     assert fake_manager.resource_check_path == str(template_path)
+
+
+def test_device_init_calls_manager(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证设备初始化窄接口会调用底层 device_init.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post("/api/synthesis/device-init")
+    assert response.status_code == 200
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["result"]["success"] is True
+    assert fake_manager.device_init_calls == 1
+
+
+def test_open_outer_door_action_calls_manager(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证打开过渡舱外门窄接口会调用底层 open_close_door("open").
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post("/api/synthesis/outer-door", json={"action": "open"})
+    assert response.status_code == 200
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["result"]["op"] == "open"
+    assert fake_manager.door_ops == ["open"]
+
+
+def test_close_outer_door_action_calls_manager(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证关闭过渡舱外门窄接口会调用底层 open_close_door("close").
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post("/api/synthesis/outer-door", json={"action": "close"})
+    assert response.status_code == 200
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["result"]["op"] == "close"
+    assert fake_manager.door_ops == ["close"]
+
+
+def test_control_w1_shelf_action_passes_params(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证 W1 排货架窄接口会透传位置和动作参数.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/w1-shelf",
+        json={"position": "W-1-3", "action": "home"},
+    )
+    assert response.status_code == 200
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["result"]["position"] == "W-1-3"
+    assert job["result"]["action"] == "home"
+    assert fake_manager.w1_calls == [("W-1-3", "home")]
+
+
+def test_control_w1_shelf_rejects_invalid_params(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证 W1 排货架控制参数非法时直接返回 400.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/w1-shelf",
+        json={"position": "W-1-2", "action": "home"},
+    )
+    assert response.status_code == 400
+    assert "W1 货架位置" in response.json()["detail"]
+    assert fake_manager.w1_calls == []
+
+
+def test_synthesis_actions_api_is_removed(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证旧的合成工站通用动作接口已被删除.
+    """
+    client, _fake_manager, _template_path = api_client
+    response = client.post("/api/synthesis/actions/open_outer_door", json={"params": {}})
+    assert response.status_code == 404
 
 
 def test_second_exclusive_job_returns_409(

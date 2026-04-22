@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheck,
@@ -20,38 +20,67 @@ import {
 } from '../api/synthesis'
 import { listChemicals, type ChemicalRow } from '../api/chemicals'
 import { getErrorMessage } from '../api/http'
+import EditableSpreadsheet from '../components/EditableSpreadsheet.vue'
 
-type ActiveCell = {
-  row: number
-  col: number
-}
+type SpreadsheetRow = Record<string, unknown> | unknown[]
 
-type FillState = {
-  active: boolean
-  sourceRow: number
-  targetRow: number
-  col: number
-}
+const TASK_EDITOR_DRAFT_KEY = 'eit_hub.synthesis_task_editor_draft'
 
 const templateData = ref<ReactionTemplate | null>(null)
 const currentJobId = ref('')
 const loading = ref(false)
 const chemicalLoading = ref(false)
-const chemicalOptions = ref<ChemicalRow[]>([])
-const activeCell = ref<ActiveCell | null>(null)
-const fillState = reactive<FillState>({
-  active: false,
-  sourceRow: -1,
-  targetRow: -1,
-  col: -1,
-})
+let skipTemplatePersist = false
 
 const experimentCount = computed(() => templateData.value?.rows.length || 12)
 
-async function loadTemplate() {
+const spreadsheetColumns = computed<Array<Record<string, unknown>>>(() => {
+  if (templateData.value === null) {
+    return []
+  }
+  return templateData.value.headers.map((header, index) => {
+    if (index === 0) {
+      return {
+        data: index,
+        readOnly: true,
+        width: 90,
+      }
+    }
+    if (isReagentNameColumn(header, index) === true) {
+      return {
+        data: index,
+        type: 'autocomplete',
+        source: chemicalNameSource,
+        strict: false,
+        allowInvalid: true,
+        trimDropdown: false,
+        width: 220,
+      }
+    }
+    return {
+      data: index,
+      type: 'text',
+      width: 180,
+    }
+  })
+})
+
+const spreadsheetKey = computed(() => {
+  if (templateData.value === null) {
+    return 'empty'
+  }
+  return `${templateData.value.headers.join('|')}-${templateData.value.rows.length}`
+})
+
+async function loadTemplate(useDraft = true) {
   loading.value = true
   try {
-    templateData.value = await fetchReactionTemplate()
+    const remoteTemplate = await fetchReactionTemplate()
+    const draftTemplate = useDraft === true ? readTemplateDraft(remoteTemplate) : null
+    if (useDraft !== true) {
+      clearTemplateDraft()
+    }
+    setTemplateData(draftTemplate || remoteTemplate)
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -59,7 +88,7 @@ async function loadTemplate() {
   }
 }
 
-async function searchChemicals(query: string) {
+async function loadChemicalNames(query: string): Promise<string[]> {
   chemicalLoading.value = true
   try {
     const data = await listChemicals({
@@ -68,12 +97,30 @@ async function searchChemicals(query: string) {
       page: 1,
       page_size: 50,
     })
-    chemicalOptions.value = data.items
+    return buildChemicalNameOptions(data.items)
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
+    return []
   } finally {
     chemicalLoading.value = false
   }
+}
+
+function chemicalNameSource(query: string, process: (choices: string[]) => void) {
+  void loadChemicalNames(query).then((choices) => {
+    process(choices)
+  })
+}
+
+function buildChemicalNameOptions(rows: ChemicalRow[]): string[] {
+  const options = new Set<string>()
+  for (const row of rows) {
+    const name = String(row.substance || row.substance_english_name || '').trim()
+    if (name !== '') {
+      options.add(name)
+    }
+  }
+  return Array.from(options)
 }
 
 async function saveTemplate() {
@@ -82,6 +129,7 @@ async function saveTemplate() {
   }
   try {
     templateData.value = await saveReactionTemplate(templateData.value)
+    persistTemplateDraft()
     ElMessage.success('模板已保存')
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
@@ -115,7 +163,7 @@ async function submitTemplate() {
 }
 
 function onJobFinished(_job: JobState) {
-  loadTemplate()
+  loadTemplate(false)
 }
 
 function isYesNoParam(name: string): boolean {
@@ -177,73 +225,79 @@ function removeReagentPair() {
   templateData.value.reagent_pair_count -= 1
 }
 
-function setActiveCell(row: number, col: number) {
-  activeCell.value = { row, col }
+function updateTemplateRows(rows: SpreadsheetRow[]) {
+  if (templateData.value === null) {
+    return
+  }
+  const width = templateData.value.headers.length
+  templateData.value.rows = rows.map((row, rowIndex) => {
+    const nextRow = normalizeSpreadsheetRow(row, width)
+    nextRow[0] = rowIndex + 1
+    return nextRow
+  })
 }
 
-function isActiveCell(row: number, col: number): boolean {
-  return activeCell.value?.row === row && activeCell.value?.col === col
+function setTemplateData(data: ReactionTemplate) {
+  skipTemplatePersist = true
+  templateData.value = data
+  void nextTick(() => {
+    skipTemplatePersist = false
+  })
 }
 
-function isFillPreview(row: number, col: number): boolean {
-  if (fillState.active === false || fillState.col !== col) {
+function readTemplateDraft(remoteTemplate: ReactionTemplate): ReactionTemplate | null {
+  try {
+    const rawDraft = localStorage.getItem(TASK_EDITOR_DRAFT_KEY)
+    if (rawDraft === null) {
+      return null
+    }
+    const draft = JSON.parse(rawDraft) as ReactionTemplate
+    if (isCompatibleTemplateDraft(remoteTemplate, draft) === false) {
+      return null
+    }
+    return draft
+  } catch {
+    return null
+  }
+}
+
+function isCompatibleTemplateDraft(remoteTemplate: ReactionTemplate, draft: ReactionTemplate): boolean {
+  if (Array.isArray(draft.headers) === false || Array.isArray(draft.rows) === false) {
     return false
   }
-  const minRow = Math.min(fillState.sourceRow, fillState.targetRow)
-  const maxRow = Math.max(fillState.sourceRow, fillState.targetRow)
-  return row >= minRow && row <= maxRow
+  return draft.headers.join('|') === remoteTemplate.headers.join('|')
 }
 
-function startFill(row: number, col: number) {
-  fillState.active = true
-  fillState.sourceRow = row
-  fillState.targetRow = row
-  fillState.col = col
-  window.addEventListener('mouseup', finishFill, { once: true })
-}
-
-function hoverFillTarget(row: number, col: number) {
-  if (fillState.active === false) {
+function persistTemplateDraft() {
+  if (templateData.value === null || skipTemplatePersist === true) {
     return
   }
-  if (fillState.col !== col) {
-    return
-  }
-  fillState.targetRow = row
+  localStorage.setItem(TASK_EDITOR_DRAFT_KEY, JSON.stringify(templateData.value))
 }
 
-function finishFill() {
-  if (fillState.active === false || templateData.value === null) {
-    resetFill()
-    return
-  }
-  const sourceValue = templateData.value.rows[fillState.sourceRow]?.[fillState.col]
-  const minRow = Math.min(fillState.sourceRow, fillState.targetRow)
-  const maxRow = Math.max(fillState.sourceRow, fillState.targetRow)
-  for (let rowIndex = minRow; rowIndex <= maxRow; rowIndex += 1) {
-    if (rowIndex === fillState.sourceRow) {
-      continue
-    }
-    templateData.value.rows[rowIndex][fillState.col] = sourceValue
-  }
-  resetFill()
+function clearTemplateDraft() {
+  localStorage.removeItem(TASK_EDITOR_DRAFT_KEY)
 }
 
-function resetFill() {
-  fillState.active = false
-  fillState.sourceRow = -1
-  fillState.targetRow = -1
-  fillState.col = -1
+function normalizeSpreadsheetRow(row: SpreadsheetRow, width: number): unknown[] {
+  const values = Array.isArray(row) === true ? [...row] : []
+  while (values.length < width) {
+    values.push('')
+  }
+  return values.slice(0, width)
 }
 
 onMounted(() => {
   loadTemplate()
-  searchChemicals('')
 })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('mouseup', finishFill)
-})
+watch(
+  templateData,
+  () => {
+    persistTemplateDraft()
+  },
+  { deep: true },
+)
 </script>
 
 <template>
@@ -264,7 +318,7 @@ onBeforeUnmount(() => {
               :value="count"
             />
           </el-select>
-          <el-button :icon="Refresh" @click="loadTemplate">重载</el-button>
+          <el-button :icon="Refresh" @click="loadTemplate(false)">重载</el-button>
           <el-button type="primary" :icon="DocumentChecked" @click="saveTemplate">保存</el-button>
           <el-button type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
           <el-button type="success" :icon="Upload" @click="submitTemplate">提交任务</el-button>
@@ -297,68 +351,15 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="templateData !== null" class="excel-wrap">
-        <table class="excel-grid">
-          <thead>
-            <tr>
-              <th v-for="(header, index) in templateData.headers" :key="`${header}-${index}`">
-                {{ header }}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, rowIndex) in templateData.rows" :key="rowIndex">
-              <td
-                v-for="(header, colIndex) in templateData.headers"
-                :key="colIndex"
-                :class="{
-                  'is-active': isActiveCell(rowIndex, colIndex),
-                  'is-fill-preview': isFillPreview(rowIndex, colIndex),
-                }"
-                @mousedown="setActiveCell(rowIndex, colIndex)"
-                @mouseenter="hoverFillTarget(rowIndex, colIndex)"
-              >
-                <el-input
-                  v-if="colIndex === 0"
-                  v-model="row[colIndex]"
-                  disabled
-                  class="excel-control"
-                />
-                <el-select
-                  v-else-if="isReagentNameColumn(header, colIndex)"
-                  v-model="row[colIndex]"
-                  filterable
-                  remote
-                  reserve-keyword
-                  clearable
-                  class="excel-control"
-                  :remote-method="searchChemicals"
-                  :loading="chemicalLoading"
-                  @focus="setActiveCell(rowIndex, colIndex)"
-                >
-                  <el-option
-                    v-for="chem in chemicalOptions"
-                    :key="chem.id"
-                    :label="chem.substance || chem.substance_english_name || String(chem.id)"
-                    :value="chem.substance || chem.substance_english_name || ''"
-                  />
-                </el-select>
-                <el-input
-                  v-else
-                  v-model="row[colIndex]"
-                  class="excel-control"
-                  @focus="setActiveCell(rowIndex, colIndex)"
-                />
-                <button
-                  v-if="isActiveCell(rowIndex, colIndex) && colIndex > 0"
-                  class="fill-handle"
-                  type="button"
-                  @mousedown.stop.prevent="startFill(rowIndex, colIndex)"
-                />
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <div v-if="templateData !== null" class="spreadsheet-wrap">
+        <EditableSpreadsheet
+          :key="spreadsheetKey"
+          :model-value="templateData.rows"
+          :col-headers="templateData.headers"
+          :columns="spreadsheetColumns"
+          :height="520"
+          @update:model-value="updateTemplateRows"
+        />
       </div>
     </section>
 
@@ -394,81 +395,9 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 
-.excel-wrap {
+.spreadsheet-wrap {
   width: 100%;
-  max-height: calc(100vh - 430px);
   min-height: 360px;
-  overflow: auto;
-  border: 1px solid #dce5f0;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.excel-grid {
-  width: max-content;
-  min-width: 100%;
-  border-collapse: collapse;
-}
-
-.excel-grid th,
-.excel-grid td {
-  min-width: 172px;
-  width: 172px;
-  height: 48px;
-  padding: 6px;
-  border: 1px solid #dce5f0;
-  background: #ffffff;
-  position: relative;
-}
-
-.excel-grid th:first-child,
-.excel-grid td:first-child {
-  left: 0;
-  z-index: 2;
-  min-width: 96px;
-  width: 96px;
-  text-align: center;
-  position: sticky;
-  background: #f8fbff;
-}
-
-.excel-grid th {
-  top: 0;
-  z-index: 3;
-  color: #172033;
-  font-size: 13px;
-  font-weight: 700;
-  position: sticky;
-  background: #eef4fb;
-}
-
-.excel-grid th:first-child {
-  z-index: 4;
-}
-
-.excel-grid td.is-active {
-  outline: 2px solid #1a75cf;
-  outline-offset: -2px;
-}
-
-.excel-grid td.is-fill-preview {
-  background: #eaf3ff;
-}
-
-.excel-control {
-  width: 100%;
-}
-
-.fill-handle {
-  position: absolute;
-  right: 1px;
-  bottom: 1px;
-  width: 9px;
-  height: 9px;
-  padding: 0;
-  cursor: crosshair;
-  border: 1px solid #ffffff;
-  background: #1a75cf;
 }
 
 @media (max-width: 1100px) {
@@ -483,4 +412,3 @@ onBeforeUnmount(() => {
   }
 }
 </style>
-

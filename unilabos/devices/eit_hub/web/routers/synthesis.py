@@ -10,7 +10,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from unilabos.devices.eit_synthesis_station.manager.station_manager import (
     SynthesisStationManager,
@@ -26,16 +26,33 @@ JsonDict = Dict[str, Any]
 
 router = APIRouter(prefix="/api/synthesis", tags=["synthesis"])
 
+W1_SHELF_POSITIONS = {"W-1-1", "W-1-3", "W-1-5", "W-1-7"}
+W1_SHELF_ACTIONS = {"outside", "home"}
+OUTER_DOOR_ACTIONS = {"open", "close"}
 
-class ActionRequest(BaseModel):
+
+class OuterDoorRequest(BaseModel):
     """
     功能:
-        合成工站动作请求体.
+        承载过渡舱外门控制请求.
     参数:
-        params: Dict[str, Any], 透传给动作的参数.
+        action: str, 外门动作, 仅允许 open 或 close.
     """
 
-    params: JsonDict = Field(default_factory=dict)
+    action: str
+
+
+class W1ShelfRequest(BaseModel):
+    """
+    功能:
+        承载 W1 排货架控制请求.
+    参数:
+        position: str, W1 排货架位置.
+        action: str, W1 排货架动作, 仅允许 outside 或 home.
+    """
+
+    position: str
+    action: str
 
 
 def _job_response(job_id: str) -> JsonDict:
@@ -180,35 +197,97 @@ def check_resource(
     return _start_job("物料核算", _target)
 
 
-@router.post("/actions/{action_name}")
-def run_action(
-    action_name: str,
-    request: ActionRequest,
+@router.post("/device-init")
+def device_init(
     manager: SynthesisStationManager = Depends(get_synthesis_manager),
 ) -> JsonDict:
     """
     功能:
-        执行合成工站白名单动作, 实际执行放入后台任务.
+        创建设备初始化后台任务并调用合成工站设备初始化逻辑.
     参数:
-        action_name: str, 动作名称.
-        request: ActionRequest, 动作参数.
+        manager: SynthesisStationManager, 合成工站管理器.
     返回:
         Dict[str, Any], 后台任务 ID.
     """
-    if action_name not in ACTION_LABELS:
-        allowed_text = ", ".join(sorted(ACTION_LABELS.keys()))
-        raise _json_error(f"不支持的合成工站动作: {action_name}. 可用动作: {allowed_text}")
-
-    params = request.params
 
     def _target(log: Callable[[str], None]) -> Any:
-        label = ACTION_LABELS[action_name]
+        log("正在执行设备初始化.")
+        result = manager.device_init()
+        log("设备初始化完成.")
+        return result
+
+    return _start_job("设备初始化", _target)
+
+
+@router.post("/outer-door")
+def control_outer_door(
+    request: OuterDoorRequest,
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        创建过渡舱外门控制后台任务.
+    参数:
+        request: OuterDoorRequest, 外门控制请求.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 后台任务 ID.
+    """
+    try:
+        action = _read_outer_door_action(request.action)
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
+
+    label = "打开过渡舱外门" if action == "open" else "关闭过渡舱外门"
+
+    def _target(log: Callable[[str], None]) -> Any:
         log(f"正在执行: {label}.")
-        result = _execute_action(manager, action_name, params, log)
+        result = manager.open_close_door(action)
         log(f"动作完成: {label}.")
         return result
 
-    return _start_job(ACTION_LABELS[action_name], _target)
+    return _start_job(label, _target)
+
+
+@router.post("/w1-shelf")
+def control_w1_shelf(
+    request: W1ShelfRequest,
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        创建 W1 排货架控制后台任务.
+    参数:
+        request: W1ShelfRequest, W1 排货架控制请求.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 后台任务 ID.
+    """
+    try:
+        position, action = _read_w1_shelf_params(request.position, request.action)
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
+
+    def _target(log: Callable[[str], None]) -> Any:
+        log(f"正在控制 W1 排货架, 位置={position}, 动作={action}.")
+        result = manager.control_w1_shelf(position, action)
+        log("W1 排货架控制完成.")
+        return result
+
+    return _start_job("控制 W1 排货架", _target)
+
+
+@router.post("/actions/{action_name}", include_in_schema=False)
+def removed_action_endpoint(action_name: str) -> JsonDict:
+    """
+    功能:
+        明确拒绝旧的合成工站通用动作接口.
+    参数:
+        action_name: str, 旧动作名称.
+    返回:
+        Dict[str, Any], 该路径始终返回 404.
+    """
+    raise _json_error(f"合成工站通用动作接口已删除: {action_name}.", status.HTTP_404_NOT_FOUND)
 
 
 @router.get("/jobs/{job_id}")
@@ -290,165 +369,47 @@ def _load_recent_tasks(manager: SynthesisStationManager) -> List[JsonDict]:
     return []
 
 
-def _optional_int(value: Any) -> Optional[int]:
+def _read_outer_door_action(value: Any) -> str:
     """
     功能:
-        将可选值转换为 int.
+        读取并校验过渡舱外门动作.
     参数:
-        value: Any, 原始值.
+        value: Any, 外门动作原始值.
     返回:
-        Optional[int], 转换结果.
+        str, 校验后的外门动作.
     """
     if value is None:
-        return None
-    text = str(value).strip()
-    if text == "":
-        return None
-    return int(text)
+        action = ""
+    else:
+        action = str(value).strip()
+    if action not in OUTER_DOOR_ACTIONS:
+        allowed_text = ", ".join(sorted(OUTER_DOOR_ACTIONS))
+        raise ValueError(f"过渡舱外门动作必须是以下之一: {allowed_text}.")
+    return action
 
 
-def _optional_str(value: Any) -> Optional[str]:
+def _read_w1_shelf_params(position_value: Any, action_value: Any) -> tuple[str, str]:
     """
     功能:
-        将可选值转换为非空字符串.
+        读取并校验 W1 排货架控制参数.
     参数:
-        value: Any, 原始值.
+        position_value: Any, W1 排货架位置原始值.
+        action_value: Any, W1 排货架动作原始值.
     返回:
-        Optional[str], 转换结果.
+        tuple[str, str], 位置和动作.
     """
-    if value is None:
-        return None
-    text = str(value).strip()
-    if text == "":
-        return None
-    return text
-
-
-def _float_param(params: JsonDict, key: str, default_value: float) -> float:
-    """
-    功能:
-        从动作参数中读取浮点值.
-    参数:
-        params: Dict[str, Any], 参数.
-        key: str, 参数名.
-        default_value: float, 默认值.
-    返回:
-        float, 浮点值.
-    """
-    value = params.get(key, default_value)
-    return float(value)
-
-
-def _bool_param(params: JsonDict, key: str, default_value: bool) -> bool:
-    """
-    功能:
-        从动作参数中读取布尔值.
-    参数:
-        params: Dict[str, Any], 参数.
-        key: str, 参数名.
-        default_value: bool, 默认值.
-    返回:
-        bool, 布尔值.
-    """
-    value = params.get(key, default_value)
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    return text in ("1", "true", "yes", "y", "on", "是")
-
-
-def _execute_action(
-    manager: SynthesisStationManager,
-    action_name: str,
-    params: JsonDict,
-    log: Callable[[str], None],
-) -> Any:
-    """
-    功能:
-        根据动作名称调用现有合成工站管理器方法.
-    参数:
-        manager: SynthesisStationManager, 合成工站管理器.
-        action_name: str, 动作名称.
-        params: Dict[str, Any], 动作参数.
-        log: Callable, 任务日志函数.
-    返回:
-        Any, 动作结果.
-    """
-    if action_name == "sync_chemicals":
-        return manager.sync_chemicals_to_station()
-    if action_name == "device_init":
-        return manager.device_init()
-    if action_name == "batch_in_agv":
-        file_path = _optional_str(params.get("file_path"))
-        block = _bool_param(params, "block", True)
-        return manager.batch_in_tray_with_agv_transfer(file_path=file_path, block=block)
-    if action_name == "start_task":
-        task_id = _optional_int(params.get("task_id"))
-        return manager.start_task(
-            task_id,
-            check_glovebox_env=_bool_param(params, "check_glovebox_env", True),
-            water_limit_ppm=_float_param(params, "water_limit_ppm", 10.0),
-            oxygen_limit_ppm=_float_param(params, "oxygen_limit_ppm", 10.0),
-        )
-    if action_name == "wait_task":
-        return manager.wait_task_with_ops(
-            _optional_int(params.get("task_id")),
-            poll_interval_s=_float_param(params, "poll_interval_s", 2.0),
-        )
-    if action_name == "batch_out_task_empty":
-        return manager.batch_out_task_and_empty_trays(_optional_int(params.get("task_id")))
-    if action_name == "auto_unload_to_agv":
-        return manager.auto_unload_trays_to_agv(
-            batch_out_file=_optional_str(params.get("batch_out_file")),
-            block=_bool_param(params, "block", True),
-            auto_run_analysis=_bool_param(params, "auto_run_analysis", True),
-        )
-    if action_name == "run_analysis":
-        return manager.run_analysis(_optional_str(params.get("task_id")))
-    if action_name == "poll_analysis":
-        return manager.poll_analysis_run(
-            task_id=_optional_str(params.get("task_id")),
-            poll_interval=_float_param(params, "poll_interval", 30.0),
-        )
-    if action_name == "transfer_analysis_to_shelf":
-        return manager.transfer_analysis_to_shelf()
-    if action_name == "print_reagent_labels":
-        manager.print_reagent_labels()
-        return {"success": True}
-    if action_name == "print_task_number_labels":
-        task_id = _optional_int(params.get("task_id"))
-        if task_id is None:
-            raise ValueError("打印任务编号标签需要 task_id.")
-        manager.print_task_number_labels(task_id)
-        return {"success": True}
-    if action_name == "upload_task_flow":
-        log("正在同步化学品库到合成工站.")
-        sync_result = manager.sync_chemicals_to_station()
-        log("正在提交当前 Excel 模板.")
-        task_id = manager.create_task_by_file(str(DEFAULT_REACTION_TEMPLATE))
-        log("正在执行物料核算.")
-        resource_result = manager.check_resource_for_task(str(DEFAULT_REACTION_TEMPLATE))
-        return {
-            "sync": sync_result,
-            "task_id": task_id,
-            "resource_check": resource_result,
-        }
-    raise ValueError(f"未实现的动作: {action_name}")
-
-
-ACTION_LABELS: Dict[str, str] = {
-    "sync_chemicals": "同步化学品库",
-    "device_init": "设备初始化",
-    "batch_in_agv": "AGV 上料",
-    "start_task": "启动任务",
-    "wait_task": "等待任务完成",
-    "batch_out_task_empty": "下料任务物料和空托盘",
-    "auto_unload_to_agv": "AGV 自动下料",
-    "run_analysis": "提交分析任务",
-    "poll_analysis": "谱图数据处理",
-    "transfer_analysis_to_shelf": "分析样品转运到货架",
-    "print_reagent_labels": "打印上料试剂标签",
-    "print_task_number_labels": "打印任务编号标签",
-    "upload_task_flow": "上传任务流程",
-}
-
+    if position_value is None:
+        position = ""
+    else:
+        position = str(position_value).strip()
+    if action_value is None:
+        action = ""
+    else:
+        action = str(action_value).strip()
+    if position not in W1_SHELF_POSITIONS:
+        allowed_text = ", ".join(sorted(W1_SHELF_POSITIONS))
+        raise ValueError(f"W1 货架位置必须是以下之一: {allowed_text}.")
+    if action not in W1_SHELF_ACTIONS:
+        allowed_text = ", ".join(sorted(W1_SHELF_ACTIONS))
+        raise ValueError(f"W1 货架动作必须是以下之一: {allowed_text}.")
+    return position, action

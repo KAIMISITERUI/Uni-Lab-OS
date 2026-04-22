@@ -11,11 +11,13 @@ import {
 import ChemicalEditDialog from '../components/ChemicalEditDialog.vue'
 import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
+import IntegrityPanel from '../components/IntegrityPanel.vue'
 import StructurePreview from '../components/StructurePreview.vue'
 
 const loading = ref(false)
 const total = ref(0)
 const rows = ref<ChemicalRow[]>([])
+const activeTab = ref('chemical-list')
 
 const query = reactive<{
   q: string
@@ -130,68 +132,75 @@ onMounted(load)
 
 <template>
   <div class="chemicals-view">
-    <el-card shadow="never">
-      <template #header>
-        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
-          <el-input
-            v-model="query.q"
-            placeholder="按 CAS / 名称 / SMILES 搜索"
-            style="width: 280px"
-            clearable
-            @keyup.enter="onSearch"
+    <el-tabs v-model="activeTab" class="chemicals-tabs">
+      <el-tab-pane label="化学品列表" name="chemical-list">
+        <el-card shadow="never">
+          <template #header>
+            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
+              <el-input
+                v-model="query.q"
+                placeholder="按 CAS / 名称 / SMILES 搜索"
+                style="width: 280px"
+                clearable
+                @keyup.enter="onSearch"
+              />
+              <el-select v-model="query.query_type" style="width: 120px">
+                <el-option label="名称" value="name" />
+                <el-option label="CAS" value="cas" />
+                <el-option label="SMILES" value="smiles" />
+              </el-select>
+              <el-button type="primary" @click="onSearch">搜索</el-button>
+              <el-button @click="query.q = ''; onSearch()">重置</el-button>
+              <div style="flex: 1" />
+              <el-button type="success" @click="openCreate">新增</el-button>
+              <el-button @click="importDialogVisible = true">从文件导入</el-button>
+              <el-button @click="downloadCsv">导出 CSV</el-button>
+              <el-button @click="downloadXlsx">导出 XLSX</el-button>
+            </div>
+          </template>
+
+          <el-table v-loading="loading" :data="rows" border stripe size="small">
+            <el-table-column prop="id" label="ID" width="70" sortable align="center" header-align="center" />
+            <el-table-column label="结构式" width="140" align="center" header-align="center">
+              <template #default="{ row }">
+                <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
+              </template>
+            </el-table-column>
+            <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center" />
+            <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center" />
+            <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
+            <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
+            <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
+            <el-table-column prop="physical_form" label="形态" width="100" align="center" header-align="center" />
+            <el-table-column prop="density" label="density (g/mL)" width="120" align="center" header-align="center" />
+            <el-table-column prop="molecular_weight" label="MW" width="100" align="center" header-align="center" />
+            <el-table-column prop="brand" label="品牌" width="120" align="center" header-align="center" />
+            <el-table-column prop="package_size" label="规格" width="100" align="center" header-align="center" />
+            <el-table-column label="操作" fixed="right" width="180" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-button size="small" type="info" link @click="openDetail(row)">详情</el-button>
+                <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
+                <el-button size="small" type="danger" link @click="onDelete(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <el-pagination
+            style="margin-top: 16px; justify-content: flex-end; display: flex"
+            v-model:current-page="query.page"
+            v-model:page-size="query.page_size"
+            :total="total"
+            :page-sizes="[20, 50, 100, 200]"
+            layout="total, sizes, prev, pager, next, jumper"
+            @current-change="load"
+            @size-change="load"
           />
-          <el-select v-model="query.query_type" style="width: 120px">
-            <el-option label="名称" value="name" />
-            <el-option label="CAS" value="cas" />
-            <el-option label="SMILES" value="smiles" />
-          </el-select>
-          <el-button type="primary" @click="onSearch">搜索</el-button>
-          <el-button @click="query.q = ''; onSearch()">重置</el-button>
-          <div style="flex: 1" />
-          <el-button type="success" @click="openCreate">新增</el-button>
-          <el-button @click="importDialogVisible = true">从文件导入</el-button>
-          <el-button @click="downloadCsv">导出 CSV</el-button>
-          <el-button @click="downloadXlsx">导出 XLSX</el-button>
-        </div>
-      </template>
-
-      <el-table v-loading="loading" :data="rows" border stripe size="small">
-        <el-table-column prop="id" label="ID" width="70" sortable align="center" header-align="center" />
-        <el-table-column label="结构式" width="140" align="center" header-align="center">
-          <template #default="{ row }">
-            <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
-          </template>
-        </el-table-column>
-        <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center" />
-        <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center" />
-        <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
-        <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
-        <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
-        <el-table-column prop="physical_form" label="形态" width="100" align="center" header-align="center" />
-        <el-table-column prop="density" label="density (g/mL)" width="120" align="center" header-align="center" />
-        <el-table-column prop="molecular_weight" label="MW" width="100" align="center" header-align="center" />
-        <el-table-column prop="brand" label="品牌" width="120" align="center" header-align="center" />
-        <el-table-column prop="package_size" label="规格" width="100" align="center" header-align="center" />
-        <el-table-column label="操作" fixed="right" width="180" align="center" header-align="center">
-          <template #default="{ row }">
-            <el-button size="small" type="info" link @click="openDetail(row)">详情</el-button>
-            <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="danger" link @click="onDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end; display: flex"
-        v-model:current-page="query.page"
-        v-model:page-size="query.page_size"
-        :total="total"
-        :page-sizes="[20, 50, 100, 200]"
-        layout="total, sizes, prev, pager, next, jumper"
-        @current-change="load"
-        @size-change="load"
-      />
-    </el-card>
+        </el-card>
+      </el-tab-pane>
+      <el-tab-pane label="完整性维护" name="integrity-maintenance" lazy>
+        <IntegrityPanel />
+      </el-tab-pane>
+    </el-tabs>
 
     <ChemicalEditDialog
       v-model="editDialog.visible"
@@ -211,5 +220,9 @@ onMounted(load)
 <style scoped>
 .chemicals-view {
   padding: 0;
+}
+
+.chemicals-tabs {
+  min-width: 0;
 }
 </style>
