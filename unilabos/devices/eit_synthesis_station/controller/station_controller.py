@@ -4500,21 +4500,74 @@ class SynthesisStationController:
                 return int(outer_obj["task_sums"])
         return None
 
+    def _extract_task_list(self, resp: JsonDict) -> List[JsonDict]:
+        """
+        功能:
+            从任务列表响应中提取 task_list, 兼容顶层,result,data 三种层级.
+        参数:
+            resp: 任务列表接口响应.
+        返回:
+            List[JsonDict], 任务列表.
+        """
+        task_list = resp.get("task_list")
+        if isinstance(task_list, list):
+            return task_list
+
+        for outer in ("result", "data"):
+            outer_obj = resp.get(outer)
+            if isinstance(outer_obj, dict):
+                task_list = outer_obj.get("task_list")
+                if isinstance(task_list, list):
+                    return task_list
+
+        return []
+
     def get_all_tasks(self) -> JsonDict:
         """
         功能:
-            获取全部任务列表, 先用一次 GetTaskList 读取 task_sums, 再用 limit 拉全量
+            获取全部任务列表, 先读取 task_sums, 再按最多 200 条分批分页获取.
         参数:
-            无
+            无.
         返回:
-            Dict, 包含完整任务列表
+            Dict, 包含完整任务列表与任务总数.
         """
         first_resp = self.get_task_list(limit=1, offset=0, sort="desc")
         task_sums = self._extract_task_sums(first_resp)
         if task_sums is None:
             raise ValidationError(f"GetTaskList 未返回 task_sums, resp={first_resp}")
-        self._logger.info("开始获取全部任务列表, total=%s", task_sums)  # 记录预期条数
-        return self.get_task_list(limit=task_sums, offset=0, sort="desc")
+
+        batch_limit = 200
+        task_list: List[JsonDict] = []
+        offset = 0
+        self._logger.info("开始分批获取全部任务列表, total=%s, batch_limit=%s", task_sums, batch_limit)
+
+        if task_sums == 0:
+            return {"task_list": task_list, "task_sums": task_sums}
+
+        while len(task_list) < task_sums:
+            remaining = task_sums - len(task_list)
+            current_limit = min(batch_limit, remaining)
+            batch_resp = self.get_task_list(limit=current_limit, offset=offset, sort="desc")
+            batch_task_list = self._extract_task_list(batch_resp)
+            batch_count = len(batch_task_list)
+
+            if batch_count == 0:
+                raise ValidationError(
+                    f"GetTaskList 分批获取任务列表中断, offset={offset}, limit={current_limit}, total={task_sums}"
+                )
+
+            task_list.extend(batch_task_list)
+            offset += batch_count
+            self._logger.info(
+                "分批获取任务列表, offset=%s, limit=%s, batch_count=%s, loaded=%s, total=%s",
+                offset,
+                current_limit,
+                batch_count,
+                len(task_list),
+                task_sums,
+            )
+
+        return {"task_list": task_list, "task_sums": task_sums}
 
     def _extract_task_status(self, task_info: JsonDict) -> Optional[int]:
         """
