@@ -6,6 +6,7 @@ import 'handsontable/styles/handsontable.min.css'
 import 'handsontable/styles/ht-theme-main.min.css'
 
 type SpreadsheetRow = Record<string, unknown> | unknown[]
+type SpreadsheetColumn = Record<string, unknown>
 type AutofillDirection = 'up' | 'down' | 'left' | 'right'
 type CellCoordsLike = {
   row: number
@@ -24,7 +25,7 @@ const props = withDefaults(
   defineProps<{
     modelValue: SpreadsheetRow[]
     colHeaders: string[]
-    columns: Array<Record<string, unknown>>
+    columns: SpreadsheetColumn[]
     height?: string | number
     rowHeaders?: boolean
     stretchH?: 'all' | 'last' | 'none'
@@ -45,6 +46,18 @@ registerAllModules()
 
 const tableData = ref<SpreadsheetRow[]>(cloneRows(props.modelValue))
 
+const normalizedColumns = computed(() => {
+  return props.columns.map((column) => {
+    if (column.type === 'dropdown' || column.type === 'autocomplete') {
+      return {
+        ...column,
+        trimDropdown: true,
+      }
+    }
+    return column
+  })
+})
+
 watch(
   () => props.modelValue,
   (rows) => {
@@ -56,7 +69,7 @@ watch(
 const hotSettings = computed(() => {
   return {
     data: tableData.value,
-    columns: props.columns,
+    columns: normalizedColumns.value,
     colHeaders: props.colHeaders,
     rowHeaders: props.rowHeaders,
     height: props.height,
