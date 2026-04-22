@@ -50,6 +50,35 @@ let rdkitPromise: Promise<RDKitModule> | null = null
 // 缓存键格式: `${smiles}|${width}x${height}`, 值为 SVG 字符串或 null(无效 SMILES)
 const svgCache = new Map<string, string | null>()
 
+const RENDER_BASE_SHORT_SIDE = 90
+const RENDER_BASE_MAX_FONT_SIZE = 12
+const RENDER_MAX_FONT_SIZE = 30
+const RENDER_FONT_SIZE_STEP = 0.06
+
+/**
+ * 功能:
+ *     按渲染画布短边计算 RDKit 原子标签最大字号, 小图保持原有字号, 大图放大但不超过上限.
+ * 参数:
+ *     width 渲染画布宽度, 单位 px.
+ *     height 渲染画布高度, 单位 px.
+ * 返回:
+ *     number, RDKit draw option 使用的 maxFontSize.
+ */
+function calculateMaxFontSize(width: number, height: number): number {
+  const shortSide = Math.min(width, height)
+  const scaledFontSize = Math.round(
+    RENDER_BASE_MAX_FONT_SIZE + (shortSide - RENDER_BASE_SHORT_SIDE) * RENDER_FONT_SIZE_STEP,
+  )
+
+  if (scaledFontSize < RENDER_BASE_MAX_FONT_SIZE) {
+    return RENDER_BASE_MAX_FONT_SIZE
+  }
+  if (scaledFontSize > RENDER_MAX_FONT_SIZE) {
+    return RENDER_MAX_FONT_SIZE
+  }
+  return scaledFontSize
+}
+
 /**
  * 功能:
  *     异步加载并初始化 RDKit.js 模块, 全局单例
@@ -109,8 +138,9 @@ export async function renderSmilesToSvg(
     // 坐标后处理: 先旋转让主轴水平, 再拉直 CoordGen 的键角, 避免稠环倾斜
     mol.normalize_depiction(1)
     mol.straighten_depiction()
+    const maxFontSize = calculateMaxFontSize(width, height)
     // 键宽恒定 1.2px, 不随分子大小缩放, 避免长链分子(如硬脂酸)键被压得极细
-    // 字号区间 [6, 12], 避免小画布或长链分子下杂原子 label 相对过大
+    // 字号按画布短边放大, 让详情大图的杂原子 label 与结构尺寸匹配
     const svg = mol.get_svg_with_highlights(
       JSON.stringify({
         width,
@@ -118,7 +148,7 @@ export async function renderSmilesToSvg(
         bondLineWidth: 1.2,
         scaleBondWidth: false,
         minFontSize: 6,
-        maxFontSize: 12,
+        maxFontSize,
         baseFontSize: 0.5,
         padding: 0.06,
       }),

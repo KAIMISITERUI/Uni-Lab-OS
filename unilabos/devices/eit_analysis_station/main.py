@@ -74,6 +74,100 @@ def _prompt_rack_code() -> Optional[str]:
     return f"Rack {rack_input}"
 
 
+def _get_analysis_device_configs(settings: Any) -> Dict[str, Dict[str, Any]]:
+    """
+    功能:
+        汇总三台分析设备的连接配置, 供状态查询按固定顺序遍历.
+    参数:
+        settings: AnalysisStationController 持有的 Settings 实例.
+    返回:
+        Dict[str, Dict[str, Any]], key 为设备显示名, value 包含 host/port/timeout.
+    """
+    return {
+        "GC-MS": {
+            "host": settings.gc_ms_host,
+            "port": settings.gc_ms_port,
+            "timeout": settings.gc_ms_timeout,
+        },
+        "UPLC_QTOF": {
+            "host": settings.uplc_qtof_host,
+            "port": settings.uplc_qtof_port,
+            "timeout": settings.uplc_qtof_timeout,
+        },
+        "HPLC": {
+            "host": settings.hplc_host,
+            "port": settings.hplc_port,
+            "timeout": settings.hplc_timeout,
+        },
+    }
+
+
+def _print_status_detail(
+    device_name: str,
+    config: Dict[str, Any],
+    status_detail: Dict[str, str],
+) -> None:
+    """
+    功能:
+        打印单台分析设备的原始状态, 主状态和子状态.
+    参数:
+        device_name: 设备显示名.
+        config: 设备连接配置, 包含 host/port.
+        status_detail: ZhidaClient.get_status_detail 返回的状态详情.
+    返回:
+        无.
+    """
+    raw_status = status_detail["raw_status"]
+    if raw_status == "":
+        raw_status = "(空)"
+
+    sub_status = status_detail["sub_status"]
+    if sub_status == "":
+        sub_status = "(无)"
+
+    print(
+        "\n"
+        f"  [{device_name}] {config['host']}:{config['port']}\n"
+        f"    原始状态: {raw_status}\n"
+        f"    主状态: {status_detail['base_status']}\n"
+        f"    子状态: {sub_status}"
+    )
+
+
+def _handle_all_device_status(controller: AnalysisStationController) -> None:
+    """
+    功能:
+        依次查询 GC-MS, UPLC_QTOF, HPLC 三台分析设备的当前状态.
+    参数:
+        controller: AnalysisStationController 实例.
+    返回:
+        无.
+    """
+    settings = controller._settings
+    device_configs = _get_analysis_device_configs(settings)
+
+    print("\n>>> 调用三台分析设备 ZhidaClient.get_status_detail()")
+    for device_name, config in device_configs.items():
+        client = ZhidaClient(
+            host=config["host"],
+            port=config["port"],
+            timeout=config["timeout"],
+        )
+        try:
+            client.connect()
+            status_detail = client.get_status_detail()
+            _print_status_detail(device_name, config, status_detail)
+        except Exception as exc:
+            logger.exception("%s 状态查询失败", device_name)
+            print(
+                "\n"
+                f"  [{device_name}] {config['host']}:{config['port']}\n"
+                f"    操作失败: {exc}"
+            )
+        finally:
+            client.close()
+
+
 def _handle_device_query(controller: AnalysisStationController, choice: str) -> None:
     """
     功能:
@@ -85,6 +179,11 @@ def _handle_device_query(controller: AnalysisStationController, choice: str) -> 
         无.
     """
     settings = controller._settings
+
+    if choice == "4":
+        _handle_all_device_status(controller)
+        return
+
     client = ZhidaClient(
         host=settings.gc_ms_host,
         port=settings.gc_ms_port,
@@ -93,21 +192,9 @@ def _handle_device_query(controller: AnalysisStationController, choice: str) -> 
 
     try:
         client.connect()
-        if choice == "4":
-            print("\n>>> 调用 ZhidaClient.get_status_detail()")
-            status_detail = client.get_status_detail()
-            raw_status = status_detail["raw_status"] or "(空)"
-            sub_status = status_detail["sub_status"] or "(无)"
-            print(
-                "\n"
-                f"  原始状态: {raw_status}\n"
-                f"  主状态: {status_detail['base_status']}\n"
-                f"  子状态: {sub_status}\n"
-            )
-        else:
-            print("\n>>> 调用 ZhidaClient.get_methods()")
-            methods = client.get_methods()
-            _print_result(methods)
+        print("\n>>> 调用 ZhidaClient.get_methods()")
+        methods = client.get_methods()
+        _print_result(methods)
     except Exception as exc:
         logger.exception("分析站设备查询失败")
         print(f"\n操作失败: {exc}\n")
@@ -259,7 +346,7 @@ def interactive() -> None:
         "  1. run_analysis          - 统一分析入口(生成CSV并提交至仪器)\n"
         "  2. process_gc_ms_results - GC-MS结果处理(积分+定性+报告)\n"
         "  3. poll_analysis_run     - 轮询GC-MS分析任务状态并自动处理结果\n"
-        "  4. get_status            - 获取GC-MS设备当前状态\n"
+        "  4. get_status            - 获取三台分析设备当前状态\n"
         "  5. get_methods           - 获取当前Project的方法列表\n"
         "  6. calculate_yields      - 产率计算\n"
         "  7. submit_by_csv_path    - 选择仪器并按CSV路径直接提交任务\n"

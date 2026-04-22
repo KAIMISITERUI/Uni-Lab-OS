@@ -39,14 +39,14 @@ class Settings:
     gc_ms_inj_vol: int = 1  # GC-MS 进样量, 对应 CSV 的 SmplInjVol 列.
 
     # ---------- UPLC_QTOF 设备 ----------
-    uplc_qtof_host: str = "10.40.10.143"  # UPLC_QTOF 控制端地址, 修改后流程切换主机.
+    uplc_qtof_host: str = "10.40.0.103"  # UPLC_QTOF 控制端地址, 修改后流程切换主机.
     uplc_qtof_port: int = 5792  # UPLC_QTOF 控制端端口, 修改后流程切换端口.
     uplc_qtof_timeout: float = 10.0  # UPLC_QTOF 通信超时秒数, 调大可降低超时告警.
     uplc_qtof_inj_vol: int = 1  # UPLC_QTOF 进样量, 对应 CSV 的 SmplInjVol 列.
     uplc_qtof_append_wash_stop: bool = True  # 是否追加 Wash stop 方法, 打开后序列会追加停机步骤.
 
-    # ---------- HPLC 设备(预留) ----------
-    hplc_host: str = "192.168.3.186"  # HPLC 控制端地址, 预留流程切换主机.
+    # ---------- HPLC 设备 ----------
+    hplc_host: str = "10.40.16.204"  # HPLC 控制端地址, 预留流程切换主机.
     hplc_port: int = 5792  # HPLC 控制端端口, 预留流程切换端口.
     hplc_timeout: float = 10.0  # HPLC 通信超时秒数, 调大可降低超时告警.
 
