@@ -670,7 +670,21 @@ class ChemicalDB:
             "physical_form IN ('beads', 'solution') "
             "AND (active_content IS NULL OR active_content = '')"
         )
+        total_cursor = self._conn.execute("SELECT COUNT(*) AS total FROM chemicals")
+        total_row = total_cursor.fetchone()
+        total = 0
+        if total_row is not None:
+            total = int(total_row["total"])
+        no_cas_cursor = self._conn.execute(
+            "SELECT COUNT(*) AS no_cas FROM chemicals WHERE cas_number IS NULL OR cas_number = ''"
+        )
+        no_cas_row = no_cas_cursor.fetchone()
+        no_cas = 0
+        if no_cas_row is not None:
+            no_cas = int(no_cas_row["no_cas"])
         return {
+            "total": total,
+            "no_cas": no_cas,
             "duplicate_chinese_names": duplicate_chinese_names,
             "duplicate_english_names": duplicate_english_names,
             "missing_physical_state": missing_physical_state,

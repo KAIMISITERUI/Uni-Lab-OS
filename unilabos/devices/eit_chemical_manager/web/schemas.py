@@ -92,6 +92,8 @@ class IntegrityReport(BaseModel):
         每条问题项均为完整 ChemicalOut, 便于前端跳转编辑.
     """
 
+    total: int
+    no_cas: int
     duplicate_chinese_names: List[DuplicateNameGroup]
     duplicate_english_names: List[DuplicateNameGroup]
     missing_physical_state: List[ChemicalOut]
