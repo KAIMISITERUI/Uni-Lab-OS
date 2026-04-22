@@ -1,36 +1,32 @@
 """
 功能:
     TSPL兼容标签打印引擎.
-    通过Windows打印机名称连接打印机, 负责 YAML 配置加载, DLL 调用,
-    自动布局计算, 多列标签排版, 以及单次作业的开关端口控制.
-    支持TSC, 佳博(Gainscha)等TSPL兼容打印机.
-    纸张/字体/位置参数保存在 profiles/25x10x2.yaml 中.
+    负责 YAML 标签规格加载, 自动布局计算, 多列标签排版, 以及单次作业的
+    开关端口控制. 通讯方式由外部注入的 Transport 决定, 本模块不关心具体是
+    DLL 还是 TCP.
+    支持 TSC, 佳博(Gainscha) 等 TSPL 兼容打印机.
+    纸张/字体/位置参数保存在 profiles/*.yaml 中.
 
 依赖:
     pyyaml (pip install pyyaml)
 """
 
-import ctypes
 import logging
 import os
-import subprocess
-import sys
 
 import yaml
 
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────── 常量 ────────────────────────────────
-# 包根路径指向 eit_label_printer/, driver/ 同级的 profiles/, libs/
+# 包根路径指向 eit_label_printer/, driver/ 同级的 profiles/
 _PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(_PACKAGE_ROOT, "profiles", "25x10x2.yaml")
-DLL_PATH = os.path.join(_PACKAGE_ROOT, "libs", "TSCLIB.dll")
 
-# 默认配置, 首次运行时写入 YAML
+# 默认配置, 首次运行时写入 YAML. 通讯参数已迁至 config/settings.py, 此处仅保留标签规格
 DEFAULT_CONFIG = {
     "printer": {
-        "port": "Gprinter GP-1134T",  # Windows打印机名称
-        "ppi": 300,
+        "ppi": 300,  # 打印机硬件 DPI, 用于 mm→dot 换算
     },
     "paper": {
         "width": 56,
@@ -91,62 +87,6 @@ def save_config(path, config):
     """
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-
-def load_dll(dll_path):
-    """
-    功能:
-        加载TSCLIB.dll动态链接库.
-
-    参数:
-        dll_path: str, DLL文件路径
-
-    返回:
-        ctypes.WinDLL 实例
-    """
-    if not os.path.exists(dll_path):
-        logger.error("找不到DLL文件: %s", dll_path)
-        sys.exit(1)
-
-    lib = ctypes.WinDLL(dll_path)
-    logger.debug("已加载DLL: %s", dll_path)
-
-    # 声明常用函数的参数类型, 确保ctypes正确传递参数
-    wstr = ctypes.c_wchar_p
-    lib.openportW.argtypes = [wstr]
-    lib.openportW.restype = ctypes.c_int  # 0=失败, 非0=成功
-    lib.closeport.argtypes = []
-    lib.sendcommandW.argtypes = [wstr]
-    lib.printlabelW.argtypes = [wstr, wstr]
-    # windowsfontUnicode(x, y, fontheight, rotation, fontstyle, fontunderline, szFaceName, content)
-    # 前6个int, 第7个char*(字体名), 第8个void*(UTF-16LE字节缓冲区, 不能用c_char_p会截断\x00)
-    lib.windowsfontUnicode.argtypes = [
-        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-        ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
-    ]
-    lib.windowsfontUnicode.restype = ctypes.c_int
-    return lib
-
-
-def list_windows_printers():
-    """
-    功能:
-        列出系统中已安装的Windows打印机名称, 帮助用户查找正确的打印机端口名称.
-
-    返回:
-        list[str], 打印机名称列表. 获取失败时返回空列表.
-    """
-    try:
-        result = subprocess.run(
-            ["powershell", "-Command",
-             "Get-Printer | Select-Object -ExpandProperty Name"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-    except Exception as e:
-        logger.warning("无法枚举系统打印机: %s", e)
-    return []
 
 
 def calc_label_width(paper):
@@ -350,56 +290,45 @@ def _split_text(text, max_lines):
     return [l for l in lines if l]
 
 
-def init_printer(lib, config):
+def init_printer(transport, config):
     """
     功能:
-        打开打印机端口并发送纸张初始化命令(SIZE/GAP/DIRECTION).
+        打开打印机通讯并发送纸张初始化命令(SIZE/GAP/DIRECTION).
         自动根据列数和边距计算单个标签尺寸.
 
     参数:
-        lib: ctypes.WinDLL, TSC库实例
-        config: dict, 配置字典
+        transport: Transport 实例 (DllTransport 或 TcpTransport).
+        config: dict, 标签规格配置字典.
     """
-    port = config["printer"]["port"]
     paper = config["paper"]
     unit = paper["unit"]
 
-    # 连接打印机并检查返回值
-    ret = lib.openportW(port)
-    if ret == 0:
-        available = list_windows_printers()
-        hint = ""
-        if available:
-            hint = f" 系统中可用的打印机: {', '.join(available)}"
-        raise RuntimeError(
-            f"无法连接打印机, 端口/名称: '{port}'.{hint}"
-            " 请检查配置中的打印机名称是否与系统中的名称一致"
-        )
-    logger.debug("已连接打印机, 端口: %s", port)
+    # 建立通讯
+    transport.open()
 
     # SIZE使用纸张总宽度, 打印机传感器自动识别多列布局
     size_cmd = f"SIZE {paper['width']} {unit}, {paper['height']} {unit}"
-    lib.sendcommandW(size_cmd)
+    transport.send_command(size_cmd)
     logger.debug("纸张尺寸: %s", size_cmd)
 
     # 设置上下间隙
     gap_cmd = f"GAP {paper['gap']} {unit}, {paper['gap_offset']} {unit}"
-    lib.sendcommandW(gap_cmd)
+    transport.send_command(gap_cmd)
 
     # 设置打印方向
-    lib.sendcommandW(f"DIRECTION {paper['direction']}")
+    transport.send_command(f"DIRECTION {paper['direction']}")
 
 
-def print_text(lib, config, texts):
+def print_text(transport, config, texts):
     """
     功能:
         将文字列表发送到打印机并打印一张标签(支持多列, 每列不同内容).
         自动根据纸张尺寸和文字长度计算每列的字号及居中位置.
 
     参数:
-        lib: ctypes.WinDLL, TSC库实例
-        config: dict, 配置字典
-        texts: list[str], 每列要打印的文字内容, 长度应等于列数
+        transport: Transport 实例.
+        config: dict, 配置字典.
+        texts: list[str], 每列要打印的文字内容, 长度应等于列数.
     """
     font = config["font"]
     paper = config["paper"]
@@ -419,9 +348,12 @@ def print_text(lib, config, texts):
     offset_y = int(float(pos_cfg.get("y", 0)) * dots_per_mm)
 
     # 清除打印缓冲区
-    lib.sendcommandW("CLS")
+    transport.send_command("CLS")
 
-    font_name = font.get("name", "Arial").encode("ascii")
+    font_name = font.get("name", "Arial")
+    font_rotation = int(font.get("rotation", 0))
+    font_bold = int(font.get("bold", 0))
+    font_underline = int(font.get("underline", 0))
 
     # 为每一列绘制对应文字
     for col in range(columns):
@@ -441,73 +373,71 @@ def print_text(lib, config, texts):
             abs_x = col_origin_dot + center_x + offset_x
             abs_y = center_y + offset_y
 
-            # UTF-16LE编码后追加终止符, 用create_string_buffer避免c_char_p截断\x00
-            raw = line_text.encode("utf-16-le") + b"\x00\x00"
-            content_buf = ctypes.create_string_buffer(raw)
-
-            lib.windowsfontUnicode(
-                abs_x, abs_y, font_height,
-                int(font.get("rotation", 0)),
-                int(font.get("bold", 0)),
-                int(font.get("underline", 0)),
+            transport.render_windows_text(
+                abs_x,
+                abs_y,
+                font_height,
+                font_rotation,
+                font_bold,
+                font_underline,
                 font_name,
-                ctypes.cast(content_buf, ctypes.c_void_p),
+                line_text,
             )
         logger.debug("列%d: 文字'%s' (%d行), 列起始%.1fmm(%ddot)",
                      col + 1, text, len(layout_lines), col_origin_mm, col_origin_dot)
 
     # 所有列绘制完毕后统一打印
-    lib.printlabelW("1", "1")
+    transport.print_label("1", "1")
     logger.debug("已发送打印(%d列): %s", columns, " | ".join(texts))
 
 
-def check_printer_ready(lib, config):
+def check_printer_ready(transport, config):
     """
     功能:
-        预检打印机连接. 启动时短暂打开并关闭一次打印端口, 用于确认配置可用,
-        同时避免长时间占用同一个打印会话导致作业延迟提交.
+        预检打印机连接. 启动时短暂打开并关闭一次连接, 用于确认配置可用,
+        同时避免长时间占用同一个通讯会话导致作业延迟提交.
 
     参数:
-        lib: ctypes.WinDLL, TSC库实例.
+        transport: Transport 实例.
         config: dict, 配置字典.
     """
     session_open = False
     try:
-        init_printer(lib, config)
+        init_printer(transport, config)
         session_open = True
     finally:
         if session_open:
-            close_printer(lib)
+            close_printer(transport)
 
 
-def execute_print_job(lib, config, texts):
+def execute_print_job(transport, config, texts):
     """
     功能:
-        执行一次完整打印作业. 每次打印都重新打开和关闭端口, 确保Windows打印队列
-        在单次作业结束后立即提交, 不会等到脚本退出时才真正出纸.
+        执行一次完整打印作业. 每次打印都重新建立和关闭通讯, 确保 Windows 打印
+        队列/网络 socket 在单次作业结束后立即提交, 不会等到脚本退出时才真正出纸.
 
     参数:
-        lib: ctypes.WinDLL, TSC库实例.
+        transport: Transport 实例.
         config: dict, 配置字典.
         texts: list[str], 每列要打印的文字内容.
     """
     session_open = False
     try:
-        init_printer(lib, config)
+        init_printer(transport, config)
         session_open = True
-        print_text(lib, config, texts)
+        print_text(transport, config, texts)
     finally:
         if session_open:
-            close_printer(lib)
+            close_printer(transport)
 
 
-def close_printer(lib):
+def close_printer(transport):
     """
     功能:
-        关闭打印机端口连接.
+        关闭打印机通讯连接.
 
     参数:
-        lib: ctypes.WinDLL, TSC库实例
+        transport: Transport 实例.
     """
-    lib.closeport()
+    transport.close()
     logger.debug("打印机连接已关闭")

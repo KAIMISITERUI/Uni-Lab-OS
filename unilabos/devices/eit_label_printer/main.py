@@ -7,18 +7,19 @@
 
 用法:
     python -m unilabos.devices.eit_label_printer.main
+
+环境变量 (可选):
+    LABEL_PRINTER_TRANSPORT=wifi  或  dll
+    LABEL_PRINTER_WIFI_HOST=192.168.1.20
+    LABEL_PRINTER_WIFI_PORT=9100
+    LABEL_PRINTER_DLL_PRINTER_PORT="Gprinter GP-1134T"
 """
 
 import logging
 import sys
 
 from unilabos.devices.eit_label_printer.config import PrinterSettings, configure_logging
-from unilabos.devices.eit_label_printer.driver.print_engine import (
-    check_printer_ready,
-    execute_print_job,
-    load_config,
-    load_dll,
-)
+from unilabos.devices.eit_label_printer.driver import LabelPrintService
 
 
 logger = logging.getLogger(__name__)
@@ -42,21 +43,21 @@ def interactive() -> None:
 
     logger.info("=== EIT 标签打印交互台启动 ===")
     logger.info("配置文件: %s", settings.config_path)
-    logger.info("DLL 路径: %s", settings.dll_path)
+    logger.info("传输方式: %s", settings.transport)
+    if settings.transport == "wifi":
+        logger.info("WiFi 目标: %s:%d (超时 %.1fs)",
+                    settings.wifi_host, settings.wifi_port, settings.wifi_timeout)
+    else:
+        logger.info("Windows 打印机名: %s", settings.dll_printer_port)
+        logger.info("DLL 路径: %s", settings.dll_path)
 
-    # 加载配置和DLL
-    config = load_config(str(settings.config_path))
-    lib = load_dll(str(settings.dll_path))
-
-    # 启动时预检一次, 但不长期占用端口
-    try:
-        check_printer_ready(lib, config)
-    except Exception as exc:
-        logger.error("打印机初始化失败: %s", exc)
-        print(f"打印机初始化失败: {exc}")
+    # 构造服务并预检打印机可用性
+    service = LabelPrintService(settings=settings)
+    if not service.connect():
+        print("打印机初始化失败, 请检查通讯配置")
         return
 
-    columns = config["paper"].get("columns", 1)
+    columns = service.columns
 
     logger.info("打印机就绪, 等待输入...")
     print("-" * 40)
@@ -71,7 +72,7 @@ def interactive() -> None:
             texts = []
             quit_flag = False
 
-            # 收集每列的输入内容
+            # 逐列收集输入内容, 任一列输入 quit 立即退出循环
             for col in range(columns):
                 try:
                     if columns > 1:
@@ -92,22 +93,21 @@ def interactive() -> None:
             if quit_flag:
                 break
 
-            # 检查是否所有列都为空
+            # 所有列都为空视为无效输入, 重新提示
             if all(t == "" for t in texts):
                 print("输入为空, 请重新输入")
                 continue
 
-            try:
-                execute_print_job(lib, config, texts)
+            if service.print_label(texts):
                 print(f"已打印: {' | '.join(texts)}")
-            except Exception as exc:
-                logger.error("打印失败: %s", exc)
-                print(f"打印出错: {exc}, 请检查打印机连接")
+            else:
+                print("打印失败, 请检查打印机连接")
 
     except KeyboardInterrupt:
         print("\n检测到中断信号")
 
     finally:
+        service.disconnect()
         logger.info("=== 标签打印交互台已退出 ===")
 
 
