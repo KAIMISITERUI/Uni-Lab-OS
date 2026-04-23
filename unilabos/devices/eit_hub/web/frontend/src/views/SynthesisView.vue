@@ -15,6 +15,7 @@ import {
 } from '../api/synthesis'
 import { listChemicals, type ChemicalRow } from '../api/chemicals'
 import { getErrorMessage } from '../api/http'
+import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
 import StructurePreview from '../components/StructurePreview.vue'
 
 interface ReagentOccurrence {
@@ -25,7 +26,9 @@ interface ReagentOccurrence {
 
 interface ReagentDisplayRow {
   substance: string
+  chemical: ChemicalRow | null
   structureSmiles: string
+  physicalState: string
   occurrences: ReagentOccurrence[]
 }
 
@@ -57,7 +60,9 @@ const currentJobId = ref('')
 const dashboardLoading = ref(false)
 const actionLoading = ref('')
 const pendingOperation = ref<PendingOperation | null>(null)
-const reagentStructureMap = ref<Record<string, string>>({})
+const reagentChemicalMap = ref<Record<string, ChemicalRow | null | undefined>>({})
+const reagentDetailVisible = ref(false)
+const reagentDetailChemical = ref<ChemicalRow | null>(null)
 const w1SelectedPosition = ref('W-1-1')
 let dashboardTimer: number | undefined
 let actionRefreshTimer: number | undefined
@@ -118,9 +123,12 @@ const reagentDisplayRows = computed(() => {
       }
       const key = normalizeChemicalName(substance)
       if (rowMap.has(key) === false) {
+        const chemical = reagentChemicalMap.value[key] || null
         rowMap.set(key, {
           substance,
-          structureSmiles: reagentStructureMap.value[key] || '',
+          chemical,
+          structureSmiles: String(chemical?.smiles || ''),
+          physicalState: formatChemicalField(chemical?.physical_state),
           occurrences: [],
         })
       }
@@ -278,7 +286,7 @@ async function loadDashboard() {
     const data = await fetchDashboard()
     dashboard.value = data
     syncPendingOperation(data)
-    void loadReagentStructures(data.resources || [])
+    void loadReagentChemicals(data.resources || [])
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -286,16 +294,16 @@ async function loadDashboard() {
   }
 }
 
-async function loadReagentStructures(resources: Array<Record<string, unknown>>) {
+async function loadReagentChemicals(resources: Array<Record<string, unknown>>) {
   const names = collectReagentNames(resources)
   const missingNames = names.filter((name) => {
-    return reagentStructureMap.value[normalizeChemicalName(name)] === undefined
+    return reagentChemicalMap.value[normalizeChemicalName(name)] === undefined
   })
   if (missingNames.length === 0) {
     return
   }
 
-  const nextMap = { ...reagentStructureMap.value }
+  const nextMap = { ...reagentChemicalMap.value }
   await Promise.all(
     missingNames.map(async (name) => {
       const key = normalizeChemicalName(name)
@@ -307,13 +315,13 @@ async function loadReagentStructures(resources: Array<Record<string, unknown>>) 
           page_size: 10,
         })
         const chemical = pickChemicalByName(name, response.items)
-        nextMap[key] = String(chemical?.smiles || '')
+        nextMap[key] = chemical
       } catch {
-        nextMap[key] = ''
+        nextMap[key] = null
       }
     }),
   )
-  reagentStructureMap.value = nextMap
+  reagentChemicalMap.value = nextMap
 }
 
 async function runDeviceInit() {
@@ -502,6 +510,13 @@ function formatValue(value: unknown, suffix = ''): string {
   return `${value}${suffix}`
 }
 
+function formatChemicalField(value: unknown): string {
+  if (value === null || value === undefined || value === '') {
+    return '-'
+  }
+  return String(value)
+}
+
 function formatOneDecimalPpm(value: unknown): string {
   if (value === null || value === undefined || value === '') {
     return '--'
@@ -554,6 +569,14 @@ function pickChemicalByName(name: string, rows: ChemicalRow[]): ChemicalRow | nu
     rows[0] ||
     null
   )
+}
+
+function openReagentDetail(row: ReagentDisplayRow): void {
+  if (row.chemical === null) {
+    return
+  }
+  reagentDetailChemical.value = row.chemical
+  reagentDetailVisible.value = true
 }
 
 function formatReagentPosition(
@@ -662,8 +685,22 @@ onBeforeUnmount(stopDashboardPolling)
                         />
                       </template>
                     </el-table-column>
-                    <el-table-column prop="substance" label="物质名称" min-width="260" align="center" />
-                    <el-table-column label="物质的量" width="140" align="center">
+                    <el-table-column label="物质名称" min-width="260" align="center">
+                      <template #default="{ row }">
+                        <el-button
+                          v-if="row.chemical !== null"
+                          class="reagent-name-button"
+                          type="primary"
+                          link
+                          @click="openReagentDetail(row)"
+                        >
+                          {{ row.substance }}
+                        </el-button>
+                        <span v-else class="reagent-name-text">{{ row.substance }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="physicalState" label="物态" width="90" align="center" />
+                    <el-table-column label="剩余量" width="140" align="center">
                       <template #default="{ row }">
                         <div class="reagent-occurrence-list">
                           <div
@@ -805,6 +842,11 @@ onBeforeUnmount(stopDashboardPolling)
       @updated="onJobUpdated"
       @finished="onJobFinished"
     />
+    <ChemicalDetailDialog
+      v-model="reagentDetailVisible"
+      :chemical="reagentDetailChemical"
+      :show-edit="false"
+    />
   </div>
 </template>
 
@@ -874,6 +916,23 @@ onBeforeUnmount(stopDashboardPolling)
 .reagent-table :deep(.cell) {
   display: flex;
   justify-content: center;
+}
+
+.reagent-name-button {
+  --el-button-active-text-color: #24344d;
+  --el-button-hover-text-color: #24344d;
+  --el-button-text-color: #24344d;
+  height: auto;
+  min-height: 22px;
+  color: #24344d;
+  line-height: 1.4;
+  text-align: center;
+  white-space: normal;
+}
+
+.reagent-name-text {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .overview-status-actions {

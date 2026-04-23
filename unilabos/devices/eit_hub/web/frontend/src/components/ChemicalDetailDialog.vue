@@ -8,6 +8,7 @@ import StructurePreview from './StructurePreview.vue'
  * 参数:
  *     modelValue 弹窗显示状态, 遵循 v-model 约定
  *     chemical 当前展示的化学品行数据, null 时不渲染正文
+ *     showEdit 是否展示编辑入口, 默认展示
  * 事件:
  *     update:modelValue 关闭弹窗
  *     edit 请求切换到编辑模式(由列表视图接管)
@@ -15,9 +16,12 @@ import StructurePreview from './StructurePreview.vue'
 interface Props {
   modelValue: boolean
   chemical: ChemicalRow | null
+  showEdit?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  showEdit: true,
+})
 const emit = defineEmits<{
   (e: 'update:modelValue', val: boolean): void
   (e: 'edit', row: ChemicalRow): void
@@ -97,7 +101,7 @@ function onEdit(): void {
       </div>
     </div>
     <template #footer>
-      <el-button type="primary" @click="onEdit">编辑</el-button>
+      <el-button v-if="showEdit" type="primary" @click="onEdit">编辑</el-button>
       <el-button @click="close">关闭</el-button>
     </template>
   </el-dialog>
