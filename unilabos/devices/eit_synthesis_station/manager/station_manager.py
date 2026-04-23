@@ -1919,10 +1919,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info(f"请检查文件并根据需要调整")
 
         # 自动打印试剂名称标签
-        try:
-            self.print_reagent_labels()
-        except Exception as exc:
-            logger.warning("自动打印试剂标签失败(不影响上料文件生成): %s", exc)
+        # try:
+        #     self.print_reagent_labels()
+        # except Exception as exc:
+        #     logger.warning("自动打印试剂标签失败(不影响上料文件生成): %s", exc)
 
     # ---------- 4.5 标签打印 ----------
 
