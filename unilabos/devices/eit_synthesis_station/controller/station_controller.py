@@ -3547,7 +3547,7 @@ class SynthesisStationController:
 
     # ---------- 开关外舱门 ----------
     def open_close_door(
-        self, op: str, *, station: str = "FSY", door_num: int = 0, timeout_s: float = 120.0
+        self, op: str, *, station: str = "FSY", door_num: int = 0, timeout_s: float = 300.0
     ) -> JsonDict:
         """
         功能:
@@ -3556,7 +3556,7 @@ class SynthesisStationController:
             op: "open" 或 "close".
             station: 站点编码, 默认 "FSY".
             door_num: 门编号, 默认 0.
-            timeout_s: 超时时间(秒), 默认120s. 该接口服务端会等待物理操作完成才返回.
+            timeout_s: 超时时间(秒), 默认300s. 该接口服务端会等待物理操作完成才返回.
         返回:
             Dict, 接口响应.
         """

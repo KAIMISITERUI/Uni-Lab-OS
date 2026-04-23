@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, reactive, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Link as LinkIcon, Refresh } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
 import {
   type DashboardData,
   type JobState,
   type OuterDoorAction,
+  type W1ShelfAction,
   fetchDashboard,
   controlOuterDoor,
   controlW1Shelf,
@@ -28,17 +29,38 @@ interface ReagentDisplayRow {
   occurrences: ReagentOccurrence[]
 }
 
+type DeviceTargetStatus = 'OPEN' | 'CLOSE' | 'OUTSIDE' | 'HOME'
+
+interface PendingOperation {
+  kind: 'outer-door' | 'w1-shelf'
+  action: OuterDoorAction | W1ShelfAction
+  targetStatus: DeviceTargetStatus
+  position?: string
+}
+
+interface W1ShelfOption {
+  position: string
+  action: W1ShelfAction
+  label: string
+  currentStatusLabel: string
+}
+
+interface OuterDoorButtonState {
+  action: OuterDoorAction | null
+  label: string
+  loading: boolean
+  disabled: boolean
+}
+
 const dashboard = ref<DashboardData | null>(null)
 const currentJobId = ref('')
 const dashboardLoading = ref(false)
 const actionLoading = ref('')
+const pendingOperation = ref<PendingOperation | null>(null)
 const reagentStructureMap = ref<Record<string, string>>({})
+const w1SelectedPosition = ref('W-1-1')
 let dashboardTimer: number | undefined
-
-const w1Params = reactive({
-  position: 'W-1-1',
-  action: 'outside' as 'outside' | 'home',
-})
+let actionRefreshTimer: number | undefined
 
 const reagentResourceTypeCodes = new Set([201000600, 201000730, 201000502, 201000503, 220000023])
 const consumableCardConfigs = [
@@ -52,10 +74,15 @@ const consumableCardConfigs = [
   { resourceType: 201000728, label: '闪滤瓶外瓶' },
 ]
 const w1ShelfPositions = ['W-1-1', 'W-1-3', 'W-1-5', 'W-1-7']
-const w1ShelfActions = [
-  { label: '推出', value: 'outside' },
-  { label: '复位', value: 'home' },
-]
+const synthesisControlUrl =
+  'http://10.40.13.51:9191/#/?$skipCheckService=true&hostname=http://10.40.13.51:4669&$view=NTU'
+
+const deviceStatusCodeMap: Record<DeviceTargetStatus, number> = {
+  OPEN: 3,
+  CLOSE: 4,
+  OUTSIDE: 5,
+  HOME: 6,
+}
 
 const stationStateText = computed(() => stateLabel(dashboard.value?.station_state ?? null))
 
@@ -123,17 +150,126 @@ const consumableCards = computed(() => {
   }))
 })
 
+const outerDoorDevice = computed(() => findOuterDoorDevice())
+
 const outerDoorAction = computed(() => {
-  const device = (dashboard.value?.device_status || []).find((row) => row.device_name === '过渡舱外门')
+  const device = outerDoorDevice.value
   const status = String(device?.status || '').toUpperCase()
   const statusCode = Number(device?.status_code)
   if (status === 'OPEN' || statusCode === 3) {
-    return { action: 'close' as const, label: '关闭外门', type: 'warning' }
+    return { action: 'close' as const, label: '关闭外门' }
   }
   if (status === 'CLOSE' || statusCode === 4) {
-    return { action: 'open' as const, label: '打开外门', type: 'success' }
+    return { action: 'open' as const, label: '打开外门' }
   }
   return null
+})
+
+const isOuterDoorPending = computed(() => pendingOperation.value?.kind === 'outer-door')
+
+const outerDoorButton = computed<OuterDoorButtonState>(() => {
+  if (isOuterDoorPending.value === true) {
+    return {
+      action: null,
+      label: '运行中',
+      loading: true,
+      disabled: true,
+    }
+  }
+  if (outerDoorAction.value === null) {
+    return {
+      action: null,
+      label: '外门状态未知',
+      loading: false,
+      disabled: true,
+    }
+  }
+  const action = outerDoorAction.value.action
+  const loading = actionLoading.value === `outer_door_${action}`
+  return {
+    action,
+    label: outerDoorAction.value.label,
+    loading,
+    disabled: loading || pendingOperation.value !== null,
+  }
+})
+
+const w1ShelfExecutableOptions = computed<W1ShelfOption[]>(() => {
+  return w1ShelfPositions.flatMap((position) => {
+    const device = findW1ShelfDevice(position)
+    if (isDeviceStatus(device, 'OUTSIDE') === true) {
+      return [
+        {
+          position,
+          action: 'home' as const,
+          label: `${position} 复位`,
+          currentStatusLabel: '当前推出',
+        },
+      ]
+    }
+    if (isDeviceStatus(device, 'HOME') === true) {
+      return [
+        {
+          position,
+          action: 'outside' as const,
+          label: `${position} 推出`,
+          currentStatusLabel: '当前复位',
+        },
+      ]
+    }
+    return []
+  })
+})
+
+const selectedW1ShelfOption = computed(() => {
+  return w1ShelfExecutableOptions.value.find((option) => option.position === w1SelectedPosition.value) || null
+})
+
+const isW1Pending = computed(() => pendingOperation.value?.kind === 'w1-shelf')
+
+const w1ExecuteLabel = computed(() => {
+  if (isW1Pending.value === true) {
+    return '运行中'
+  }
+  if (selectedW1ShelfOption.value === null) {
+    return '暂无可执行 W1 操作'
+  }
+  return `执行${selectedW1ShelfOption.value.action === 'home' ? '复位' : '推出'}`
+})
+
+const outerDoorButtonClass = computed(() => {
+  if (isOuterDoorPending.value === true) {
+    return 'action-button--running'
+  }
+  if (outerDoorButton.value.action === 'open') {
+    return 'door-action-button--open'
+  }
+  if (outerDoorButton.value.action === 'close') {
+    return 'door-action-button--close'
+  }
+  return 'action-button--disabled'
+})
+
+const w1ExecuteClass = computed(() => {
+  if (isW1Pending.value === true) {
+    return 'action-button--running'
+  }
+  if (selectedW1ShelfOption.value?.action === 'outside') {
+    return 'w1-action-button--outside'
+  }
+  if (selectedW1ShelfOption.value?.action === 'home') {
+    return 'w1-action-button--home'
+  }
+  return 'action-button--disabled'
+})
+
+const w1ControlDisabled = computed(() => {
+  return (
+    isW1Pending.value === true ||
+    actionLoading.value === 'control_w1_shelf' ||
+    selectedW1ShelfOption.value === null ||
+    pendingOperation.value !== null
+  )
 })
 
 async function loadDashboard() {
@@ -141,6 +277,7 @@ async function loadDashboard() {
   try {
     const data = await fetchDashboard()
     dashboard.value = data
+    syncPendingOperation(data)
     void loadReagentStructures(data.resources || [])
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
@@ -194,11 +331,18 @@ async function runDeviceInit() {
 
 async function runOuterDoor(action: OuterDoorAction) {
   actionLoading.value = `outer_door_${action}`
+  pendingOperation.value = {
+    kind: 'outer-door',
+    action,
+    targetStatus: action === 'close' ? 'CLOSE' : 'OPEN',
+  }
   try {
     const data = await controlOuterDoor(action)
     currentJobId.value = data.job_id
     ElMessage.success('外门操作已进入后台')
+    queueActionDashboardRefresh()
   } catch (error) {
+    pendingOperation.value = null
     ElMessage.error(getErrorMessage(error))
   } finally {
     actionLoading.value = ''
@@ -206,23 +350,55 @@ async function runOuterDoor(action: OuterDoorAction) {
 }
 
 async function runW1Shelf() {
+  const option = selectedW1ShelfOption.value
+  if (option === null) {
+    ElMessage.warning('当前没有可执行的 W1 操作')
+    return
+  }
   actionLoading.value = 'control_w1_shelf'
+  pendingOperation.value = {
+    kind: 'w1-shelf',
+    position: option.position,
+    action: option.action,
+    targetStatus: option.action === 'home' ? 'HOME' : 'OUTSIDE',
+  }
   try {
     const data = await controlW1Shelf({
-      position: w1Params.position,
-      action: w1Params.action,
+      position: option.position,
+      action: option.action,
     })
     currentJobId.value = data.job_id
     ElMessage.success('W1 操作已进入后台')
+    queueActionDashboardRefresh()
   } catch (error) {
+    pendingOperation.value = null
     ElMessage.error(getErrorMessage(error))
   } finally {
     actionLoading.value = ''
   }
 }
 
-function onJobFinished(_job: JobState) {
+function runOuterDoorButton() {
+  if (outerDoorButton.value.action !== null) {
+    runOuterDoor(outerDoorButton.value.action)
+  }
+}
+
+function onJobFinished(job: JobState) {
+  if (job.status === 'succeeded' || job.status === 'failed') {
+    pendingOperation.value = null
+  }
+  if (actionRefreshTimer !== undefined) {
+    window.clearTimeout(actionRefreshTimer)
+    actionRefreshTimer = undefined
+  }
   loadDashboard()
+}
+
+function onJobUpdated(_job: JobState) {
+  if (pendingOperation.value !== null) {
+    queueActionDashboardRefresh()
+  }
 }
 
 function startDashboardPolling() {
@@ -236,6 +412,59 @@ function stopDashboardPolling() {
     window.clearInterval(dashboardTimer)
     dashboardTimer = undefined
   }
+  if (actionRefreshTimer !== undefined) {
+    window.clearTimeout(actionRefreshTimer)
+    actionRefreshTimer = undefined
+  }
+}
+
+function queueActionDashboardRefresh() {
+  if (actionRefreshTimer !== undefined) {
+    window.clearTimeout(actionRefreshTimer)
+  }
+  actionRefreshTimer = window.setTimeout(() => {
+    actionRefreshTimer = undefined
+    loadDashboard()
+  }, 1000)
+}
+
+function syncPendingOperation(data: DashboardData) {
+  const pending = pendingOperation.value
+  if (pending === null) {
+    return
+  }
+  const devices = data.device_status || []
+  if (pending.kind === 'outer-door') {
+    const device = findOuterDoorDevice(devices)
+    if (isDeviceStatus(device, pending.targetStatus) === true) {
+      pendingOperation.value = null
+    }
+    return
+  }
+  if (pending.position === undefined) {
+    return
+  }
+  const device = findW1ShelfDevice(pending.position, devices)
+  if (isDeviceStatus(device, pending.targetStatus) === true) {
+    pendingOperation.value = null
+  }
+}
+
+function findOuterDoorDevice(devices = dashboard.value?.device_status || []) {
+  return devices.find((row) => String(row.device_name || '').includes('过渡舱外门'))
+}
+
+function findW1ShelfDevice(position: string, devices = dashboard.value?.device_status || []) {
+  return devices.find((row) => String(row.device_name || '').includes(position))
+}
+
+function isDeviceStatus(device: Record<string, unknown> | undefined, targetStatus: DeviceTargetStatus): boolean {
+  if (device === undefined) {
+    return false
+  }
+  const status = String(device.status || '').toUpperCase()
+  const statusCode = Number(device.status_code)
+  return status === targetStatus || statusCode === deviceStatusCodeMap[targetStatus]
 }
 
 function stateLabel(code: number | null): string {
@@ -338,6 +567,20 @@ function formatReagentPosition(
   }
   return `${layoutCode} / ${well}`
 }
+
+watch(
+  w1ShelfExecutableOptions,
+  (options) => {
+    if (pendingOperation.value?.kind === 'w1-shelf') {
+      return
+    }
+    const selectedExists = options.some((option) => option.position === w1SelectedPosition.value)
+    if (selectedExists === false) {
+      w1SelectedPosition.value = options[0]?.position || ''
+    }
+  },
+  { immediate: true },
+)
 
 onActivated(startDashboardPolling)
 
@@ -498,15 +741,13 @@ onBeforeUnmount(stopDashboardPolling)
                   <div class="operation-title">过渡舱外门</div>
                   <div class="operation-row">
                     <el-button
-                      v-if="outerDoorAction !== null"
-                      :type="outerDoorAction.type"
-                      :loading="actionLoading === `outer_door_${outerDoorAction.action}`"
-                      @click="runOuterDoor(outerDoorAction.action)"
+                      class="door-action-button"
+                      :class="outerDoorButtonClass"
+                      :loading="outerDoorButton.loading"
+                      :disabled="outerDoorButton.disabled"
+                      @click="runOuterDoorButton"
                     >
-                      {{ outerDoorAction.label }}
-                    </el-button>
-                    <el-button v-else disabled>
-                      外门状态未知
+                      {{ outerDoorButton.label }}
                     </el-button>
                   </div>
                 </div>
@@ -514,41 +755,56 @@ onBeforeUnmount(stopDashboardPolling)
                   <div class="operation-title">W1 排货架</div>
                   <el-form label-position="top">
                     <div class="w1-form">
-                      <el-form-item label="位置">
-                        <el-select v-model="w1Params.position">
+                      <el-form-item>
+                        <el-select
+                          class="w1-position-select"
+                          v-model="w1SelectedPosition"
+                          :disabled="pendingOperation !== null || w1ShelfExecutableOptions.length === 0"
+                          popper-class="w1-position-popper"
+                          placeholder="暂无可执行 W1 操作"
+                        >
                           <el-option
-                            v-for="position in w1ShelfPositions"
-                            :key="position"
-                            :label="position"
-                            :value="position"
-                          />
-                        </el-select>
-                      </el-form-item>
-                      <el-form-item label="动作">
-                        <el-select v-model="w1Params.action">
-                          <el-option
-                            v-for="action in w1ShelfActions"
-                            :key="action.value"
-                            :label="action.label"
-                            :value="action.value"
+                            v-for="option in w1ShelfExecutableOptions"
+                            :key="option.position"
+                            :label="option.position"
+                            :value="option.position"
                           />
                         </el-select>
                       </el-form-item>
                       <el-button
                         class="w1-execute-button"
-                        :loading="actionLoading === 'control_w1_shelf'"
+                        :class="w1ExecuteClass"
+                        :loading="isW1Pending || actionLoading === 'control_w1_shelf'"
+                        :disabled="w1ControlDisabled"
                         @click="runW1Shelf"
                       >
-                        执行 W1 操作
+                        {{ w1ExecuteLabel }}
                       </el-button>
                     </div>
                   </el-form>
+                  <div class="operation-title">后台控制</div>
+                  <el-button
+                    class="external-control-button"
+                    type="primary"
+                    tag="a"
+                    :icon="LinkIcon"
+                    :href="synthesisControlUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    访问合成工站控制页面
+                  </el-button>
                 </div>
               </div>
             </div>
           </section>
 
-    <JobPanel v-if="currentJobId !== ''" :job-id="currentJobId" @finished="onJobFinished" />
+    <JobPanel
+      :job-id="currentJobId"
+      title="运行结果"
+      @updated="onJobUpdated"
+      @finished="onJobFinished"
+    />
   </div>
 </template>
 
@@ -622,6 +878,11 @@ onBeforeUnmount(stopDashboardPolling)
 
 .overview-status-actions {
   grid-template-columns: minmax(560px, 1.35fr) minmax(320px, 0.65fr);
+  align-items: stretch;
+}
+
+.overview-status-actions > .panel {
+  height: 100%;
 }
 
 .device-status-grid {
@@ -665,7 +926,7 @@ onBeforeUnmount(stopDashboardPolling)
 }
 
 .init-action-button,
-.operation-row .el-button,
+.door-action-button,
 .w1-execute-button {
   justify-content: center !important;
 }
@@ -690,9 +951,9 @@ onBeforeUnmount(stopDashboardPolling)
 
 .w1-form {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(128px, 0.8fr);
+  grid-template-columns: minmax(190px, 1fr) minmax(144px, 0.72fr);
   gap: 10px;
-  align-items: end;
+  align-items: center;
 }
 
 .w1-form :deep(.el-form-item) {
@@ -701,7 +962,95 @@ onBeforeUnmount(stopDashboardPolling)
 
 .w1-execute-button {
   width: 100%;
-  min-height: 32px;
+  min-height: 44px;
+  height: 44px;
+}
+
+.w1-position-select {
+  width: 100%;
+}
+
+.w1-position-select :deep(.el-select__wrapper) {
+  min-height: 44px;
+  text-align: center;
+}
+
+.w1-position-select :deep(.el-select__selected-item) {
+  width: 100%;
+  justify-content: center;
+}
+
+.w1-position-select :deep(.el-select__placeholder) {
+  justify-content: center;
+}
+
+.door-action-button,
+.w1-execute-button {
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.door-action-button--open {
+  background: #0f766e;
+}
+
+.door-action-button--close {
+  background: #d97706;
+}
+
+.w1-action-button--outside {
+  background: #0f766e;
+}
+
+.w1-action-button--home {
+  background: #d97706;
+}
+
+.door-action-button--open:hover,
+.door-action-button--open:focus {
+  color: #ffffff;
+  background: #0d5f59;
+  border-color: transparent;
+}
+
+.door-action-button--close:hover,
+.door-action-button--close:focus {
+  color: #ffffff;
+  background: #b45309;
+  border-color: transparent;
+}
+
+.w1-action-button--outside:hover,
+.w1-action-button--outside:focus {
+  color: #ffffff;
+  background: #0d5f59;
+  border-color: transparent;
+}
+
+.w1-action-button--home:hover,
+.w1-action-button--home:focus {
+  color: #ffffff;
+  background: #b45309;
+  border-color: transparent;
+}
+
+.action-button--running,
+.action-button--disabled,
+.action-button--running:hover,
+.action-button--disabled:hover {
+  color: #ffffff;
+  background: #a8b1bf;
+  border-color: transparent;
+}
+
+.external-control-button {
+  justify-content: center !important;
+  width: 100%;
+  min-height: 40px;
+}
+
+:global(.w1-position-popper .el-select-dropdown__item) {
+  text-align: center;
 }
 
 @media (max-width: 860px) {

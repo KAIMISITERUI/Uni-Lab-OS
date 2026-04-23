@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { CircleCheck, CircleClose, Loading, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { fetchJob, type JobState } from '../api/synthesis'
 import { getErrorMessage } from '../api/http'
 
-const props = defineProps<{
-  jobId: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    jobId: string
+    title?: string
+  }>(),
+  {
+    title: '运行结果',
+  },
+)
 
 const emit = defineEmits<{
+  updated: [job: JobState]
   finished: [job: JobState]
 }>()
 
@@ -52,6 +59,7 @@ async function loadJob() {
   try {
     const data = await fetchJob(props.jobId)
     job.value = data
+    emit('updated', data)
     if (data.status === 'succeeded' || data.status === 'failed') {
       stopPolling()
       emit('finished', data)
@@ -83,6 +91,7 @@ function stopPolling() {
 watch(
   () => props.jobId,
   () => {
+    job.value = null
     if (isActive.value === true && props.jobId !== '') {
       startPolling()
     }
@@ -90,6 +99,13 @@ watch(
 )
 
 onActivated(() => {
+  isActive.value = true
+  if (props.jobId !== '') {
+    startPolling()
+  }
+})
+
+onMounted(() => {
   isActive.value = true
   if (props.jobId !== '') {
     startPolling()
@@ -107,14 +123,14 @@ onBeforeUnmount(stopPolling)
 <template>
   <div class="panel">
     <div class="panel-title">
-      <h3>后台任务</h3>
+      <h3>{{ props.title }}</h3>
       <div class="button-row">
         <el-tag :type="statusType">{{ statusText }}</el-tag>
         <el-button :icon="Refresh" :loading="loading" @click="loadJob">刷新</el-button>
       </div>
     </div>
 
-    <div v-if="job === null" class="muted">暂无后台任务</div>
+    <div v-if="job === null" class="muted">暂无运行结果</div>
     <template v-else>
       <div class="button-row" style="margin-bottom: 12px">
         <el-tag effect="plain">{{ job.name }}</el-tag>
