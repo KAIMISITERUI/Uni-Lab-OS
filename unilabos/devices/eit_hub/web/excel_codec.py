@@ -50,6 +50,9 @@ PARAMETER_NAMES = (
     "闪滤液用量(μL)",
     "取样量(μL)",
     "闪滤实验编号",
+    "GC_MS",
+    "UPLC_QTOF",
+    "HPLC",
 )
 
 SECTION_NAMES = (
@@ -427,4 +430,3 @@ def _count_reagent_pairs(headers: List[str]) -> int:
         if "试剂" in header_text and "量" not in header_text:
             count += 1
     return count
-

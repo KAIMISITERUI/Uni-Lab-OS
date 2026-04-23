@@ -42,6 +42,12 @@ def _create_template(path: Path) -> None:
         worksheet["B6"] = "heat"
         worksheet["A7"] = "自动加磁子"
         worksheet["B7"] = "是"
+        worksheet["A8"] = "分析方法设定"
+        worksheet["A9"] = "GC_MS"
+        worksheet["B9"] = "280_12min"
+        worksheet["A10"] = "UPLC_QTOF"
+        worksheet["B10"] = "Generic_5min"
+        worksheet["A11"] = "HPLC"
         worksheet["C1"] = "实验编号"
         worksheet["D1"] = "试剂"
         worksheet["E1"] = "试剂量"
@@ -79,6 +85,10 @@ def _updated_payload() -> Dict[str, Any]:
             {"name": "反应规模(mmol)", "value": 0.5, "type": "parameter"},
             {"name": "反应器类型", "value": "heat", "type": "parameter"},
             {"name": "自动加磁子", "value": "否", "type": "parameter"},
+            {"name": "分析方法设定", "value": "", "type": "section"},
+            {"name": "GC_MS", "value": "280_12min(1-3)", "type": "parameter"},
+            {"name": "UPLC_QTOF", "value": "Generic_5min", "type": "parameter"},
+            {"name": "HPLC", "value": "", "type": "parameter"},
         ],
         "headers": ["实验编号", "试剂", "试剂量", "试剂", "试剂量"],
         "rows": rows,
@@ -95,6 +105,14 @@ def test_reaction_template_read_write_round_trip(tmp_path: Path) -> None:
 
     original = read_reaction_template(template_path)
     assert original["params"]["实验名称"] == "旧任务"
+    assert original["params"]["GC_MS"] == "280_12min"
+    assert original["params"]["UPLC_QTOF"] == "Generic_5min"
+    assert original["params"]["HPLC"] == ""
+    param_names = [item["name"] for item in original["param_rows"]]
+    assert "分析方法设定" in param_names
+    assert "GC_MS" in param_names
+    assert "UPLC_QTOF" in param_names
+    assert "HPLC" in param_names
     assert original["headers"] == ["实验编号", "试剂", "试剂量", "试剂", "试剂量"]
     assert len(original["rows"]) == 12
 
@@ -102,6 +120,9 @@ def test_reaction_template_read_write_round_trip(tmp_path: Path) -> None:
 
     assert saved["params"]["实验名称"] == "Web任务"
     assert saved["params"]["反应规模(mmol)"] == 0.5
+    assert saved["params"]["GC_MS"] == "280_12min(1-3)"
+    assert saved["params"]["UPLC_QTOF"] == "Generic_5min"
+    assert saved["params"]["HPLC"] == ""
     assert saved["rows"][0] == [1, "对叔丁基苯甲醛", "1.0eq", "乙腈", "1mL"]
 
     workbook = openpyxl.load_workbook(template_path, data_only=False)
@@ -109,7 +130,9 @@ def test_reaction_template_read_write_round_trip(tmp_path: Path) -> None:
         assert "GC产率计算" in workbook.sheetnames
         assert workbook["GC产率计算"]["B1"].value == "CC"
         assert workbook["实验方案设定"]["B2"].value == "Web任务"
+        assert workbook["实验方案设定"]["B9"].value == "280_12min(1-3)"
+        assert workbook["实验方案设定"]["B10"].value == "Generic_5min"
+        assert workbook["实验方案设定"]["B11"].value is None
         assert workbook["实验方案设定"]["D2"].value == "对叔丁基苯甲醛"
     finally:
         workbook.close()
-

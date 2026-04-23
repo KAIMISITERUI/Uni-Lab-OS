@@ -4,6 +4,8 @@ import { ElMessage } from 'element-plus'
 import {
   CircleCheck,
   CopyDocument,
+  Delete,
+  DeleteFilled,
   DocumentChecked,
   Minus,
   Plus,
@@ -14,6 +16,7 @@ import {
 import JobPanel from '../components/JobPanel.vue'
 import {
   type JobState,
+  type ParamRow,
   type ReactionTemplate,
   checkResource,
   fetchReactionTemplate,
@@ -21,25 +24,142 @@ import {
   submitReactionTemplate,
 } from '../api/synthesis'
 import { listChemicals, type ChemicalRow } from '../api/chemicals'
+import {
+  fetchAnalysisMethods,
+  type AnalysisInstrumentKey,
+  type AnalysisMethodsRow,
+} from '../api/analysis'
 import { getErrorMessage } from '../api/http'
 import EditableSpreadsheet from '../components/EditableSpreadsheet.vue'
 
 type SpreadsheetRow = Record<string, unknown> | unknown[]
 type FillMode = 'increment' | 'copy'
+type TemplateLoadOptions = {
+  keepExperimentId?: boolean
+}
+type AnalysisParamName = 'GC_MS' | 'UPLC_QTOF' | 'HPLC'
+type SettingsGroup = {
+  title: string
+  items: ParamRow[]
+  isAnalysis: boolean
+}
 type EditableSpreadsheetRef = ComponentPublicInstance & {
   fillSelectedRange: (mode: FillMode) => boolean
+  clearSelectedRange: () => boolean
+  syncSourceData: () => SpreadsheetRow[]
 }
 
 const TASK_EDITOR_DRAFT_KEY = 'eit_hub.synthesis_task_editor_draft'
+const EXPERIMENT_ID_PARAM_NAME = '实验ID'
+const ANALYSIS_SECTION_TITLE = '分析方法设定'
+const LEFT_SETTING_GROUP_TITLES = ['实验设定', '反应设定', '称量设定']
+const ANALYSIS_PARAM_NAMES: AnalysisParamName[] = ['GC_MS', 'UPLC_QTOF', 'HPLC']
+const ANALYSIS_PARAM_CONFIG: Record<
+  AnalysisParamName,
+  {
+    instrument: AnalysisInstrumentKey
+    label: string
+  }
+> = {
+  GC_MS: {
+    instrument: 'gc_ms',
+    label: 'GC-MS',
+  },
+  UPLC_QTOF: {
+    instrument: 'uplc_qtof',
+    label: 'UPLC-QTOF',
+  },
+  HPLC: {
+    instrument: 'hplc',
+    label: 'HPLC',
+  },
+}
 
 const templateData = ref<ReactionTemplate | null>(null)
 const currentJobId = ref('')
 const loading = ref(false)
 const chemicalLoading = ref(false)
+const methodsLoading = ref(false)
 const spreadsheetRef = ref<EditableSpreadsheetRef | null>(null)
+const methodOptions = ref<Record<AnalysisInstrumentKey, string[]>>({
+  gc_ms: [],
+  uplc_qtof: [],
+  hplc: [],
+})
+const analysisSampleSelectors = ref<Record<AnalysisParamName, string>>({
+  GC_MS: '',
+  UPLC_QTOF: '',
+  HPLC: '',
+})
 let skipTemplatePersist = false
 
 const experimentCount = computed(() => templateData.value?.rows.length || 12)
+
+const analysisParamRows = computed<ParamRow[]>(() => {
+  if (templateData.value === null) {
+    return []
+  }
+  return templateData.value.param_rows.filter((item) => {
+    return item.type === 'parameter' && isAnalysisMethodParam(item.name) === true
+  })
+})
+
+const settingsGroups = computed<SettingsGroup[]>(() => {
+  if (templateData.value === null) {
+    return []
+  }
+  const groups: SettingsGroup[] = []
+  let currentGroup: SettingsGroup | null = null
+  for (const item of templateData.value.param_rows) {
+    if (item.type === 'section') {
+      currentGroup = {
+        title: item.name,
+        items: [],
+        isAnalysis: isAnalysisSection(item.name),
+      }
+      groups.push(currentGroup)
+      continue
+    }
+    if (isAnalysisMethodParam(item.name) === true) {
+      continue
+    }
+    if (currentGroup === null) {
+      currentGroup = {
+        title: '实验参数',
+        items: [],
+        isAnalysis: false,
+      }
+      groups.push(currentGroup)
+    }
+    currentGroup.items.push(item)
+  }
+  for (const group of groups) {
+    if (group.isAnalysis === true) {
+      group.items = analysisParamRows.value
+    }
+  }
+  return groups.filter((group) => group.items.length > 0 || group.isAnalysis === true)
+})
+
+const settingsColumns = computed<[SettingsGroup[], SettingsGroup[]]>(() => {
+  const leftGroups: SettingsGroup[] = []
+  const rightGroups: SettingsGroup[] = []
+  for (const group of settingsGroups.value) {
+    if (group.isAnalysis === true) {
+      continue
+    }
+    if (LEFT_SETTING_GROUP_TITLES.includes(group.title) === true) {
+      leftGroups.push(group)
+      continue
+    }
+    rightGroups.push(group)
+  }
+  return [leftGroups, rightGroups]
+})
+
+const analysisSettingGroup = computed<SettingsGroup | null>(() => {
+  return settingsGroups.value.find((group) => group.isAnalysis === true) ?? null
+})
 
 const spreadsheetColumns = computed<Array<Record<string, unknown>>>(() => {
   if (templateData.value === null) {
@@ -78,7 +198,7 @@ const spreadsheetKey = computed(() => {
   return `${templateData.value.headers.join('|')}-${templateData.value.rows.length}`
 })
 
-async function loadTemplate(useDraft = true) {
+async function loadTemplate(useDraft = true, options: TemplateLoadOptions = {}) {
   loading.value = true
   try {
     const remoteTemplate = await fetchReactionTemplate()
@@ -86,11 +206,42 @@ async function loadTemplate(useDraft = true) {
     if (useDraft !== true) {
       clearTemplateDraft()
     }
-    setTemplateData(draftTemplate || remoteTemplate)
+    setTemplateData(draftTemplate || remoteTemplate, options)
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
     loading.value = false
+  }
+}
+
+async function loadAnalysisMethods() {
+  methodsLoading.value = true
+  try {
+    applyMethodRows(await fetchAnalysisMethods())
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    methodsLoading.value = false
+  }
+}
+
+function applyMethodRows(rows: AnalysisMethodsRow[]) {
+  const nextOptions: Record<AnalysisInstrumentKey, string[]> = {
+    gc_ms: [],
+    uplc_qtof: [],
+    hplc: [],
+  }
+  const errors: string[] = []
+  for (const row of rows) {
+    if (row.error.trim() !== '') {
+      errors.push(`${row.name}: ${row.error}`)
+      continue
+    }
+    nextOptions[row.instrument] = row.methods
+  }
+  methodOptions.value = nextOptions
+  if (errors.length > 0) {
+    ElMessage.error(`分析方法列表刷新失败: ${errors.join('; ')}`)
   }
 }
 
@@ -133,9 +284,16 @@ async function saveTemplate() {
   if (templateData.value === null) {
     return
   }
+  const payload = buildActionTemplatePayload()
+  if (payload === null) {
+    return
+  }
   try {
-    templateData.value = await saveReactionTemplate(templateData.value)
-    persistTemplateDraft()
+    const savedTemplate = await saveReactionTemplate(payload)
+    setTemplateData(savedTemplate)
+    void nextTick(() => {
+      persistTemplateDraft()
+    })
     ElMessage.success('模板已保存')
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
@@ -146,8 +304,12 @@ async function runResourceCheck() {
   if (templateData.value === null) {
     return
   }
+  const payload = buildActionTemplatePayload()
+  if (payload === null) {
+    return
+  }
   try {
-    const data = await checkResource(templateData.value)
+    const data = await checkResource(payload)
     currentJobId.value = data.job_id
     ElMessage.success('物料核算已进入后台')
   } catch (error) {
@@ -159,8 +321,12 @@ async function submitTemplate() {
   if (templateData.value === null) {
     return
   }
+  const payload = buildActionTemplatePayload()
+  if (payload === null) {
+    return
+  }
   try {
-    const data = await submitReactionTemplate(templateData.value)
+    const data = await submitReactionTemplate(payload)
     currentJobId.value = data.job_id
     ElMessage.success('提交任务已进入后台')
   } catch (error) {
@@ -169,7 +335,221 @@ async function submitTemplate() {
 }
 
 function onJobFinished(_job: JobState) {
-  loadTemplate(false)
+  loadTemplate(false, { keepExperimentId: true })
+}
+
+function buildActionTemplatePayload(): ReactionTemplate | null {
+  if (templateData.value === null) {
+    return null
+  }
+  if (validateAnalysisParams() === false) {
+    return null
+  }
+  clearExperimentId(templateData.value)
+  const payload = cloneReactionTemplate(templateData.value)
+  serializeAnalysisParams(payload)
+  clearExperimentId(payload)
+  return payload
+}
+
+function cloneReactionTemplate(data: ReactionTemplate): ReactionTemplate {
+  return JSON.parse(JSON.stringify(data)) as ReactionTemplate
+}
+
+function clearExperimentId(data: ReactionTemplate) {
+  for (const item of data.param_rows) {
+    if (item.type === 'parameter' && item.name === EXPERIMENT_ID_PARAM_NAME) {
+      item.value = ''
+    }
+  }
+  data.params[EXPERIMENT_ID_PARAM_NAME] = ''
+}
+
+function serializeAnalysisParams(data: ReactionTemplate) {
+  for (const item of data.param_rows) {
+    if (item.type !== 'parameter' || isAnalysisMethodParam(item.name) === false) {
+      continue
+    }
+    item.value = buildAnalysisMethodValue(item.name, item.value)
+    data.params[item.name] = item.value
+  }
+}
+
+function buildAnalysisMethodValue(name: AnalysisParamName, methodValue: unknown): string {
+  const methodName = cellText(methodValue)
+  if (methodName === '') {
+    return ''
+  }
+  const selector = analysisSampleSelectors.value[name].trim()
+  if (selector === '') {
+    return methodName
+  }
+  return `${methodName}(${selector})`
+}
+
+function validateAnalysisParams(): boolean {
+  if (templateData.value === null) {
+    return false
+  }
+  for (const item of templateData.value.param_rows) {
+    if (item.type !== 'parameter' || isAnalysisMethodParam(item.name) === false) {
+      continue
+    }
+    const methodName = cellText(item.value)
+    const selector = analysisSampleSelectors.value[item.name].trim()
+    if (methodName === '' && selector !== '') {
+      ElMessage.error(`请先选择 ${analysisInstrumentLabel(item.name)} 分析方法`)
+      return false
+    }
+    if (isValidSampleSelector(selector) === false) {
+      ElMessage.error(`检测样品格式错误: ${analysisInstrumentLabel(item.name)} 请填写 1, 1-8 或 1-8,10`)
+      return false
+    }
+  }
+  return true
+}
+
+function isValidSampleSelector(selector: string): boolean {
+  const text = selector.trim()
+  if (text === '') {
+    return true
+  }
+  const tokens = text.split(',')
+  for (const token of tokens) {
+    const part = token.trim()
+    if (part === '') {
+      return false
+    }
+    const rangeParts = part.split('-')
+    if (rangeParts.length === 1) {
+      if (/^\d+$/.test(rangeParts[0].trim()) === false) {
+        return false
+      }
+      continue
+    }
+    if (rangeParts.length !== 2) {
+      return false
+    }
+    const startText = rangeParts[0].trim()
+    const endText = rangeParts[1].trim()
+    if (/^\d+$/.test(startText) === false || /^\d+$/.test(endText) === false) {
+      return false
+    }
+    if (Number(startText) > Number(endText)) {
+      return false
+    }
+  }
+  return true
+}
+
+function isExperimentIdParam(name: string): boolean {
+  return name === EXPERIMENT_ID_PARAM_NAME
+}
+
+function isAnalysisSection(name: string): boolean {
+  return name === ANALYSIS_SECTION_TITLE
+}
+
+function isAnalysisMethodParam(name: string): name is AnalysisParamName {
+  return ANALYSIS_PARAM_NAMES.some((paramName) => paramName === name)
+}
+
+function analysisInstrumentLabel(name: string): string {
+  if (isAnalysisMethodParam(name) === false) {
+    return name
+  }
+  return ANALYSIS_PARAM_CONFIG[name].label
+}
+
+function analysisMethodOptions(name: string, value: unknown): string[] {
+  if (isAnalysisMethodParam(name) === false) {
+    return []
+  }
+  const instrument = ANALYSIS_PARAM_CONFIG[name].instrument
+  const options = [...methodOptions.value[instrument]]
+  const currentValue = cellText(value)
+  if (currentValue !== '' && options.includes(currentValue) === false) {
+    options.unshift(currentValue)
+  }
+  return options
+}
+
+function analysisSampleSelector(name: string): string {
+  if (isAnalysisMethodParam(name) === false) {
+    return ''
+  }
+  return analysisSampleSelectors.value[name]
+}
+
+function setAnalysisSampleSelector(name: string, value: string | number) {
+  if (isAnalysisMethodParam(name) === false) {
+    return
+  }
+  analysisSampleSelectors.value[name] = String(value)
+}
+
+function setAnalysisMethodValue(item: { name: string; value: unknown }, value: unknown) {
+  item.value = value ?? ''
+  if (isAnalysisMethodParam(item.name) === false) {
+    return
+  }
+  if (cellText(item.value) === '') {
+    analysisSampleSelectors.value[item.name] = ''
+  }
+}
+
+function syncAnalysisParamState(data: ReactionTemplate) {
+  const selectors: Record<AnalysisParamName, string> = {
+    GC_MS: '',
+    UPLC_QTOF: '',
+    HPLC: '',
+  }
+  for (const item of data.param_rows) {
+    if (item.type !== 'parameter' || isAnalysisMethodParam(item.name) === false) {
+      continue
+    }
+    const parsed = parseAnalysisMethodValue(item.value)
+    item.value = parsed.method
+    selectors[item.name] = parsed.selector
+    data.params[item.name] = parsed.method
+  }
+  analysisSampleSelectors.value = selectors
+}
+
+function parseAnalysisMethodValue(value: unknown): { method: string; selector: string } {
+  const text = cellText(value)
+  if (text === '') {
+    return {
+      method: '',
+      selector: '',
+    }
+  }
+  const match = text.match(/^(.*)\(([^()]*)\)$/)
+  if (match === null) {
+    return {
+      method: text,
+      selector: '',
+    }
+  }
+  return {
+    method: match[1].trim(),
+    selector: match[2].trim(),
+  }
+}
+
+function experimentIdDisplayValue(value: unknown): string {
+  const text = cellText(value)
+  if (text === '') {
+    return ''
+  }
+  return text
+}
+
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  return String(value).trim()
 }
 
 function isYesNoParam(name: string): boolean {
@@ -239,6 +619,33 @@ function fillTemplateTable(mode: FillMode) {
   spreadsheetRef.value.fillSelectedRange(mode)
 }
 
+function clearTemplateSelection() {
+  if (spreadsheetRef.value === null) {
+    ElMessage.warning('表格尚未就绪')
+    return
+  }
+  if (spreadsheetRef.value.clearSelectedRange() === true) {
+    ElMessage.success('选定内容已清除')
+  }
+}
+
+function clearAllTemplateContent() {
+  if (templateData.value === null) {
+    return
+  }
+  if (spreadsheetRef.value !== null) {
+    const rows = spreadsheetRef.value.syncSourceData()
+    updateTemplateRows(rows)
+  }
+  const width = templateData.value.headers.length
+  templateData.value.rows = templateData.value.rows.map((_row, rowIndex) => {
+    const nextRow: unknown[] = Array.from({ length: width }, () => '')
+    nextRow[0] = rowIndex + 1
+    return nextRow
+  })
+  ElMessage.success('所有内容已清除')
+}
+
 function updateTemplateRows(rows: SpreadsheetRow[]) {
   if (templateData.value === null) {
     return
@@ -251,9 +658,14 @@ function updateTemplateRows(rows: SpreadsheetRow[]) {
   })
 }
 
-function setTemplateData(data: ReactionTemplate) {
+function setTemplateData(data: ReactionTemplate, options: TemplateLoadOptions = {}) {
+  const nextData = cloneReactionTemplate(data)
+  if (options.keepExperimentId !== true) {
+    clearExperimentId(nextData)
+  }
+  syncAnalysisParamState(nextData)
   skipTemplatePersist = true
-  templateData.value = data
+  templateData.value = nextData
   void nextTick(() => {
     skipTemplatePersist = false
   })
@@ -279,14 +691,55 @@ function isCompatibleTemplateDraft(remoteTemplate: ReactionTemplate, draft: Reac
   if (Array.isArray(draft.headers) === false || Array.isArray(draft.rows) === false) {
     return false
   }
-  return draft.headers.join('|') === remoteTemplate.headers.join('|')
+  if (Array.isArray(draft.param_rows) === false) {
+    return false
+  }
+  return (
+    isCompatibleTemplateHeaders(remoteTemplate.headers, draft.headers) === true &&
+    draft.param_rows.map((item) => item.name).join('|') ===
+      remoteTemplate.param_rows.map((item) => item.name).join('|')
+  )
+}
+
+function isCompatibleTemplateHeaders(remoteHeaders: string[], draftHeaders: string[]): boolean {
+  if (remoteHeaders.length === 0 || draftHeaders.length === 0) {
+    return false
+  }
+  const sharedLength = Math.min(remoteHeaders.length, draftHeaders.length)
+  for (let index = 0; index < sharedLength; index += 1) {
+    if (remoteHeaders[index] !== draftHeaders[index]) {
+      return false
+    }
+  }
+  const extraHeaders = draftHeaders.length > remoteHeaders.length
+    ? draftHeaders.slice(remoteHeaders.length)
+    : remoteHeaders.slice(draftHeaders.length)
+  return isTrailingReagentPairHeaders(extraHeaders)
+}
+
+function isTrailingReagentPairHeaders(headers: string[]): boolean {
+  if (headers.length === 0) {
+    return true
+  }
+  if (headers.length % 2 !== 0) {
+    return false
+  }
+  for (let index = 0; index < headers.length; index += 2) {
+    if (headers[index] !== '试剂' || headers[index + 1] !== '试剂量') {
+      return false
+    }
+  }
+  return true
 }
 
 function persistTemplateDraft() {
   if (templateData.value === null || skipTemplatePersist === true) {
     return
   }
-  localStorage.setItem(TASK_EDITOR_DRAFT_KEY, JSON.stringify(templateData.value))
+  const draft = cloneReactionTemplate(templateData.value)
+  serializeAnalysisParams(draft)
+  clearExperimentId(draft)
+  localStorage.setItem(TASK_EDITOR_DRAFT_KEY, JSON.stringify(draft))
 }
 
 function clearTemplateDraft() {
@@ -303,10 +756,19 @@ function normalizeSpreadsheetRow(row: SpreadsheetRow, width: number): unknown[] 
 
 onActivated(() => {
   loadTemplate()
+  loadAnalysisMethods()
 })
 
 watch(
   templateData,
+  () => {
+    persistTemplateDraft()
+  },
+  { deep: true },
+)
+
+watch(
+  analysisSampleSelectors,
   () => {
     persistTemplateDraft()
   },
@@ -318,11 +780,12 @@ watch(
   <div class="view-stack" v-loading="loading">
     <section class="panel editor-settings-panel">
       <div class="panel-title">
-        <h2>任务设定</h2>
-        <div class="button-row">
+        <h2>实验设定</h2>
+        <div class="button-row editor-button-row">
           <el-select
             :model-value="experimentCount"
-            style="width: 128px"
+            size="small"
+            style="width: 116px"
             @change="setExperimentCount"
           >
             <el-option
@@ -332,27 +795,87 @@ watch(
               :value="count"
             />
           </el-select>
-          <el-button :icon="Refresh" @click="loadTemplate(false)">重载</el-button>
-          <el-button type="primary" :icon="DocumentChecked" @click="saveTemplate">保存</el-button>
-          <el-button type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
-          <el-button type="success" :icon="Upload" @click="submitTemplate">提交任务</el-button>
+          <el-button size="small" :icon="Refresh" @click="loadTemplate(false)">重载</el-button>
+          <el-button size="small" type="primary" :icon="DocumentChecked" @click="saveTemplate">保存</el-button>
+          <el-button size="small" type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
+          <el-button size="small" type="success" :icon="Upload" @click="submitTemplate">提交任务</el-button>
         </div>
       </div>
 
       <div v-if="templateData !== null" class="settings-grid">
-        <template v-for="item in templateData.param_rows" :key="item.name">
-          <div v-if="item.type === 'section'" class="settings-section">{{ item.name }}</div>
-          <el-form-item v-else :label="item.name" class="settings-item">
-            <el-select v-if="isYesNoParam(item.name)" v-model="item.value" style="width: 100%">
-              <el-option label="是" value="是" />
-              <el-option label="否" value="否" />
-            </el-select>
-            <el-select v-else-if="isReactorParam(item.name)" v-model="item.value" style="width: 100%">
-              <el-option label="heat" value="heat" />
-            </el-select>
-            <el-input v-else v-model="item.value" />
-          </el-form-item>
-        </template>
+        <div
+          v-for="(columnGroups, columnIndex) in settingsColumns"
+          :key="columnIndex"
+          :class="['settings-column', columnIndex === 0 ? 'settings-column-left' : 'settings-column-right']"
+        >
+          <section
+            v-for="group in columnGroups"
+            :key="group.title"
+            class="settings-group"
+          >
+            <div class="settings-section">{{ group.title }}</div>
+            <div class="settings-group-fields">
+              <el-form-item
+                v-for="item in group.items"
+                :key="item.name"
+                :label="item.name"
+                class="settings-item"
+              >
+                <el-input
+                  v-if="isExperimentIdParam(item.name)"
+                  :model-value="experimentIdDisplayValue(item.value)"
+                  disabled
+                  placeholder="提交后自动回写"
+                />
+                <el-select v-else-if="isYesNoParam(item.name)" v-model="item.value" style="width: 100%">
+                  <el-option label="是" value="是" />
+                  <el-option label="否" value="否" />
+                </el-select>
+                <el-select v-else-if="isReactorParam(item.name)" v-model="item.value" style="width: 100%">
+                  <el-option label="heat" value="heat" />
+                </el-select>
+                <el-input v-else v-model="item.value" />
+              </el-form-item>
+            </div>
+          </section>
+        </div>
+
+        <section v-if="analysisSettingGroup !== null" class="settings-group analysis-settings-group">
+          <div class="settings-section">{{ analysisSettingGroup.title }}</div>
+          <div class="analysis-method-grid">
+            <el-form-item
+              v-for="analysisItem in analysisSettingGroup.items"
+              :key="analysisItem.name"
+              :label="analysisInstrumentLabel(analysisItem.name)"
+              class="settings-item analysis-method-item"
+            >
+              <div class="analysis-method-row">
+                <el-select
+                  :model-value="analysisItem.value"
+                  :loading="methodsLoading"
+                  clearable
+                  filterable
+                  placeholder="选择方法"
+                  style="width: 100%"
+                  @update:model-value="setAnalysisMethodValue(analysisItem, $event)"
+                >
+                  <el-option
+                    v-for="methodName in analysisMethodOptions(analysisItem.name, analysisItem.value)"
+                    :key="methodName"
+                    :label="methodName"
+                    :value="methodName"
+                  />
+                </el-select>
+                <el-input
+                  :model-value="analysisSampleSelector(analysisItem.name)"
+                  :disabled="cellText(analysisItem.value) === ''"
+                  placeholder="实验编号"
+                  @update:model-value="setAnalysisSampleSelector(analysisItem.name, $event)"
+                />
+              </div>
+            </el-form-item>
+          </div>
+        </section>
       </div>
     </section>
 
@@ -362,6 +885,8 @@ watch(
         <div class="button-row">
           <el-button :icon="Plus" @click="addReagentPair">试剂列</el-button>
           <el-button :icon="Minus" @click="removeReagentPair">试剂列</el-button>
+          <el-button :icon="Delete" @click="clearTemplateSelection">清除内容</el-button>
+          <el-button :icon="DeleteFilled" @click="clearAllTemplateContent">清除所有内容</el-button>
           <el-button :icon="TrendCharts" @click="fillTemplateTable('increment')">递增填充</el-button>
           <el-button :icon="CopyDocument" @click="fillTemplateTable('copy')">复制填充</el-button>
         </div>
@@ -388,18 +913,40 @@ watch(
 .editor-settings-panel {
   position: relative;
   z-index: 2;
+  padding: 12px 14px;
+}
+
+.editor-settings-panel :deep(.panel-title),
+.editor-settings-panel .panel-title {
+  margin-bottom: 10px;
+}
+
+.editor-button-row {
+  gap: 6px;
 }
 
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px 14px;
   align-items: start;
 }
 
+.settings-column {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .settings-section {
-  grid-column: 1 / -1;
-  padding: 8px 12px;
+  min-height: 30px;
+  padding: 6px 10px;
   color: #12325a;
   font-size: 13px;
   font-weight: 700;
@@ -408,8 +955,71 @@ watch(
   background: #eef4fb;
 }
 
+.settings-group-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  align-items: start;
+  min-width: 0;
+  padding-left: 10px;
+}
+
+.settings-column-right .settings-group-fields {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .settings-item {
   margin-bottom: 0;
+}
+
+.settings-item :deep(.el-form-item__label) {
+  min-height: 24px;
+  padding-bottom: 4px;
+  line-height: 24px;
+}
+
+.settings-item :deep(.el-form-item__content) {
+  line-height: 28px;
+}
+
+.settings-item :deep(.el-input__wrapper),
+.settings-item :deep(.el-select__wrapper) {
+  min-height: 30px;
+}
+
+.analysis-settings-group {
+  grid-column: 1 / -1;
+}
+
+.analysis-method-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 12px;
+  align-items: start;
+  min-width: 0;
+  padding-left: 10px;
+}
+
+.analysis-method-item {
+  min-width: 0;
+}
+
+.analysis-method-item :deep(.el-form-item__label) {
+  align-items: center;
+  min-height: 30px;
+  padding-bottom: 0;
+  line-height: 30px;
+}
+
+.analysis-method-item :deep(.el-form-item__content) {
+  align-items: center;
+}
+
+.analysis-method-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 96px;
+  gap: 6px;
+  width: 100%;
 }
 
 .spreadsheet-wrap {
@@ -419,13 +1029,24 @@ watch(
 
 @media (max-width: 1100px) {
   .settings-grid {
-    grid-template-columns: repeat(2, minmax(210px, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .settings-column-right .settings-group-fields,
+  .analysis-method-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 640px) {
-  .settings-grid {
+  .settings-column-right .settings-group-fields,
+  .analysis-method-grid,
+  .settings-group-fields {
     grid-template-columns: 1fr;
+  }
+
+  .analysis-method-row {
+    grid-template-columns: minmax(150px, 1fr) 88px;
   }
 }
 </style>
