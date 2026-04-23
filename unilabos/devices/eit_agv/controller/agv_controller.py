@@ -4364,22 +4364,22 @@ class AGVController:
             elapsed = 0.0
             while elapsed < poll_timeout:
                 status_detail = client.get_status_detail()
-                base_status = status_detail["base_status"]
+                instrument_status = status_detail["instrument_status"]
                 raw_status = status_detail["raw_status"] or "(空)"
                 logger.info(
-                    "智达设备当前状态, 主状态: %s, 原始状态: %s, 已等待 %.0f 秒",
-                    base_status,
+                    "智达设备当前状态, 仪器状态: %s, 原始状态: %s, 已等待 %.0f 秒",
+                    instrument_status,
                     raw_status,
                     elapsed,
                 )
 
-                if base_status == "Idle":
-                    logger.info("智达设备主状态已空闲, 原始状态: %s, 准备执行转运", raw_status)
+                if instrument_status == "Idle":
+                    logger.info("智达设备仪器状态已空闲, 原始状态: %s, 准备执行转运", raw_status)
                     break
-                elif base_status in ("Offline", "Error"):
+                elif instrument_status in ("Offline", "Error"):
                     logger.error(
-                        "智达设备异常状态, 主状态: %s, 原始状态: %s, 终止转运",
-                        base_status,
+                        "智达设备异常状态, 仪器状态: %s, 原始状态: %s, 终止转运",
+                        instrument_status,
                         raw_status,
                     )
                     return False

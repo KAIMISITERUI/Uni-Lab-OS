@@ -232,8 +232,40 @@ function fillSelectedRange(mode: FillMode): boolean {
   return true
 }
 
+function clearSelectedRange(): boolean {
+  // 清空当前选区内所有可编辑单元格的内容, 不动行结构.
+  const hotInstance = getHotInstance()
+  if (hotInstance === undefined) {
+    ElMessage.warning('表格尚未就绪')
+    return false
+  }
+  hotInstance.destroyEditor(false, false)
+  const rangeBox = getActiveRangeBox(hotInstance)
+  if (rangeBox === null) {
+    ElMessage.warning('请先选择要清除的单元格区域')
+    return false
+  }
+  const changes: HotCellChange[] = []
+  for (let row = rangeBox.top; row <= rangeBox.bottom; row += 1) {
+    for (let col = rangeBox.left; col <= rangeBox.right; col += 1) {
+      if (isEditableCell(hotInstance, row, col) === false) {
+        continue
+      }
+      changes.push([row, col, null])
+    }
+  }
+  if (changes.length === 0) {
+    ElMessage.warning('选区内没有可清除的单元格')
+    return false
+  }
+  hotInstance.setDataAtCell(changes, 'button-clear-range')
+  hotInstance.render()
+  return true
+}
+
 defineExpose({
   fillSelectedRange,
+  clearSelectedRange,
   getSelectedRowRange,
   syncSourceData,
 })

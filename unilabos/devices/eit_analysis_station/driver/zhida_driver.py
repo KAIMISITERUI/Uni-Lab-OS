@@ -13,7 +13,7 @@ import socket
 import time
 import os
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 
 class ZhidaClient:
@@ -159,36 +159,56 @@ class ZhidaClient:
                 raise ConnectionError(f"Command send failed: {str(e)}")
 
     @staticmethod
-    def _parse_status_detail(raw_status: str) -> Dict[str, str]:
+    def _coerce_int(value: Any, default: int) -> int:
         """
         功能:
-        将智达协议返回的原始状态拆分为主状态和子状态, 统一复合状态判定.
+        将协议返回的样品计数安全地转为整数, 防止类型或缺失导致前端渲染异常.
         参数:
-        raw_status: 协议返回的 result 字段, 例如 "Idle" 或 "Idle#SeqRun:Error".
+        value: 协议字段原值, 可能为 int / str / None.
+        default: 当 value 非法或缺失时使用的兜底值.
         返回:
-        Dict[str, str], 包含 raw_status/base_status/sub_status 三个键.
+        int, 归一化后的样品计数.
         """
-        normalized_raw_status = raw_status.strip() if isinstance(raw_status, str) else ""
-        if normalized_raw_status == "":
-            return {"raw_status": "", "base_status": "Unknown", "sub_status": ""}
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
-        base_status, separator, sub_status = normalized_raw_status.partition("#")
-        base_status = base_status.strip() or "Unknown"
-        sub_status = sub_status.strip() if separator else ""
+    @staticmethod
+    def _parse_status_detail(response: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        功能:
+        将智达 getstatus 响应拆解为仪器状态, 诊断消息与样品计数.
+        参数:
+        response: 协议响应 dict, 形如 {"result": "Idle", "message": "", "totalsamplecount": "0", "unrunsamplecount": "0"}.
+        返回:
+        Dict[str, Any], 包含 raw_status/instrument_status/message/total_sample_count/unrun_sample_count 五个键.
+        """
+        result_value = response.get("result", "")
+        normalized_raw = result_value.strip() if isinstance(result_value, str) else ""
+        instrument_status = normalized_raw if normalized_raw != "" else "Unknown"
+
+        message_value = response.get("message", "")
+        message = message_value.strip() if isinstance(message_value, str) else ""
+
         return {
-            "raw_status": normalized_raw_status,
-            "base_status": base_status,
-            "sub_status": sub_status,
+            "raw_status": normalized_raw,
+            "instrument_status": instrument_status,
+            "message": message,
+            "total_sample_count": ZhidaClient._coerce_int(response.get("totalsamplecount"), 0),
+            "unrun_sample_count": ZhidaClient._coerce_int(response.get("unrunsamplecount"), 0),
         }
 
-    def get_status_detail(self) -> Dict[str, str]:
+    def get_status_detail(self) -> Dict[str, Any]:
         """
         功能:
-        查询设备状态并返回原始状态、归一化主状态和子状态, 便于流程判定与排障.
+        查询设备状态并返回结构化明细, 涵盖仪器状态, 诊断消息与样品进度.
         参数:
         无.
         返回:
-        Dict[str, str], 形如 {"raw_status": str, "base_status": str, "sub_status": str}.
+        Dict[str, Any], 五键 dict: raw_status/instrument_status/message/total_sample_count/unrun_sample_count.
         """
         if not self.sock:
             # 尝试重新连接, 避免长连接断开后状态查询直接失败.
@@ -199,27 +219,17 @@ class ZhidaClient:
             except Exception as e:
                 if self._ros_node:
                     self._ros_node.lab_logger().warning(f"智达GCMS设备连接失败: {e}")
-                return self._parse_status_detail("Offline")
+                return self._parse_status_detail({"result": "Offline"})
 
         try:
             response = self._send_command({"command": "getstatus"})
-            return self._parse_status_detail(response.get("result", ""))
+            return self._parse_status_detail(response)
         except Exception as e:
             if self._ros_node:
                 self._ros_node.lab_logger().warning(f"获取设备状态失败: {e}")
-            return self._parse_status_detail("Error")
+            return self._parse_status_detail({"result": "Error"})
 
-    def get_status(self) -> str:
-        """
-        功能:
-        获取归一化后的设备主状态, 兼容旧调用方的字符串状态接口.
-        参数:
-        无.
-        返回:
-        str, 设备主状态. 复合状态如 "Idle#SeqRun:Error" 会返回 "Idle".
-        """
-        return self.get_status_detail()["base_status"]
-    
+
     def get_methods(self) -> dict:
         """
         获取当前Project的方法列表

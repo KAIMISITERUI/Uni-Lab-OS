@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onActivated, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { CopyDocument, Delete, DeleteFilled, Plus, Refresh, TrendCharts, Upload } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
 import {
@@ -37,17 +37,20 @@ type InstrumentMeta = {
 
 type SpreadsheetRow = Record<string, unknown> | unknown[]
 type FillMode = 'increment' | 'copy'
+type AutoAppendInstrumentKey = Extract<AnalysisInstrumentKey, 'uplc_qtof' | 'hplc'>
 type SelectedRowRange = {
   start: number
   end: number
 }
 type EditableSpreadsheetRef = ComponentPublicInstance & {
   fillSelectedRange: (mode: FillMode) => boolean
+  clearSelectedRange: () => boolean
   getSelectedRowRange: () => SelectedRowRange | null
   syncSourceData: () => SpreadsheetRow[]
 }
 
 const ANALYSIS_DRAFT_KEY = 'eit_hub.analysis_tables_draft'
+const AUTO_APPEND_INSTRUMENTS: AutoAppendInstrumentKey[] = ['uplc_qtof', 'hplc']
 
 const instruments: InstrumentMeta[] = [
   { key: 'gc_ms', name: 'GC-MS' },
@@ -84,6 +87,11 @@ const tables = reactive<Record<AnalysisInstrumentKey, AnalysisTableRow[]>>({
   hplc: createEmptyRows(),
 })
 
+const autoAppendEnabled = reactive<Record<AutoAppendInstrumentKey, boolean>>({
+  uplc_qtof: true,
+  hplc: true,
+})
+
 const activeInstrument = ref<AnalysisInstrumentKey>('gc_ms')
 const selectedRow = ref<number | null>(null)
 const statusRows = ref<AnalysisStatusRow[]>([])
@@ -105,7 +113,11 @@ const displayStatuses = computed(() =>
       name: instrument.name,
       host: '-',
       port: 0,
-      status: '未查询',
+      raw_status: '',
+      instrument_status: '未查询',
+      message: '',
+      total_sample_count: 0,
+      unrun_sample_count: 0,
       connected: false,
     }
   }),
@@ -211,6 +223,23 @@ async function refreshAnalysisContent() {
   }
 }
 
+async function refreshAnalysisStatus(silent = false) {
+  if (silent === false) {
+    statusLoading.value = true
+  }
+  try {
+    statusRows.value = await fetchAnalysisStatus()
+  } catch (error) {
+    if (silent === false) {
+      ElMessage.error(getErrorMessage(error))
+    }
+  } finally {
+    if (silent === false) {
+      statusLoading.value = false
+    }
+  }
+}
+
 function applyMethodRows(rows: AnalysisMethodsRow[]) {
   const errors: string[] = []
   for (const row of rows) {
@@ -229,6 +258,7 @@ async function submitTables() {
   submitLoading.value = true
   try {
     syncSpreadsheetRows()
+    applyAutoAppendRows()
     const data = await submitAnalysisTables({ tables: buildSubmitPayload() })
     currentJobId.value = data.job_id
     ElMessage.success('分析任务已进入后台')
@@ -293,10 +323,54 @@ function syncActiveSpreadsheetRows(): AnalysisTableRow[] {
   return tables[instrument]
 }
 
-function addRow() {
+async function addRow() {
+  const rowCount = await promptAddRowCount()
+  if (rowCount === null) {
+    return
+  }
   const instrument = activeInstrument.value
+  const spreadsheet = getActiveSpreadsheet()
+  const rowRange = spreadsheet?.getSelectedRowRange() ?? null
   const rows = syncActiveSpreadsheetRows()
-  tables[instrument] = [...rows, createEmptyRow()]
+  const insertIndex = getAddRowInsertIndex(rows, rowRange)
+  const insertedRows = createEmptyRows(rowCount)
+  tables[instrument] = [
+    ...rows.slice(0, insertIndex),
+    ...insertedRows,
+    ...rows.slice(insertIndex),
+  ]
+}
+
+async function promptAddRowCount(): Promise<number | null> {
+  try {
+    const result = await ElMessageBox.prompt('请输入要新增的行数', '新增行', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputValue: '1',
+      inputPattern: /^[1-9]\d*$/,
+      inputErrorMessage: '请输入大于 0 的整数',
+    })
+    const rowCount = Number(result.value)
+    if (Number.isInteger(rowCount) === false || rowCount <= 0) {
+      ElMessage.warning('请输入大于 0 的整数')
+      return null
+    }
+    return rowCount
+  } catch {
+    return null
+  }
+}
+
+function getAddRowInsertIndex(rows: AnalysisTableRow[], rowRange: SelectedRowRange | null): number {
+  if (rowRange === null) {
+    return rows.length
+  }
+  if (rows.length === 0) {
+    return 0
+  }
+  const lastIndex = Math.max(rows.length - 1, 0)
+  const endRow = Math.max(Math.min(rowRange.end, lastIndex), 0)
+  return endRow + 1
 }
 
 function deleteActiveRow() {
@@ -316,18 +390,26 @@ function deleteActiveRow() {
 }
 
 function clearActiveTable() {
-  const instrument = activeInstrument.value
-  const rows = syncActiveSpreadsheetRows()
-  tables[instrument] = createEmptyRows(rows.length)
+  // 仅清除当前选区内单元格内容, 保留行结构, 与 "清除所有内容" 区分.
+  const spreadsheet = getActiveSpreadsheet()
+  if (spreadsheet === undefined) {
+    ElMessage.warning('表格尚未就绪')
+    return
+  }
+  const cleared = spreadsheet.clearSelectedRange()
+  if (cleared === false) {
+    return
+  }
+  syncActiveSpreadsheetRows()
   selectedRow.value = null
-  ElMessage.success('内容已清除')
+  ElMessage.success('选定内容已清除')
 }
 
 function clearAllTables() {
-  syncSpreadsheetRows()
-  for (const instrument of instruments) {
-    tables[instrument.key] = createEmptyRows(tables[instrument.key].length)
-  }
+  // 只清除当前仪器表格的全部行内容, 不影响其它仪器.
+  const instrument = activeInstrument.value
+  const rows = syncActiveSpreadsheetRows()
+  tables[instrument] = createEmptyRows(rows.length)
   selectedRow.value = null
   ElMessage.success('所有内容已清除')
 }
@@ -341,36 +423,185 @@ function fillActiveTable(mode: FillMode) {
   spreadsheet.fillSelectedRange(mode)
 }
 
+function applyAutoAppendRows() {
+  for (const instrument of AUTO_APPEND_INSTRUMENTS) {
+    const { contentRows, trailingRows } = splitTrailingEmptyRows(tables[instrument])
+    const rows = removeAutoAppendTail(instrument, contentRows)
+    if (autoAppendEnabled[instrument] === false) {
+      tables[instrument] = [...rows, ...trailingRows]
+      continue
+    }
+    const lastSample = findLastCompleteManualSample(rows)
+    if (lastSample === null) {
+      tables[instrument] = [...rows, ...trailingRows]
+      continue
+    }
+    tables[instrument] = [...rows, ...buildAutoAppendRows(instrument, lastSample), ...trailingRows]
+  }
+}
+
+function splitTrailingEmptyRows(rows: AnalysisTableRow[]): {
+  contentRows: AnalysisTableRow[]
+  trailingRows: AnalysisTableRow[]
+} {
+  const lastContentIndex = findLastContentRowIndex(rows)
+  if (lastContentIndex < 0) {
+    return {
+      contentRows: [],
+      trailingRows: rows,
+    }
+  }
+  return {
+    contentRows: rows.slice(0, lastContentIndex + 1),
+    trailingRows: rows.slice(lastContentIndex + 1),
+  }
+}
+
+function findLastContentRowIndex(rows: AnalysisTableRow[]): number {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (hasRowContent(rows[index]) === true) {
+      return index
+    }
+  }
+  return -1
+}
+
+function removeAutoAppendTail(
+  instrument: AutoAppendInstrumentKey,
+  rows: AnalysisTableRow[],
+): AnalysisTableRow[] {
+  if (instrument === 'uplc_qtof') {
+    if (rows.length > 0 && isAutoNamedRow(rows[rows.length - 1], 'wash_stop') === true) {
+      return rows.slice(0, -1)
+    }
+    return rows
+  }
+  if (
+    rows.length >= 2 &&
+    isAutoNamedRow(rows[rows.length - 2], 'wash') === true &&
+    isAutoNamedRow(rows[rows.length - 1], 'stop') === true
+  ) {
+    return rows.slice(0, -2)
+  }
+  return rows
+}
+
+function findLastCompleteManualSample(rows: AnalysisTableRow[]): AnalysisTableRow | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (isKnownAutoAppendRow(row) === false && isCompleteSampleRow(row) === true) {
+      return row
+    }
+  }
+  return null
+}
+
+function buildAutoAppendRows(
+  instrument: AutoAppendInstrumentKey,
+  lastSample: AnalysisTableRow,
+): AnalysisTableRow[] {
+  if (instrument === 'uplc_qtof') {
+    return [createAutoAppendRow('wash_stop', lastSample)]
+  }
+  return [
+    createAutoAppendRow('wash', lastSample),
+    createAutoAppendRow('stop', lastSample),
+  ]
+}
+
+function createAutoAppendRow(name: string, lastSample: AnalysisTableRow): AnalysisTableRow {
+  return {
+    SampleName: name,
+    AcqMethod: name,
+    RackCode: lastSample.RackCode,
+    VialPos: lastSample.VialPos,
+    SmplInjVol: 0,
+    OutputFile: name,
+  }
+}
+
+function isAutoNamedRow(row: AnalysisTableRow, name: string): boolean {
+  return (
+    cellText(row.SampleName) === name &&
+    cellText(row.AcqMethod) === name &&
+    cellText(row.OutputFile) === name &&
+    cellText(row.SmplInjVol) === '0'
+  )
+}
+
+function isKnownAutoAppendRow(row: AnalysisTableRow): boolean {
+  return (
+    isAutoNamedRow(row, 'wash_stop') === true ||
+    isAutoNamedRow(row, 'wash') === true ||
+    isAutoNamedRow(row, 'stop') === true
+  )
+}
+
+function isCompleteSampleRow(row: AnalysisTableRow): boolean {
+  return csvHeaders.every((header) => isEmptyCell(row[header]) === false)
+}
+
+function hasRowContent(row: AnalysisTableRow): boolean {
+  return csvHeaders.some((header) => isEmptyCell(row[header]) === false)
+}
+
+function isEmptyCell(value: CellValue): boolean {
+  if (value === null) {
+    return true
+  }
+  return String(value).trim() === ''
+}
+
+function cellText(value: CellValue): string {
+  if (value === null) {
+    return ''
+  }
+  return String(value).trim()
+}
+
 function onJobFinished(_job: JobState) {
   refreshAnalysisContent()
 }
 
+function onJobUpdated(_job: JobState) {
+  refreshAnalysisStatus(true)
+}
+
 function statusTagType(row: AnalysisStatusRow): 'success' | 'warning' | 'danger' | 'info' {
-  const statusText = row.status.trim().toLowerCase()
+  const instrumentStatus = row.instrument_status
   if (row.connected === true) {
     return 'success'
   }
-  if (statusText === 'offline' || statusText === '未查询') {
+  if (instrumentStatus === 'Offline' || instrumentStatus === '未查询') {
     return 'info'
   }
-  if (statusText === 'error' || statusText === 'unknown' || statusText === '') {
+  if (instrumentStatus === 'Error' || instrumentStatus === 'Unknown' || instrumentStatus === '') {
     return 'danger'
   }
   return 'warning'
 }
 
 function statusLabel(row: AnalysisStatusRow): string {
-  const statusText = row.status.trim().toLowerCase()
+  const instrumentStatus = row.instrument_status
   if (row.connected === true) {
     return '在线'
   }
-  if (statusText === '未查询') {
+  if (instrumentStatus === '未查询') {
     return '未查询'
   }
-  if (statusText === 'offline') {
+  if (instrumentStatus === 'Offline') {
     return '离线'
   }
   return '异常'
+}
+
+function sampleProgressText(row: AnalysisStatusRow): string {
+  // 显示格式 "已运行/总数", 已运行 = 样品总数 - 未运行数.
+  if (row.instrument_status === 'Idle' || row.total_sample_count <= 0) {
+    return '-'
+  }
+  const finished = Math.max(row.total_sample_count - row.unrun_sample_count, 0)
+  return `${finished}/${row.total_sample_count}`
 }
 
 function endpointText(row: AnalysisStatusRow): string {
@@ -393,6 +624,7 @@ function restoreAnalysisDraft() {
     const draft = JSON.parse(rawDraft) as {
       activeInstrument?: AnalysisInstrumentKey
       tables?: Partial<Record<AnalysisInstrumentKey, AnalysisTableRow[]>>
+      autoAppendEnabled?: Partial<Record<AutoAppendInstrumentKey, boolean>>
     }
     for (const instrument of instruments) {
       const rows = draft.tables?.[instrument.key]
@@ -402,6 +634,12 @@ function restoreAnalysisDraft() {
     }
     if (isAnalysisInstrumentKey(draft.activeInstrument) === true) {
       activeInstrument.value = draft.activeInstrument
+    }
+    for (const instrument of AUTO_APPEND_INSTRUMENTS) {
+      const enabled = draft.autoAppendEnabled?.[instrument]
+      if (typeof enabled === 'boolean') {
+        autoAppendEnabled[instrument] = enabled
+      }
     }
   } catch {
     localStorage.removeItem(ANALYSIS_DRAFT_KEY)
@@ -414,6 +652,7 @@ function persistAnalysisDraft() {
     JSON.stringify({
       activeInstrument: activeInstrument.value,
       tables: buildSubmitPayload(),
+      autoAppendEnabled: { ...autoAppendEnabled },
     }),
   )
 }
@@ -485,6 +724,14 @@ watch(
   },
   { deep: true },
 )
+
+watch(
+  autoAppendEnabled,
+  () => {
+    persistAnalysisDraft()
+  },
+  { deep: true },
+)
 </script>
 
 <template>
@@ -498,7 +745,20 @@ watch(
           </div>
           <el-tag :type="statusTagType(row)">{{ statusLabel(row) }}</el-tag>
         </div>
-        <div class="analysis-device-status">{{ row.status || 'Unknown' }}</div>
+        <div class="analysis-device-details">
+          <div class="analysis-detail-row">
+            <span class="detail-label">仪器状态</span>
+            <span class="detail-value">{{ row.instrument_status || 'Unknown' }}</span>
+          </div>
+          <div class="analysis-detail-row">
+            <span class="detail-label">样品进度</span>
+            <span class="detail-value">{{ sampleProgressText(row) }}</span>
+          </div>
+          <div v-if="row.message !== ''" class="analysis-detail-row detail-message">
+            <span class="detail-label">消息</span>
+            <span class="detail-value">{{ row.message }}</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -539,11 +799,26 @@ watch(
               @update:model-value="updateInstrumentRows(instrument.key, $event)"
             />
           </div>
+          <div v-if="instrument.key === 'uplc_qtof'" class="analysis-option-row">
+            <el-checkbox v-model="autoAppendEnabled.uplc_qtof">
+              自动添加冲柱+停机方法
+            </el-checkbox>
+          </div>
+          <div v-if="instrument.key === 'hplc'" class="analysis-option-row">
+            <el-checkbox v-model="autoAppendEnabled.hplc">
+              自动添加冲柱+停机方法
+            </el-checkbox>
+          </div>
         </el-tab-pane>
       </el-tabs>
     </section>
 
-    <JobPanel v-if="currentJobId !== ''" :job-id="currentJobId" @finished="onJobFinished" />
+    <JobPanel
+      :job-id="currentJobId"
+      title="运行结果"
+      @updated="onJobUpdated"
+      @finished="onJobFinished"
+    />
   </div>
 </template>
 
@@ -582,16 +857,46 @@ watch(
   font-size: 12px;
 }
 
-.analysis-device-status {
-  margin-top: 16px;
-  color: #24344d;
-  font-family: "Cascadia Mono", Consolas, monospace;
+.analysis-device-details {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   font-size: 13px;
+}
+
+.analysis-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #24344d;
+}
+
+.analysis-detail-row .detail-label {
+  color: #66758a;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.analysis-detail-row .detail-value {
+  font-family: "Cascadia Mono", Consolas, monospace;
   word-break: break-word;
+  text-align: right;
+}
+
+.analysis-detail-row.detail-message .detail-value {
+  color: #c15050;
 }
 
 .analysis-tabs {
   min-width: 0;
+}
+
+.analysis-option-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
 }
 
 .spreadsheet-wrap {

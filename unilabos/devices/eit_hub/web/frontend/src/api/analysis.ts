@@ -7,7 +7,11 @@ export interface AnalysisStatusRow {
   name: string
   host: string
   port: number
-  status: string
+  raw_status: string
+  instrument_status: string
+  message: string
+  total_sample_count: number
+  unrun_sample_count: number
   connected: boolean
   error?: string
 }

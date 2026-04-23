@@ -19,23 +19,36 @@ _ZHIDA_CLIENT_PATH = "unilabos.devices.eit_analysis_station.driver.zhida_driver.
 _SLEEP_PATH = "eit_agv.controller.agv_controller.time.sleep"
 
 
-def _make_status_detail(raw_status: str, base_status: str = None, sub_status: str = "") -> dict:
+def _make_status_detail(
+    raw_status: str,
+    instrument_status: str = None,
+    queue_status: str = "",
+    message: str = "",
+    total_sample_count: int = 0,
+    unrun_sample_count: int = 0,
+) -> dict:
     """
     功能:
-        构造智达状态明细字典, 统一测试里的状态 mock 结构.
+        构造智达状态明细字典, 统一测试里的六键 mock 结构.
     参数:
         raw_status: 原始状态字符串.
-        base_status: 主状态, None 表示与原始状态一致.
-        sub_status: 子状态字符串.
+        instrument_status: 仪器状态, None 表示从 raw_status 第一个 "#" 前段推导.
+        queue_status: 队列状态 (已剥离 SeqRun 前缀).
+        message: 诊断消息.
+        total_sample_count: 当前序列样品总数.
+        unrun_sample_count: 未运行样品数.
     返回:
-        Dict, 包含 raw_status/base_status/sub_status 三个字段.
+        Dict, 六键状态明细.
     """
-    if base_status is None:
-        base_status = raw_status
+    if instrument_status is None:
+        instrument_status = raw_status.partition("#")[0]
     return {
         "raw_status": raw_status,
-        "base_status": base_status,
-        "sub_status": sub_status,
+        "instrument_status": instrument_status,
+        "queue_status": queue_status,
+        "message": message,
+        "total_sample_count": total_sample_count,
+        "unrun_sample_count": unrun_sample_count,
     }
 
 
@@ -244,7 +257,7 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
     def test_composite_idle_status_allows_transfer(self, mock_zhida_client):
         """
         功能:
-            验证复合状态 Idle#SeqRun:Error 会按 Idle 主状态放行转运.
+            验证复合状态 Idle#SeqRun:Error 会按 Idle 仪器状态放行转运.
         参数:
             mock_zhida_client: 智达客户端补丁对象.
         返回:
@@ -253,8 +266,8 @@ class TestTransferAnalysisToShelf(unittest.TestCase):
         client = mock_zhida_client.return_value
         client.get_status_detail.return_value = _make_status_detail(
             raw_status="Idle#SeqRun:Error",
-            base_status="Idle",
-            sub_status="SeqRun:Error",
+            instrument_status="Idle",
+            queue_status="Error",
         )
 
         result = self.controller.transfer_analysis_to_shelf(

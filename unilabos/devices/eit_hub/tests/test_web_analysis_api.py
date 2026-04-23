@@ -58,16 +58,40 @@ class FakeAnalysisController:
         return {"success": True, "return_info": f"{instrument} ok"}
 
 
+def _make_status_detail(
+    raw_status: str,
+    instrument_status: str,
+    message: str = "",
+    total_sample_count: int = 0,
+    unrun_sample_count: int = 0,
+) -> Dict[str, Any]:
+    """
+    功能:
+        构造智达状态五键 dict, 与驱动 get_status_detail 保持同形.
+    参数:
+        raw_status/instrument_status/message/total_sample_count/unrun_sample_count: 与协议字段对应.
+    返回:
+        Dict[str, Any], 状态明细.
+    """
+    return {
+        "raw_status": raw_status,
+        "instrument_status": instrument_status,
+        "message": message,
+        "total_sample_count": total_sample_count,
+        "unrun_sample_count": unrun_sample_count,
+    }
+
+
 class FakeZhidaClient:
     """
     功能:
         提供状态查询测试用假智达客户端.
     """
 
-    status_by_host: Dict[str, str] = {
-        "gc-host": "Idle",
-        "uplc-host": "Offline",
-        "hplc-host": "Error",
+    status_detail_by_host: Dict[str, Dict[str, Any]] = {
+        "gc-host": _make_status_detail(raw_status="Idle", instrument_status="Idle"),
+        "uplc-host": _make_status_detail(raw_status="Offline", instrument_status="Offline"),
+        "hplc-host": _make_status_detail(raw_status="Error", instrument_status="Error"),
     }
     methods_by_host: Dict[str, Dict[str, Any]] = {
         "gc-host": {"result": "OK", "message": [" gc-method-a ", "gc-method-b", ""]},
@@ -83,14 +107,14 @@ class FakeZhidaClient:
         self.port = port
         self.timeout = timeout
 
-    def get_status(self) -> str:
+    def get_status_detail(self) -> Dict[str, Any]:
         """
         功能:
-            按 host 返回测试状态.
+            按 host 返回六键状态明细.
         返回:
-            str, 仪器状态.
+            Dict[str, Any], 状态明细.
         """
-        return self.status_by_host[self.host]
+        return self.status_detail_by_host[self.host]
 
     def get_methods(self) -> Dict[str, Any]:
         """
@@ -234,12 +258,60 @@ def test_status_returns_three_analysis_devices(
     assert response.status_code == 200
     items = response.json()["items"]
     assert [item["instrument"] for item in items] == ["gc_ms", "uplc_qtof", "hplc"]
-    assert items[0]["status"] == "Idle"
+    assert items[0]["instrument_status"] == "Idle"
     assert items[0]["connected"] is True
-    assert items[1]["status"] == "Offline"
+    assert "queue_status" not in items[0]
+    assert items[0]["total_sample_count"] == 0
+    assert items[0]["unrun_sample_count"] == 0
+    assert items[0]["message"] == ""
+    assert items[1]["instrument_status"] == "Offline"
     assert items[1]["connected"] is False
-    assert items[2]["status"] == "Error"
+    assert items[2]["instrument_status"] == "Error"
     assert items[2]["connected"] is False
+
+
+def test_status_passes_run_sample_and_sample_counts(
+    api_client: tuple[TestClient, FakeAnalysisController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能:
+        验证 RunSample 状态在线, 并透传样品计数与消息.
+    """
+    client, _fake_controller = api_client
+
+    class RunSampleZhidaClient(FakeZhidaClient):
+        """
+        功能:
+            提供 gc-host 上 RunSample 状态 fixture.
+        """
+
+        status_detail_by_host = {
+            "gc-host": _make_status_detail(
+                raw_status="RunSample",
+                instrument_status="RunSample",
+                message="sample active",
+                total_sample_count=10,
+                unrun_sample_count=4,
+            ),
+            "uplc-host": _make_status_detail(raw_status="Idle", instrument_status="Idle"),
+            "hplc-host": _make_status_detail(raw_status="Idle", instrument_status="Idle"),
+        }
+
+    monkeypatch.setattr(analysis, "ZhidaClient", RunSampleZhidaClient)
+
+    response = client.get("/api/analysis/status")
+
+    assert response.status_code == 200
+    gc_item = response.json()["items"][0]
+    assert gc_item["instrument"] == "gc_ms"
+    assert gc_item["raw_status"] == "RunSample"
+    assert gc_item["instrument_status"] == "RunSample"
+    assert "queue_status" not in gc_item
+    assert gc_item["message"] == "sample active"
+    assert gc_item["total_sample_count"] == 10
+    assert gc_item["unrun_sample_count"] == 4
+    assert gc_item["connected"] is True
 
 
 def test_methods_returns_three_analysis_devices_with_parsed_methods(
@@ -354,6 +426,75 @@ def test_submit_saves_csv_with_fixed_header(
     assert rows[0] == analysis.CSV_HEADERS
     assert rows[1] == ["S001", "method-a", "Rack 1", "1", "1", "S001"]
     assert fake_controller.calls == [("gc_ms", str(csv_path))]
+
+
+def test_submit_accepts_auto_wash_stop_rows_with_zero_injection(
+    api_client: tuple[TestClient, FakeAnalysisController],
+) -> None:
+    """
+    功能:
+        验证前端追加的冲柱和停机行允许 0 进样量, 并按固定表头保存到 CSV.
+    """
+    client, fake_controller = api_client
+    uplc_sample = _sample_row("Rack 2")
+    uplc_sample["VialPos"] = 8
+    hplc_sample = _sample_row("Rack 3")
+    hplc_sample["VialPos"] = 9
+    response = client.post(
+        "/api/analysis/submit",
+        json={
+            "tables": {
+                "uplc_qtof": [
+                    uplc_sample,
+                    {
+                        "SampleName": "wash_stop",
+                        "AcqMethod": "wash_stop",
+                        "RackCode": "Rack 2",
+                        "VialPos": 8,
+                        "SmplInjVol": 0,
+                        "OutputFile": "wash_stop",
+                    },
+                ],
+                "hplc": [
+                    hplc_sample,
+                    {
+                        "SampleName": "wash",
+                        "AcqMethod": "wash",
+                        "RackCode": "Rack 3",
+                        "VialPos": 9,
+                        "SmplInjVol": 0,
+                        "OutputFile": "wash",
+                    },
+                    {
+                        "SampleName": "stop",
+                        "AcqMethod": "stop",
+                        "RackCode": "Rack 3",
+                        "VialPos": 9,
+                        "SmplInjVol": 0,
+                        "OutputFile": "stop",
+                    },
+                ],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _wait_job(client, body["job_id"])
+
+    uplc_csv_path = Path(body["saved_files"]["uplc_qtof"])
+    with uplc_csv_path.open("r", encoding="utf-8", newline="") as file_obj:
+        uplc_rows = list(csv.reader(file_obj))
+    hplc_csv_path = Path(body["saved_files"]["hplc"])
+    with hplc_csv_path.open("r", encoding="utf-8", newline="") as file_obj:
+        hplc_rows = list(csv.reader(file_obj))
+
+    assert uplc_rows[0] == analysis.CSV_HEADERS
+    assert uplc_rows[-1] == ["wash_stop", "wash_stop", "Rack 2", "8", "0", "wash_stop"]
+    assert hplc_rows[0] == analysis.CSV_HEADERS
+    assert hplc_rows[-2] == ["wash", "wash", "Rack 3", "9", "0", "wash"]
+    assert hplc_rows[-1] == ["stop", "stop", "Rack 3", "9", "0", "stop"]
+    assert [instrument for instrument, _path in fake_controller.calls] == ["uplc_qtof", "hplc"]
 
 
 def test_submit_uses_fixed_instrument_order(

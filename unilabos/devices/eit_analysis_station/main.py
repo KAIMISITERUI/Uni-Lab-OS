@@ -105,32 +105,33 @@ def _get_analysis_device_configs(settings: Any) -> Dict[str, Dict[str, Any]]:
 def _print_status_detail(
     device_name: str,
     config: Dict[str, Any],
-    status_detail: Dict[str, str],
+    status_detail: Dict[str, Any],
 ) -> None:
     """
     功能:
-        打印单台分析设备的原始状态, 主状态和子状态.
+        打印单台分析设备的原始状态, 仪器状态, 诊断消息与样品计数.
     参数:
         device_name: 设备显示名.
         config: 设备连接配置, 包含 host/port.
-        status_detail: ZhidaClient.get_status_detail 返回的状态详情.
+        status_detail: ZhidaClient.get_status_detail 返回的状态详情, 五键 dict.
     返回:
         无.
     """
-    raw_status = status_detail["raw_status"]
-    if raw_status == "":
-        raw_status = "(空)"
-
-    sub_status = status_detail["sub_status"]
-    if sub_status == "":
-        sub_status = "(无)"
+    raw_status = status_detail["raw_status"] or "(空)"
+    message = status_detail["message"] or "(无)"
+    total_sample_count = status_detail["total_sample_count"]
+    unrun_sample_count = status_detail["unrun_sample_count"]
+    finished_sample_count = max(total_sample_count - unrun_sample_count, 0)
 
     print(
         "\n"
         f"  [{device_name}] {config['host']}:{config['port']}\n"
         f"    原始状态: {raw_status}\n"
-        f"    主状态: {status_detail['base_status']}\n"
-        f"    子状态: {sub_status}"
+        f"    仪器状态: {status_detail['instrument_status']}\n"
+        f"    消息: {message}\n"
+        f"    样品总数: {total_sample_count}\n"
+        f"    未运行样品数: {unrun_sample_count}\n"
+        f"    样品进度: {finished_sample_count}/{total_sample_count}"
     )
 
 

@@ -46,7 +46,7 @@ INSTRUMENT_NAMES: Dict[str, str] = {
     "hplc": "HPLC",
 }
 ALLOWED_RACK_CODES = {f"Rack {index}" for index in range(1, 7)}
-OFFLINE_STATUSES = {"", "offline", "error", "unknown"}
+OFFLINE_INSTRUMENT_STATUSES = {"", "Offline", "Error", "Unknown"}
 
 
 class AnalysisSampleRow(BaseModel):
@@ -237,11 +237,11 @@ def _get_device_configs(controller: AnalysisStationController) -> List[JsonDict]
 def _read_device_status(config: JsonDict) -> JsonDict:
     """
     功能:
-        调用单台分析仪器的 get_status 接口并整理连接状态.
+        调用单台分析仪器的 get_status_detail 接口并整理连接状态与样品进度.
     参数:
         config: Dict[str, Any], 仪器连接配置.
     返回:
-        Dict[str, Any], 仪器状态.
+        Dict[str, Any], 仪器状态, 含 raw_status/instrument_status/message/total_sample_count/unrun_sample_count/connected 字段.
     """
     client = ZhidaClient(
         host=str(config["host"]),
@@ -250,22 +250,32 @@ def _read_device_status(config: JsonDict) -> JsonDict:
     )
     error_message = ""
     try:
-        status_text = client.get_status()
+        status_detail = client.get_status_detail()
     except Exception as exc:
         logger.exception("分析仪器状态查询失败, instrument=%s", config["instrument"])
-        status_text = "Error"
+        # 兜底为与驱动同形的五键 dict, 保证前端始终可直接读取.
+        status_detail = {
+            "raw_status": "Error",
+            "instrument_status": "Error",
+            "message": "",
+            "total_sample_count": 0,
+            "unrun_sample_count": 0,
+        }
         error_message = str(exc)
     finally:
         client.close()
 
-    normalized_status = str(status_text or "").strip()
-    connected = normalized_status.lower() not in OFFLINE_STATUSES
+    connected = status_detail["instrument_status"] not in OFFLINE_INSTRUMENT_STATUSES
     result: JsonDict = {
         "instrument": config["instrument"],
         "name": config["name"],
         "host": config["host"],
         "port": config["port"],
-        "status": normalized_status,
+        "raw_status": status_detail["raw_status"],
+        "instrument_status": status_detail["instrument_status"],
+        "message": status_detail["message"],
+        "total_sample_count": status_detail["total_sample_count"],
+        "unrun_sample_count": status_detail["unrun_sample_count"],
         "connected": connected,
     }
     if error_message != "":
