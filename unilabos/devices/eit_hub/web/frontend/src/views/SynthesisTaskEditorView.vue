@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, ref, watch, type ComponentPublicInstance } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheck,
+  CopyDocument,
   DocumentChecked,
   Minus,
   Plus,
   Refresh,
+  TrendCharts,
   Upload,
 } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
@@ -23,6 +25,10 @@ import { getErrorMessage } from '../api/http'
 import EditableSpreadsheet from '../components/EditableSpreadsheet.vue'
 
 type SpreadsheetRow = Record<string, unknown> | unknown[]
+type FillMode = 'increment' | 'copy'
+type EditableSpreadsheetRef = ComponentPublicInstance & {
+  fillSelectedRange: (mode: FillMode) => boolean
+}
 
 const TASK_EDITOR_DRAFT_KEY = 'eit_hub.synthesis_task_editor_draft'
 
@@ -30,6 +36,7 @@ const templateData = ref<ReactionTemplate | null>(null)
 const currentJobId = ref('')
 const loading = ref(false)
 const chemicalLoading = ref(false)
+const spreadsheetRef = ref<EditableSpreadsheetRef | null>(null)
 let skipTemplatePersist = false
 
 const experimentCount = computed(() => templateData.value?.rows.length || 12)
@@ -224,6 +231,14 @@ function removeReagentPair() {
   templateData.value.reagent_pair_count -= 1
 }
 
+function fillTemplateTable(mode: FillMode) {
+  if (spreadsheetRef.value === null) {
+    ElMessage.warning('表格尚未就绪')
+    return
+  }
+  spreadsheetRef.value.fillSelectedRange(mode)
+}
+
 function updateTemplateRows(rows: SpreadsheetRow[]) {
   if (templateData.value === null) {
     return
@@ -347,12 +362,15 @@ watch(
         <div class="button-row">
           <el-button :icon="Plus" @click="addReagentPair">试剂列</el-button>
           <el-button :icon="Minus" @click="removeReagentPair">试剂列</el-button>
+          <el-button :icon="TrendCharts" @click="fillTemplateTable('increment')">递增填充</el-button>
+          <el-button :icon="CopyDocument" @click="fillTemplateTable('copy')">复制填充</el-button>
         </div>
       </div>
 
       <div v-if="templateData !== null" class="spreadsheet-wrap">
         <EditableSpreadsheet
           :key="spreadsheetKey"
+          ref="spreadsheetRef"
           :model-value="templateData.rows"
           :col-headers="templateData.headers"
           :columns="spreadsheetColumns"

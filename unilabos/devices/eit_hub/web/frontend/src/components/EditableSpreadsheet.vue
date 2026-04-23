@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { HotTable } from '@handsontable/vue3'
 import { registerAllModules } from 'handsontable/registry'
 import 'handsontable/styles/handsontable.min.css'
@@ -8,6 +9,7 @@ import 'handsontable/styles/ht-theme-main.min.css'
 type SpreadsheetRow = Record<string, unknown> | unknown[]
 type SpreadsheetColumn = Record<string, unknown>
 type AutofillDirection = 'up' | 'down' | 'left' | 'right'
+type FillMode = 'increment' | 'copy'
 type CellCoordsLike = {
   row: number
   col: number
@@ -19,6 +21,45 @@ type CellRangeLike = {
   getBottomRightCorner?: () => CellCoordsLike
   getHeight?: () => number
   getWidth?: () => number
+}
+type RangeBox = {
+  top: number
+  bottom: number
+  left: number
+  right: number
+  height: number
+  width: number
+}
+type SelectedRowRange = {
+  start: number
+  end: number
+}
+type HotCellChange = [number, number, unknown]
+type HotInstanceLike = {
+  destroyEditor: (revertOriginal?: boolean, prepareEditorIfNeeded?: boolean) => void
+  getSourceData: () => SpreadsheetRow[]
+  loadData: (data: SpreadsheetRow[], source?: string) => void
+  getSelectedRangeLast: () => CellRangeLike | undefined
+  getDataAtCell: (row: number, col: number) => unknown
+  getCellMeta: (row: number, col: number) => { readOnly?: boolean }
+  setDataAtCell: (changes: HotCellChange[], source?: string) => void
+  countRows: () => number
+  countCols: () => number
+  render: () => void
+}
+type IncrementTarget =
+  | { kind: 'number'; value: number }
+  | {
+      kind: 'text'
+      value: number
+      prefix: string
+      suffix: string
+      decimals: number
+      width: number
+    }
+type IncrementSeed = {
+  index: number
+  target: IncrementTarget
 }
 
 const props = withDefaults(
@@ -45,6 +86,13 @@ const emit = defineEmits<{
 registerAllModules()
 
 const tableData = ref<SpreadsheetRow[]>(cloneRows(props.modelValue))
+const hotTableRef = ref<
+  (InstanceType<typeof HotTable> & {
+    hotInstance?: HotInstanceLike
+  }) | null
+>(null)
+const selectedRange = ref<RangeBox | null>(null)
+let skipNextModelReload = false
 
 const normalizedColumns = computed(() => {
   return props.columns.map((column) => {
@@ -61,7 +109,17 @@ const normalizedColumns = computed(() => {
 watch(
   () => props.modelValue,
   (rows) => {
-    tableData.value = cloneRows(rows)
+    const nextRows = cloneRows(rows)
+    tableData.value = nextRows
+    if (skipNextModelReload === true) {
+      skipNextModelReload = false
+      return
+    }
+    const hotInstance = getHotInstance()
+    if (hotInstance !== undefined) {
+      hotInstance.loadData(cloneRows(nextRows), 'loadData')
+      hotInstance.render()
+    }
   },
   { deep: true },
 )
@@ -96,12 +154,14 @@ const hotSettings = computed(() => {
       if (source === 'loadData') {
         return
       }
-      emit('update:modelValue', cloneRows(tableData.value))
+      syncSourceData(true)
     },
-    afterSelectionEnd: (row: number) => {
-      emit('selected-row', row >= 0 ? row : null)
+    afterSelectionEnd: (row: number, col: number, row2: number, col2: number) => {
+      selectedRange.value = buildRangeBoxFromCoords(row, col, row2, col2)
+      emit('selected-row', row2 >= 0 ? row2 : null)
     },
     afterDeselect: () => {
+      selectedRange.value = null
       emit('selected-row', null)
     },
   }
@@ -115,6 +175,68 @@ function cloneRows(rows: SpreadsheetRow[]): SpreadsheetRow[] {
     return { ...row }
   })
 }
+
+function getHotInstance(): HotInstanceLike | undefined {
+  return hotTableRef.value?.hotInstance
+}
+
+function syncSourceData(skipModelReload = false): SpreadsheetRow[] {
+  const hotInstance = getHotInstance()
+  if (hotInstance !== undefined) {
+    hotInstance.destroyEditor(false, false)
+    tableData.value = cloneRows(hotInstance.getSourceData())
+  }
+  const rows = cloneRows(tableData.value)
+  if (skipModelReload === true) {
+    skipNextModelReload = true
+  }
+  emit('update:modelValue', rows)
+  return rows
+}
+
+function getSelectedRowRange(): SelectedRowRange | null {
+  const hotInstance = getHotInstance()
+  const rangeBox = hotInstance !== undefined ? getActiveRangeBox(hotInstance) : selectedRange.value
+  if (rangeBox === null) {
+    return null
+  }
+  return {
+    start: rangeBox.top,
+    end: rangeBox.bottom,
+  }
+}
+
+function fillSelectedRange(mode: FillMode): boolean {
+  const hotInstance = getHotInstance()
+  if (hotInstance === undefined) {
+    ElMessage.warning('表格尚未就绪')
+    return false
+  }
+  hotInstance.destroyEditor(false, false)
+  const rangeBox = getActiveRangeBox(hotInstance)
+  if (rangeBox === null) {
+    ElMessage.warning('请先选择要填充的单元格区域')
+    return false
+  }
+  const changes = buildSelectedRangeFillChanges(hotInstance, rangeBox, mode)
+  if (changes.length === 0) {
+    if (mode === 'increment') {
+      ElMessage.warning('选区内没有可递增填充的数据')
+    } else {
+      ElMessage.warning('选区内没有可复制填充的数据')
+    }
+    return false
+  }
+  hotInstance.setDataAtCell(changes, `button-${mode}-fill`)
+  hotInstance.render()
+  return true
+}
+
+defineExpose({
+  fillSelectedRange,
+  getSelectedRowRange,
+  syncSourceData,
+})
 
 function buildIncrementalFillData(
   selectionData: unknown[][],
@@ -134,6 +256,74 @@ function buildIncrementalFillData(
     result.push(resultRow)
   }
   return result
+}
+
+function buildSelectedRangeFillChanges(
+  hotInstance: HotInstanceLike,
+  rangeBox: RangeBox,
+  mode: FillMode,
+): HotCellChange[] {
+  const changes: HotCellChange[] = []
+  for (let col = rangeBox.left; col <= rangeBox.right; col += 1) {
+    const cells = collectEditableColumnCells(hotInstance, rangeBox, col)
+    if (cells.length === 0) {
+      continue
+    }
+    const values = mode === 'increment' ? buildIncrementColumnValues(cells) : buildCopyColumnValues(cells)
+    if (values === null) {
+      continue
+    }
+    for (let index = 0; index < cells.length; index += 1) {
+      if (isSameCellValue(cells[index].value, values[index]) === true) {
+        continue
+      }
+      changes.push([cells[index].row, cells[index].col, values[index]])
+    }
+  }
+  return changes
+}
+
+function collectEditableColumnCells(hotInstance: HotInstanceLike, rangeBox: RangeBox, col: number) {
+  const cells: Array<{ row: number; col: number; value: unknown }> = []
+  for (let row = rangeBox.top; row <= rangeBox.bottom; row += 1) {
+    if (isEditableCell(hotInstance, row, col) === false) {
+      continue
+    }
+    cells.push({
+      row,
+      col,
+      value: hotInstance.getDataAtCell(row, col),
+    })
+  }
+  return cells
+}
+
+function buildCopyColumnValues(cells: Array<{ value: unknown }>): unknown[] | null {
+  if (cells.length === 0) {
+    return null
+  }
+  const sourceValue = cells[0].value
+  return cells.map(() => sourceValue)
+}
+
+function buildIncrementColumnValues(cells: Array<{ value: unknown }>): unknown[] | null {
+  const seeds = buildIncrementSeeds(cells.map((cell) => cell.value))
+  if (seeds.length === 0) {
+    return null
+  }
+  const formatTarget = mergeIncrementTargetFormat(seeds)
+  if (formatTarget === null) {
+    return null
+  }
+  const step = inferSeedStep(seeds)
+  if (step === null) {
+    return null
+  }
+  const firstSeed = seeds[0]
+  return cells.map((_cell, index) => {
+    const nextValue = firstSeed.target.value + step * (index - firstSeed.index)
+    return formatIncrementValue(formatTarget, nextValue)
+  })
 }
 
 function buildAutofillCellValue(
@@ -166,7 +356,7 @@ function buildAutofillCellValue(
   return incrementSeriesValue(values, col - sourceBox.left)
 }
 
-function getRangeBox(range: CellRangeLike, fallbackHeight: number, fallbackWidth: number) {
+function getRangeBox(range: CellRangeLike, fallbackHeight: number, fallbackWidth: number): RangeBox {
   const topLeft = range.getTopLeftCorner?.() || range.from || { row: 0, col: 0 }
   const bottomRight =
     range.getBottomRightCorner?.() ||
@@ -188,7 +378,49 @@ function getRangeBox(range: CellRangeLike, fallbackHeight: number, fallbackWidth
   }
 }
 
-function isInsideRange(range: ReturnType<typeof getRangeBox>, row: number, col: number): boolean {
+function buildRangeBoxFromCoords(row: number, col: number, row2: number, col2: number): RangeBox | null {
+  const top = Math.max(Math.min(row, row2), 0)
+  const bottom = Math.max(row, row2)
+  const left = Math.max(Math.min(col, col2), 0)
+  const right = Math.max(col, col2)
+  if (bottom < 0 || right < 0) {
+    return null
+  }
+  return {
+    top,
+    bottom,
+    left,
+    right,
+    height: bottom - top + 1,
+    width: right - left + 1,
+  }
+}
+
+function getActiveRangeBox(hotInstance: HotInstanceLike): RangeBox | null {
+  const range = hotInstance.getSelectedRangeLast()
+  const rawRangeBox =
+    range !== undefined ? getRangeBox(range, range.getHeight?.() || 1, range.getWidth?.() || 1) : selectedRange.value
+  if (rawRangeBox === null) {
+    return null
+  }
+  const top = Math.max(rawRangeBox.top, 0)
+  const bottom = Math.min(rawRangeBox.bottom, hotInstance.countRows() - 1)
+  const left = Math.max(rawRangeBox.left, 0)
+  const right = Math.min(rawRangeBox.right, hotInstance.countCols() - 1)
+  if (top > bottom || left > right) {
+    return null
+  }
+  return {
+    top,
+    bottom,
+    left,
+    right,
+    height: bottom - top + 1,
+    width: right - left + 1,
+  }
+}
+
+function isInsideRange(range: RangeBox, row: number, col: number): boolean {
   return row >= range.top && row <= range.bottom && col >= range.left && col <= range.right
 }
 
@@ -205,47 +437,26 @@ function incrementSeriesValue(values: unknown[], offset: number): unknown {
   const compactValues = values.length > 0 ? values : ['']
   const anchorIndex = offset >= 0 ? compactValues.length - 1 : 0
   const anchorValue = compactValues[anchorIndex]
-  const step = inferSeriesStep(compactValues)
-  return incrementCellValue(anchorValue, step * offset)
+  const anchorTarget = extractIncrementTarget(anchorValue)
+  if (anchorTarget === null) {
+    return anchorValue
+  }
+  const seeds = buildIncrementSeeds(compactValues)
+  const step = inferSeedStep(seeds)
+  if (step === null) {
+    return anchorValue
+  }
+  return formatIncrementValue(anchorTarget, anchorTarget.value + step * offset)
 }
 
-function inferSeriesStep(values: unknown[]): number {
-  if (values.length < 2) {
-    return 1
-  }
-  const first = extractIncrementTarget(values[0])
-  const last = extractIncrementTarget(values[values.length - 1])
-  if (first === null || last === null) {
-    return 1
-  }
-  const step = (last.value - first.value) / (values.length - 1)
-  if (Number.isFinite(step) === false) {
-    return 1
-  }
-  return step
-}
-
-function incrementCellValue(value: unknown, delta: number): unknown {
-  const target = extractIncrementTarget(value)
-  if (target === null) {
-    return value
-  }
-  const nextValue = target.value + delta
+function formatIncrementValue(target: IncrementTarget, nextValue: number): unknown {
   if (target.kind === 'number') {
-    return nextValue
+    return normalizeNumberPrecision(nextValue)
   }
-  if (target.kind === 'numeric-text') {
-    return formatNumericText(nextValue, target.decimals)
-  }
-  const nextInteger = Math.trunc(nextValue)
-  return `${target.prefix}${formatIntegerText(nextInteger, target.width)}`
+  return `${target.prefix}${formatNumericText(nextValue, target.decimals, target.width)}${target.suffix}`
 }
 
-function extractIncrementTarget(value: unknown):
-  | { kind: 'number'; value: number }
-  | { kind: 'numeric-text'; value: number; decimals: number }
-  | { kind: 'trailing-number'; value: number; prefix: string; width: number }
-  | null {
+function extractIncrementTarget(value: unknown): IncrementTarget | null {
   if (typeof value === 'number') {
     if (Number.isFinite(value) === false) {
       return null
@@ -256,31 +467,153 @@ function extractIncrementTarget(value: unknown):
   if (text === '') {
     return null
   }
-  if (/^-?\d+(\.\d+)?$/.test(text) === true) {
-    const decimalPart = text.split('.')[1] || ''
-    return {
-      kind: 'numeric-text',
-      value: Number(text),
-      decimals: decimalPart.length,
-    }
-  }
-  const match = text.match(/^(.*?)(-?\d+)$/)
-  if (match === null) {
+  const matches = Array.from(text.matchAll(/[+-]?\d+(?:\.\d+)?/g))
+  if (matches.length === 0) {
     return null
   }
+  const match = matches[matches.length - 1]
+  const normalizedMatch = normalizeNumericMatch(text, match)
+  if (normalizedMatch === null) {
+    return null
+  }
+  const decimalPart = normalizedMatch.numberText.split('.')[1] || ''
+  const integerPart = normalizedMatch.numberText.split('.')[0].replace(/^[+-]/, '')
   return {
-    kind: 'trailing-number',
-    value: Number(match[2]),
-    prefix: match[1],
-    width: match[2].replace('-', '').length,
+    kind: 'text',
+    value: Number(normalizedMatch.numberText),
+    prefix: text.slice(0, normalizedMatch.start),
+    suffix: text.slice(normalizedMatch.start + normalizedMatch.numberText.length),
+    decimals: decimalPart.length,
+    width: integerPart.length,
   }
 }
 
-function formatNumericText(value: number, decimals: number): string {
-  if (decimals <= 0) {
-    return String(Math.trunc(value))
+function normalizeNumericMatch(
+  text: string,
+  match: RegExpMatchArray,
+): { start: number; numberText: string } | null {
+  if (match.index === undefined) {
+    return null
   }
-  return value.toFixed(decimals)
+  let start = match.index
+  let numberText = match[0]
+  if ((numberText.startsWith('-') === true || numberText.startsWith('+') === true) && start > 0) {
+    const previousChar = text[start - 1]
+    if (/[A-Za-z0-9_\])]$/.test(previousChar) === true) {
+      start += 1
+      numberText = numberText.slice(1)
+    }
+  }
+  if (numberText === '' || numberText === '+' || numberText === '-') {
+    return null
+  }
+  return {
+    start,
+    numberText,
+  }
+}
+
+function buildIncrementSeeds(values: unknown[]): IncrementSeed[] {
+  const seeds: IncrementSeed[] = []
+  for (let index = 0; index < values.length; index += 1) {
+    if (isEmptyCellValue(values[index]) === true) {
+      continue
+    }
+    const target = extractIncrementTarget(values[index])
+    if (target === null) {
+      return []
+    }
+    seeds.push({
+      index,
+      target,
+    })
+  }
+  return seeds
+}
+
+function inferSeedStep(seeds: IncrementSeed[]): number | null {
+  if (seeds.length === 0) {
+    return null
+  }
+  if (mergeIncrementTargetFormat(seeds) === null) {
+    return null
+  }
+  if (seeds.length === 1) {
+    return 1
+  }
+  const first = seeds[0]
+  const last = seeds[seeds.length - 1]
+  const distance = last.index - first.index
+  if (distance === 0) {
+    return 1
+  }
+  const step = (last.target.value - first.target.value) / distance
+  if (Number.isFinite(step) === false) {
+    return null
+  }
+  return step
+}
+
+function mergeIncrementTargetFormat(seeds: IncrementSeed[]): IncrementTarget | null {
+  if (seeds.length === 0) {
+    return null
+  }
+  const firstTarget = seeds[0].target
+  if (firstTarget.kind === 'number') {
+    if (seeds.every((seed) => seed.target.kind === 'number') === false) {
+      return null
+    }
+    return firstTarget
+  }
+  let decimals = firstTarget.decimals
+  let width = firstTarget.width
+  for (const seed of seeds) {
+    if (seed.target.kind !== 'text') {
+      return null
+    }
+    if (seed.target.prefix !== firstTarget.prefix || seed.target.suffix !== firstTarget.suffix) {
+      return null
+    }
+    decimals = Math.max(decimals, seed.target.decimals)
+    width = Math.max(width, seed.target.width)
+  }
+  return {
+    ...firstTarget,
+    decimals,
+    width,
+  }
+}
+
+function isEditableCell(hotInstance: HotInstanceLike, row: number, col: number): boolean {
+  return hotInstance.getCellMeta(row, col).readOnly === true ? false : true
+}
+
+function isEmptyCellValue(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return true
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return true
+  }
+  return false
+}
+
+function isSameCellValue(currentValue: unknown, nextValue: unknown): boolean {
+  return Object.is(currentValue, nextValue)
+}
+
+function normalizeNumberPrecision(value: number): number {
+  return Number(value.toFixed(12))
+}
+
+function formatNumericText(value: number, decimals: number, width: number): string {
+  if (decimals <= 0) {
+    return formatIntegerText(Math.trunc(value), width)
+  }
+  const sign = value < 0 ? '-' : ''
+  const fixedText = Math.abs(value).toFixed(decimals)
+  const [integerText, decimalText] = fixedText.split('.')
+  return `${sign}${integerText.padStart(width, '0')}.${decimalText}`
 }
 
 function formatIntegerText(value: number, width: number): string {
@@ -292,7 +625,7 @@ function formatIntegerText(value: number, width: number): string {
 
 <template>
   <div class="editable-spreadsheet">
-    <HotTable :settings="hotSettings" />
+    <HotTable ref="hotTableRef" :settings="hotSettings" />
   </div>
 </template>
 

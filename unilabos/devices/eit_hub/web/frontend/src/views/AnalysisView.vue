@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onActivated, reactive, ref, watch } from 'vue'
+import { computed, onActivated, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Delete, Plus, Refresh, Upload } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, DeleteFilled, Plus, Refresh, TrendCharts, Upload } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
 import {
   type AnalysisInstrumentKey,
@@ -36,6 +36,16 @@ type InstrumentMeta = {
 }
 
 type SpreadsheetRow = Record<string, unknown> | unknown[]
+type FillMode = 'increment' | 'copy'
+type SelectedRowRange = {
+  start: number
+  end: number
+}
+type EditableSpreadsheetRef = ComponentPublicInstance & {
+  fillSelectedRange: (mode: FillMode) => boolean
+  getSelectedRowRange: () => SelectedRowRange | null
+  syncSourceData: () => SpreadsheetRow[]
+}
 
 const ANALYSIS_DRAFT_KEY = 'eit_hub.analysis_tables_draft'
 
@@ -80,6 +90,7 @@ const statusRows = ref<AnalysisStatusRow[]>([])
 const statusLoading = ref(false)
 const submitLoading = ref(false)
 const currentJobId = ref('')
+const spreadsheetRefs = ref<Partial<Record<AnalysisInstrumentKey, EditableSpreadsheetRef>>>({})
 
 restoreAnalysisDraft()
 
@@ -217,6 +228,7 @@ function applyMethodRows(rows: AnalysisMethodsRow[]) {
 async function submitTables() {
   submitLoading.value = true
   try {
+    syncSpreadsheetRows()
     const data = await submitAnalysisTables({ tables: buildSubmitPayload() })
     currentJobId.value = data.job_id
     ElMessage.success('分析任务已进入后台')
@@ -246,28 +258,87 @@ function cloneRow(row: AnalysisTableRow): AnalysisSampleRow {
   }
 }
 
+function syncSpreadsheetRows() {
+  for (const instrument of instruments) {
+    const spreadsheet = spreadsheetRefs.value[instrument.key]
+    if (spreadsheet !== undefined) {
+      const rows = spreadsheet.syncSourceData()
+      updateInstrumentRows(instrument.key, rows)
+    }
+  }
+}
+
+function setSpreadsheetRef(
+  instrument: AnalysisInstrumentKey,
+  component: Element | ComponentPublicInstance | null,
+) {
+  if (component === null) {
+    delete spreadsheetRefs.value[instrument]
+    return
+  }
+  spreadsheetRefs.value[instrument] = component as EditableSpreadsheetRef
+}
+
+function getActiveSpreadsheet(): EditableSpreadsheetRef | undefined {
+  return spreadsheetRefs.value[activeInstrument.value]
+}
+
+function syncActiveSpreadsheetRows(): AnalysisTableRow[] {
+  const instrument = activeInstrument.value
+  const spreadsheet = getActiveSpreadsheet()
+  if (spreadsheet !== undefined) {
+    const rows = spreadsheet.syncSourceData()
+    updateInstrumentRows(instrument, rows)
+  }
+  return tables[instrument]
+}
+
 function addRow() {
-  tables[activeInstrument.value].push(createEmptyRow())
+  const instrument = activeInstrument.value
+  const rows = syncActiveSpreadsheetRows()
+  tables[instrument] = [...rows, createEmptyRow()]
 }
 
 function deleteActiveRow() {
-  if (selectedRow.value === null) {
-    ElMessage.warning('请先选择要删除的样品行')
+  const instrument = activeInstrument.value
+  const spreadsheet = getActiveSpreadsheet()
+  const rowRange = spreadsheet?.getSelectedRowRange() ?? null
+  const rows = syncActiveSpreadsheetRows()
+  if (rows.length === 0) {
+    ElMessage.warning('没有可删除的行')
     return
   }
-  const rows = tables[activeInstrument.value]
-  if (rows.length <= 1) {
-    ElMessage.warning('至少保留一行')
-    return
-  }
-  rows.splice(selectedRow.value, 1)
+  const lastIndex = rows.length - 1
+  const startRow = rowRange !== null ? Math.max(Math.min(rowRange.start, lastIndex), 0) : lastIndex
+  const endRow = rowRange !== null ? Math.max(Math.min(rowRange.end, lastIndex), startRow) : lastIndex
+  tables[instrument] = rows.filter((_row, rowIndex) => rowIndex < startRow || rowIndex > endRow)
   selectedRow.value = null
 }
 
 function clearActiveTable() {
-  tables[activeInstrument.value] = createEmptyRows()
+  const instrument = activeInstrument.value
+  const rows = syncActiveSpreadsheetRows()
+  tables[instrument] = createEmptyRows(rows.length)
   selectedRow.value = null
-  ElMessage.success('表格已清空')
+  ElMessage.success('内容已清除')
+}
+
+function clearAllTables() {
+  syncSpreadsheetRows()
+  for (const instrument of instruments) {
+    tables[instrument.key] = createEmptyRows(tables[instrument.key].length)
+  }
+  selectedRow.value = null
+  ElMessage.success('所有内容已清除')
+}
+
+function fillActiveTable(mode: FillMode) {
+  const spreadsheet = getActiveSpreadsheet()
+  if (spreadsheet === undefined) {
+    ElMessage.warning('表格尚未就绪')
+    return
+  }
+  spreadsheet.fillSelectedRange(mode)
 }
 
 function onJobFinished(_job: JobState) {
@@ -438,7 +509,10 @@ watch(
           <el-button :icon="Refresh" :loading="statusLoading" @click="refreshAnalysisContent">刷新</el-button>
           <el-button :icon="Plus" @click="addRow">新增行</el-button>
           <el-button :icon="Delete" @click="deleteActiveRow">删除行</el-button>
-          <el-button @click="clearActiveTable">清空表格</el-button>
+          <el-button @click="clearActiveTable">清除内容</el-button>
+          <el-button :icon="DeleteFilled" @click="clearAllTables">清除所有内容</el-button>
+          <el-button :icon="TrendCharts" @click="fillActiveTable('increment')">递增填充</el-button>
+          <el-button :icon="CopyDocument" @click="fillActiveTable('copy')">复制填充</el-button>
           <el-button type="primary" :icon="Upload" :loading="submitLoading" @click="submitTables">
             保存并提交
           </el-button>
@@ -455,6 +529,7 @@ watch(
           <div class="spreadsheet-wrap">
             <EditableSpreadsheet
               :key="instrument.key"
+              :ref="(component) => setSpreadsheetRef(instrument.key, component)"
               :model-value="tables[instrument.key]"
               :col-headers="[...csvHeaders]"
               :columns="analysisColumnsByInstrument[instrument.key]"
