@@ -105,6 +105,9 @@ def _mount_frontend(app: FastAPI) -> None:
         返回:
             FileResponse, 静态文件响应.
         """
+        if full_path.startswith("api/") is True:
+            raise HTTPException(status_code=404, detail=f"未找到 API 路径: /{full_path}")
+
         candidate = _FRONTEND_DIST / full_path
         if full_path != "" and candidate.is_file():
             if candidate.name == "index.html":

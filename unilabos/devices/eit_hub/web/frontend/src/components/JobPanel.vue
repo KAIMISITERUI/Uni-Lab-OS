@@ -51,6 +51,41 @@ const statusType = computed(() => {
   return 'warning'
 })
 
+const resultRecord = computed<Record<string, unknown> | null>(() => {
+  if (job.value === null) {
+    return null
+  }
+  const result = job.value.result
+  if (result === null || result === undefined) {
+    return null
+  }
+  if (Array.isArray(result) === true || typeof result !== 'object') {
+    return null
+  }
+  return result as Record<string, unknown>
+})
+
+const hasResourceMissingResult = computed(() => {
+  if (job.value === null || job.value.name !== '物料核算') {
+    return false
+  }
+  if (resultRecord.value === null) {
+    return false
+  }
+  return Array.isArray(resultRecord.value.missing)
+})
+
+const missingItems = computed(() => {
+  if (hasResourceMissingResult.value === false || resultRecord.value === null) {
+    return []
+  }
+  const missing = resultRecord.value.missing
+  if (Array.isArray(missing) === false) {
+    return []
+  }
+  return missing.map((item) => formatResultItem(item))
+})
+
 async function loadJob() {
   if (props.jobId === '') {
     return
@@ -86,6 +121,19 @@ function stopPolling() {
     window.clearInterval(timer)
     timer = undefined
   }
+}
+
+function formatResultItem(item: unknown): string {
+  if (typeof item === 'string') {
+    return item
+  }
+  if (item === null || item === undefined) {
+    return ''
+  }
+  if (typeof item === 'object') {
+    return JSON.stringify(item)
+  }
+  return String(item)
 }
 
 watch(
@@ -159,6 +207,34 @@ onBeforeUnmount(stopPolling)
         :title="job.error"
         :closable="false"
       />
+
+      <el-alert
+        v-if="missingItems.length > 0"
+        style="margin-top: 12px"
+        type="warning"
+        title="资源审查缺失项"
+        :closable="false"
+      >
+        <ul class="missing-list">
+          <li v-for="item in missingItems" :key="item">{{ item }}</li>
+        </ul>
+      </el-alert>
+
+      <el-alert
+        v-else-if="hasResourceMissingResult === true"
+        style="margin-top: 12px"
+        type="success"
+        title="资源审查无缺失项"
+        :closable="false"
+      />
     </template>
   </div>
 </template>
+
+<style scoped>
+.missing-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+</style>

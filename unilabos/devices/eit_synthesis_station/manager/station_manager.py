@@ -1303,21 +1303,26 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         result = self.analyze_resource_readiness(task_payload, resource_rows, task_id=task_id)
 
         # 自动保存物料核算结果
-        if self._data_manager and task_id:
+        if self._data_manager is not None and task_id is not None:
             self._data_manager.save_resource_check(str(task_id), result)
 
-        # 自动生成上料文件
-        if auto_generate_batch_file and task_id:
-            self.auto_generate_batch_in_tray_from_resource_check(task_id)
+        # 自动生成上料文件, 无实验ID时直接使用本次核算结果.
+        if auto_generate_batch_file is True:
+            self.auto_generate_batch_in_tray_from_resource_check(task_id, resource_check=result)
 
         return result
 
-    def auto_generate_batch_in_tray_from_resource_check(self, task_id: Optional[int] = None) -> None:
+    def auto_generate_batch_in_tray_from_resource_check(
+        self,
+        task_id: Optional[int] = None,
+        resource_check: Optional[JsonDict] = None,
+    ) -> None:
         """
         功能:
             根据资源核查结果自动修改上料文件, 考虑料盘规格, 优先填满一个料盘再使用下一个
         参数:
             task_id: 任务ID, 如果为None则自动搜索data/tasks中id最大且状态为UNSTARTED的任务
+            resource_check: Dict, 本次资源核查结果, 传入时直接使用该结果生成上料文件
         返回:
             None
         """
@@ -1325,7 +1330,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         import math
 
         # 1. 确定任务ID
-        if task_id is None:
+        if resource_check is None and task_id is None:
             tasks_dir = MODULE_ROOT / "data/tasks"
             if not tasks_dir.exists():
                 raise FileNotFoundError(f"任务目录不存在: {tasks_dir}")
@@ -1359,15 +1364,16 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             logger.info(f"自动选择任务ID: {task_id}")
 
         # 2. 读取resource_check.json
-        resource_check_path = MODULE_ROOT / "data" / "tasks" / str(task_id) / "resource_check.json"
-        if not resource_check_path.exists():
-            raise FileNotFoundError(f"未找到资源核查文件: {resource_check_path}")
+        if resource_check is None:
+            resource_check_path = MODULE_ROOT / "data" / "tasks" / str(task_id) / "resource_check.json"
+            if resource_check_path.exists() is False:
+                raise FileNotFoundError(f"未找到资源核查文件: {resource_check_path}")
 
-        with open(resource_check_path, "r", encoding="utf-8") as f:
-            resource_check = json.load(f)
+            with open(resource_check_path, "r", encoding="utf-8") as f:
+                resource_check = json.load(f)
 
         missing_list = resource_check.get("missing", [])
-        if not missing_list:
+        if len(missing_list) == 0:
             logger.info("没有缺失的物资, 无需生成上料文件")
             return
 

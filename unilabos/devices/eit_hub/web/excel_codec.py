@@ -26,6 +26,9 @@ DEVICES_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REACTION_TEMPLATE = (
     DEVICES_ROOT / "eit_synthesis_station" / "sheet" / "reaction_template.xlsx"
 )
+DEFAULT_BATCH_IN_TEMPLATE = DEVICES_ROOT / "eit_synthesis_station" / "sheet" / "batch_in_tray.xlsx"
+BATCH_IN_HEADERS = ("position", "tray_type", "content", "shelf_position", "storage")
+BATCH_IN_REQUIRED_HEADERS = ("position", "tray_type", "content")
 
 PARAMETER_NAMES = (
     "实验名称",
@@ -141,6 +144,64 @@ def write_reaction_template(payload: JsonDict, path: Path = DEFAULT_REACTION_TEM
     return read_reaction_template(template_path)
 
 
+def read_batch_in_template(path: Path = DEFAULT_BATCH_IN_TEMPLATE) -> JsonDict:
+    """
+    功能:
+        读取 batch_in_tray.xlsx 并返回 Web 可编辑的固定上料表格结构.
+    参数:
+        path: Path, 上料文件路径.
+    返回:
+        Dict[str, Any], 包含路径, 工作表名, 固定表头和上料行.
+    """
+    template_path = Path(path)
+    if template_path.exists() is False:
+        raise FileNotFoundError(f"未找到上料文件: {template_path}")
+
+    workbook = load_workbook(template_path, data_only=False)
+    try:
+        worksheet, header_row, header_map = _select_batch_in_sheet(workbook)
+        result = {
+            "path": str(template_path),
+            "sheet_name": worksheet.title,
+            "headers": list(BATCH_IN_HEADERS),
+            "tray_type_options": _read_batch_in_tray_type_options(workbook),
+            "rows": _read_batch_in_rows(worksheet, header_row, header_map),
+        }
+        logger.debug("读取上料文件完成: %s", template_path)
+        return result
+    finally:
+        workbook.close()
+
+
+def write_batch_in_template(payload: JsonDict, path: Path = DEFAULT_BATCH_IN_TEMPLATE) -> JsonDict:
+    """
+    功能:
+        将 Web 上料表格数据覆盖写回 batch_in_tray.xlsx.
+    参数:
+        payload: Dict[str, Any], 前端提交的上料表格结构.
+        path: Path, 上料文件路径.
+    返回:
+        Dict[str, Any], 写入后重新读取的上料表格结构.
+    """
+    template_path = Path(path)
+    if template_path.exists() is False:
+        raise FileNotFoundError(f"未找到上料文件: {template_path}")
+
+    _normalize_batch_in_headers(payload.get("headers"))
+    rows = _normalize_rows(payload.get("rows"), len(BATCH_IN_HEADERS))
+
+    workbook = load_workbook(template_path, data_only=False)
+    try:
+        worksheet, header_row, header_map = _select_batch_in_sheet(workbook)
+        _write_batch_in_area(worksheet, header_row, header_map["position"], rows)
+        safe_workbook_save(workbook, template_path)
+        logger.info("已保存上料文件: %s", template_path)
+    finally:
+        workbook.close()
+
+    return read_batch_in_template(template_path)
+
+
 def _cell_text(value: Any) -> str:
     """
     功能:
@@ -153,6 +214,121 @@ def _cell_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalize_batch_in_header_text(value: Any) -> str:
+    """
+    功能:
+        规范化上料表头文本, 用于定位固定列.
+    参数:
+        value: Any, 表头单元格原始值.
+    返回:
+        str, 去除空白和常见分隔符后的小写文本.
+    """
+    text = _cell_text(value)
+    return (
+        text.replace(" ", "")
+        .replace("\n", "")
+        .replace("\r", "")
+        .replace("\t", "")
+        .replace("_", "")
+        .replace("-", "")
+        .lower()
+    )
+
+
+def _batch_in_header_matches(normalized_text: str, expected_text: str) -> bool:
+    """
+    功能:
+        判断上料表头是否匹配固定列名.
+    参数:
+        normalized_text: str, 已规范化的表头文本.
+        expected_text: str, 期望列名.
+    返回:
+        bool, True 表示匹配.
+    """
+    if normalized_text == expected_text:
+        return True
+    if expected_text in {"content", "storage"} and normalized_text.startswith(expected_text):
+        return True
+    return False
+
+
+def _select_batch_in_sheet(workbook: Any) -> Tuple[Worksheet, int, Dict[str, int]]:
+    """
+    功能:
+        从上料工作簿中选择包含固定表头的工作表.
+    参数:
+        workbook: Any, openpyxl 工作簿对象.
+    返回:
+        Tuple[Worksheet, int, Dict[str, int]], 工作表, 表头行号和列映射.
+    """
+    candidate_sheet_names: List[str] = []
+    if "batch_in_tray" in workbook.sheetnames:
+        candidate_sheet_names.append("batch_in_tray")
+
+    active_sheet_name = workbook.active.title
+    if active_sheet_name not in candidate_sheet_names:
+        candidate_sheet_names.append(active_sheet_name)
+
+    for sheet_name in workbook.sheetnames:
+        if sheet_name not in candidate_sheet_names:
+            candidate_sheet_names.append(sheet_name)
+
+    for sheet_name in candidate_sheet_names:
+        worksheet = workbook[sheet_name]
+        header_row, header_map = _find_batch_in_header_map(worksheet)
+        if header_row is None or header_map is None:
+            continue
+        return worksheet, header_row, header_map
+
+    raise ValueError(f"未找到可解析的上料工作表, 可用工作表: {workbook.sheetnames}")
+
+
+def _find_batch_in_header_map(
+    worksheet: Worksheet,
+    max_scan_rows: int = 30,
+    max_scan_cols: int = 30,
+) -> Tuple[Optional[int], Optional[Dict[str, int]]]:
+    """
+    功能:
+        在单个工作表中定位上料表头行和固定列映射.
+    参数:
+        worksheet: Worksheet, 工作表.
+        max_scan_rows: int, 最大扫描行数.
+        max_scan_cols: int, 最大扫描列数.
+    返回:
+        Tuple[Optional[int], Optional[Dict[str, int]]], 命中时返回行号和列映射.
+    """
+    scan_rows = min(worksheet.max_row, max_scan_rows)
+    scan_cols = min(worksheet.max_column, max_scan_cols)
+    expected_headers = {
+        "position": "position",
+        "tray_type": "traytype",
+        "content": "content",
+        "shelf_position": "shelfposition",
+        "storage": "storage",
+    }
+
+    for row_index in range(1, scan_rows + 1):
+        normalized_cells: Dict[int, str] = {}
+        for col_index in range(1, scan_cols + 1):
+            normalized_cells[col_index] = _normalize_batch_in_header_text(
+                worksheet.cell(row_index, col_index).value
+            )
+
+        header_map: Dict[str, int] = {}
+        for field_name, expected_text in expected_headers.items():
+            for col_index, normalized_text in normalized_cells.items():
+                if _batch_in_header_matches(normalized_text, expected_text) is False:
+                    continue
+                header_map[field_name] = col_index
+                break
+
+        if all(field_name in header_map for field_name in BATCH_IN_REQUIRED_HEADERS) is True:
+            return row_index, header_map
+
+    return None, None
 
 
 def _select_experiment_sheet(worksheets: Iterable[Worksheet]) -> Tuple[Worksheet, int, int]:
@@ -234,6 +410,64 @@ def _read_experiment_rows(
                 row_values.append(value)
         rows.append(row_values)
     return rows
+
+
+def _read_batch_in_rows(
+    worksheet: Worksheet,
+    header_row: int,
+    header_map: Dict[str, int],
+) -> List[List[Any]]:
+    """
+    功能:
+        按固定上料列顺序读取上料数据行.
+    参数:
+        worksheet: Worksheet, 工作表.
+        header_row: int, 表头行.
+        header_map: Dict[str, int], 字段到列号的映射.
+    返回:
+        List[List[Any]], 上料数据行.
+    """
+    rows: List[List[Any]] = []
+    for row_index in range(header_row + 1, worksheet.max_row + 1):
+        position = worksheet.cell(row_index, header_map["position"]).value
+        if _cell_text(position) == "":
+            continue
+
+        row_values: List[Any] = []
+        for header_text in BATCH_IN_HEADERS:
+            col_index = header_map.get(header_text)
+            if col_index is None:
+                row_values.append("")
+                continue
+            value = worksheet.cell(row_index, col_index).value
+            if value is None:
+                row_values.append("")
+            else:
+                row_values.append(value)
+        rows.append(row_values)
+    return rows
+
+
+def _read_batch_in_tray_type_options(workbook: Any) -> List[str]:
+    """
+    功能:
+        从上料文件隐藏校验表读取 tray_type 下拉选项.
+    参数:
+        workbook: Any, openpyxl 工作簿对象.
+    返回:
+        List[str], 托盘类型下拉选项.
+    """
+    if "validation_meta" not in workbook.sheetnames:
+        return []
+
+    worksheet = workbook["validation_meta"]
+    options: List[str] = []
+    for row_index in range(1, worksheet.max_row + 1):
+        option_text = _cell_text(worksheet.cell(row_index, 1).value)
+        if option_text == "":
+            continue
+        options.append(option_text)
+    return options
 
 
 def _read_param_rows(worksheet: Worksheet) -> List[JsonDict]:
@@ -326,6 +560,25 @@ def _normalize_rows(raw_rows: Any, width: int) -> List[List[Any]]:
     return rows
 
 
+def _normalize_batch_in_headers(raw_headers: Any) -> List[str]:
+    """
+    功能:
+        校验上料表格固定表头.
+    参数:
+        raw_headers: Any, 前端提交的表头.
+    返回:
+        List[str], 固定上料表头.
+    """
+    if isinstance(raw_headers, list) is False:
+        raise ValueError("上料 headers 必须是列表.")
+
+    headers = [_cell_text(item) for item in raw_headers]
+    expected_headers = list(BATCH_IN_HEADERS)
+    if headers != expected_headers:
+        raise ValueError(f"上料 headers 必须是: {', '.join(expected_headers)}.")
+    return expected_headers
+
+
 def _collect_params(payload: JsonDict) -> JsonDict:
     """
     功能:
@@ -414,6 +667,41 @@ def _write_experiment_area(
     for row_offset, row_values in enumerate(rows, start=1):
         for col_offset, value in enumerate(row_values):
             worksheet.cell(header_row + row_offset, exp_col + col_offset, value=value)
+
+
+def _write_batch_in_area(
+    worksheet: Worksheet,
+    header_row: int,
+    start_col: int,
+    rows: List[List[Any]],
+) -> None:
+    """
+    功能:
+        覆盖写入上料表头和数据区.
+    参数:
+        worksheet: Worksheet, 工作表.
+        header_row: int, 表头行.
+        start_col: int, 上料表起始列.
+        rows: List[List[Any]], 上料数据行.
+    返回:
+        None.
+    """
+    clear_height = max(worksheet.max_row - header_row + 1, len(rows) + 8, 101)
+    clear_width = len(BATCH_IN_HEADERS)
+
+    for row_offset in range(0, clear_height):
+        for col_offset in range(0, clear_width):
+            cell = worksheet.cell(header_row + row_offset, start_col + col_offset)
+            if isinstance(cell, MergedCell):
+                continue
+            cell.value = None
+
+    for col_offset, header_text in enumerate(BATCH_IN_HEADERS):
+        worksheet.cell(header_row, start_col + col_offset, value=header_text)
+
+    for row_offset, row_values in enumerate(rows, start=1):
+        for col_offset, value in enumerate(row_values):
+            worksheet.cell(header_row + row_offset, start_col + col_offset, value=value)
 
 
 def _count_reagent_pairs(headers: List[str]) -> int:

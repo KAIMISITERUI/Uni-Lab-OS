@@ -17,7 +17,14 @@ from unilabos.devices.eit_synthesis_station.manager.station_manager import (
 )
 
 from ..deps import get_synthesis_manager
-from ..excel_codec import DEFAULT_REACTION_TEMPLATE, read_reaction_template, write_reaction_template
+from ..excel_codec import (
+    DEFAULT_BATCH_IN_TEMPLATE,
+    DEFAULT_REACTION_TEMPLATE,
+    read_batch_in_template,
+    read_reaction_template,
+    write_batch_in_template,
+    write_reaction_template,
+)
 from ..jobs import JobBusyError, job_manager
 
 logger = logging.getLogger("EITHubSynthesisRouter")
@@ -53,6 +60,19 @@ class W1ShelfRequest(BaseModel):
 
     position: str
     action: str
+
+
+class ResourceCheckRequest(BaseModel):
+    """
+    功能:
+        承载物料核算请求, 包含任务模板和是否自动修改上料文件.
+    参数:
+        template: Optional[Dict[str, Any]], 任务模板结构.
+        auto_generate_batch_file: bool, 是否在核算后自动修改上料文件.
+    """
+
+    template: Optional[JsonDict] = None
+    auto_generate_batch_file: bool = True
 
 
 def _job_response(job_id: str) -> JsonDict:
@@ -142,6 +162,40 @@ def save_reaction_template(payload: JsonDict = Body(...)) -> JsonDict:
         raise _json_error(f"保存模板失败: {exc}") from exc
 
 
+@router.get("/batch-in-template")
+def get_batch_in_template() -> JsonDict:
+    """
+    功能:
+        读取当前合成工站上料文件.
+    返回:
+        Dict[str, Any], 上料表格结构.
+    """
+    try:
+        return read_batch_in_template(DEFAULT_BATCH_IN_TEMPLATE)
+    except Exception as exc:
+        logger.exception("读取上料文件失败")
+        raise _json_error(f"读取上料文件失败: {exc}") from exc
+
+
+@router.put("/batch-in-template")
+def save_batch_in_template(payload: JsonDict = Body(...)) -> JsonDict:
+    """
+    功能:
+        将 Web 上料表格内容覆盖保存到默认 batch_in_tray.xlsx.
+    参数:
+        payload: Dict[str, Any], 上料表格结构.
+    返回:
+        Dict[str, Any], 保存后的上料表格结构.
+    """
+    if job_manager.is_busy() is True:
+        raise _json_error("当前已有合成工站后台任务正在运行, 请稍后再保存.", status.HTTP_409_CONFLICT)
+    try:
+        return write_batch_in_template(payload, DEFAULT_BATCH_IN_TEMPLATE)
+    except Exception as exc:
+        logger.exception("保存上料文件失败")
+        raise _json_error(f"保存上料文件失败: {exc}") from exc
+
+
 @router.post("/reaction-template/submit")
 def submit_reaction_template(
     payload: Optional[JsonDict] = Body(default=None),
@@ -160,36 +214,39 @@ def submit_reaction_template(
         if payload is not None:
             log("正在保存 Web 表格到本地 Excel 模板.")
             write_reaction_template(payload, DEFAULT_REACTION_TEMPLATE)
-        log("正在调用合成工站任务提交逻辑.")
+        log("正在调用合成工站任务上传逻辑.")
         task_id = manager.create_task_by_file(str(DEFAULT_REACTION_TEMPLATE))
-        log(f"合成任务提交完成, task_id={task_id}.")
+        log(f"合成任务上传完成, task_id={task_id}.")
         return {"task_id": task_id}
 
-    return _start_job("提交合成任务", _target)
+    return _start_job("上传任务", _target)
 
 
 @router.post("/resource-check")
 def check_resource(
-    payload: Optional[JsonDict] = Body(default=None),
+    request: ResourceCheckRequest = Body(...),
     manager: SynthesisStationManager = Depends(get_synthesis_manager),
 ) -> JsonDict:
     """
     功能:
         保存 Web 表格并执行物料核算, 实际执行放入后台任务.
     参数:
-        payload: Optional[Dict[str, Any]], 模板结构, 为空时使用磁盘现有模板.
+        request: ResourceCheckRequest, 物料核算请求.
     返回:
         Dict[str, Any], 后台任务 ID.
     """
 
     def _target(log: Callable[[str], None]) -> JsonDict:
-        if payload is not None:
+        if request.template is not None:
             log("正在保存 Web 表格到本地 Excel 模板.")
-            write_reaction_template(payload, DEFAULT_REACTION_TEMPLATE)
-        log("正在执行物料核算, 并按现有逻辑生成上料文件.")
+            write_reaction_template(request.template, DEFAULT_REACTION_TEMPLATE)
+        if request.auto_generate_batch_file is True:
+            log("正在执行物料核算, 并自动修改上料文件.")
+        else:
+            log("正在执行物料核算, 不自动修改上料文件.")
         result = manager.check_resource_for_task(
             str(DEFAULT_REACTION_TEMPLATE),
-            auto_generate_batch_file=True,
+            auto_generate_batch_file=request.auto_generate_batch_file,
         )
         log("物料核算完成.")
         return result

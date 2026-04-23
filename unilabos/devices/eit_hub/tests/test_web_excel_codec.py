@@ -12,7 +12,9 @@ from typing import Any, Dict, List
 import openpyxl
 
 from unilabos.devices.eit_hub.web.excel_codec import (
+    read_batch_in_template,
     read_reaction_template,
+    write_batch_in_template,
     write_reaction_template,
 )
 
@@ -95,6 +97,45 @@ def _updated_payload() -> Dict[str, Any]:
     }
 
 
+def _create_batch_in_template(path: Path) -> None:
+    """
+    功能:
+        创建测试用上料文件.
+    参数:
+        path: Path, 输出路径.
+    返回:
+        None.
+    """
+    workbook = openpyxl.Workbook()
+    try:
+        worksheet = workbook.active
+        worksheet.title = "batch_in_tray"
+        worksheet.append(["position", "tray_type", "content", "shelf_position", "storage"])
+        worksheet.append(["TB-2-1", "2 mL试剂瓶托盘(201000705)", "A1|乙腈|1mL", "3-1", "乙腈|A柜"])
+        options_sheet = workbook.create_sheet("validation_meta")
+        options_sheet.cell(row=1, column=1, value="2 mL试剂瓶托盘(201000705) [A1-F8]")
+        options_sheet.cell(row=2, column=1, value="30 mL粉桶托盘(201000710) [A1-B1]")
+        workbook.save(path)
+    finally:
+        workbook.close()
+
+
+def _updated_batch_in_payload() -> Dict[str, Any]:
+    """
+    功能:
+        返回测试用上料表格 payload.
+    返回:
+        Dict[str, Any], 上料表格 payload.
+    """
+    return {
+        "headers": ["position", "tray_type", "content", "shelf_position", "storage"],
+        "rows": [
+            ["TB-2-2", "30 mL粉桶托盘(201000710)", "A1|碳酸钾|100mg", "3-2", "碳酸钾|B柜"],
+            ["TB-2-3", "2 mL反应试管托盘(201000726)", "12", "3-3", "2 mL反应管|耗材库"],
+        ],
+    }
+
+
 def test_reaction_template_read_write_round_trip(tmp_path: Path) -> None:
     """
     功能:
@@ -134,5 +175,38 @@ def test_reaction_template_read_write_round_trip(tmp_path: Path) -> None:
         assert workbook["实验方案设定"]["B10"].value == "Generic_5min"
         assert workbook["实验方案设定"]["B11"].value is None
         assert workbook["实验方案设定"]["D2"].value == "对叔丁基苯甲醛"
+    finally:
+        workbook.close()
+
+
+def test_batch_in_template_read_write_round_trip(tmp_path: Path) -> None:
+    """
+    功能:
+        验证上料文件读取, Web 数据写回和再次读取保持一致.
+    """
+    batch_in_path = tmp_path / "batch_in_tray.xlsx"
+    _create_batch_in_template(batch_in_path)
+
+    original = read_batch_in_template(batch_in_path)
+    assert original["headers"] == ["position", "tray_type", "content", "shelf_position", "storage"]
+    assert original["tray_type_options"] == [
+        "2 mL试剂瓶托盘(201000705) [A1-F8]",
+        "30 mL粉桶托盘(201000710) [A1-B1]",
+    ]
+    assert original["rows"] == [
+        ["TB-2-1", "2 mL试剂瓶托盘(201000705)", "A1|乙腈|1mL", "3-1", "乙腈|A柜"]
+    ]
+
+    saved = write_batch_in_template(_updated_batch_in_payload(), batch_in_path)
+    assert saved["rows"] == _updated_batch_in_payload()["rows"]
+    assert saved["tray_type_options"] == original["tray_type_options"]
+
+    workbook = openpyxl.load_workbook(batch_in_path, data_only=False)
+    try:
+        worksheet = workbook["batch_in_tray"]
+        assert worksheet["A1"].value == "position"
+        assert worksheet["C1"].value == "content"
+        assert worksheet["A2"].value == "TB-2-2"
+        assert worksheet["C3"].value == "12"
     finally:
         workbook.close()

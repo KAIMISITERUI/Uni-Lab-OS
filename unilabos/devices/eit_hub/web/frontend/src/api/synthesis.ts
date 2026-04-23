@@ -18,6 +18,14 @@ export interface ReactionTemplate {
   reagent_pair_count: number
 }
 
+export interface BatchInTemplate {
+  path: string
+  sheet_name: string
+  headers: string[]
+  tray_type_options: string[]
+  rows: unknown[][]
+}
+
 export interface DashboardData {
   station_state: number | null
   glovebox_env: Record<string, unknown> | null
@@ -53,6 +61,11 @@ export interface JobCreateResponse {
   job_id: string
 }
 
+export interface ResourceCheckPayload {
+  template: ReactionTemplate
+  auto_generate_batch_file: boolean
+}
+
 export async function fetchDashboard(): Promise<DashboardData> {
   const { data } = await http.get<DashboardData>('/api/synthesis/dashboard')
   return data
@@ -68,12 +81,22 @@ export async function saveReactionTemplate(payload: ReactionTemplate): Promise<R
   return data
 }
 
+export async function fetchBatchInTemplate(): Promise<BatchInTemplate> {
+  const { data } = await http.get<BatchInTemplate>('/api/synthesis/batch-in-template')
+  return data
+}
+
+export async function saveBatchInTemplate(payload: BatchInTemplate): Promise<BatchInTemplate> {
+  const { data } = await http.put<BatchInTemplate>('/api/synthesis/batch-in-template', payload)
+  return data
+}
+
 export async function submitReactionTemplate(payload: ReactionTemplate): Promise<JobCreateResponse> {
   const { data } = await http.post<JobCreateResponse>('/api/synthesis/reaction-template/submit', payload)
   return data
 }
 
-export async function checkResource(payload: ReactionTemplate): Promise<JobCreateResponse> {
+export async function checkResource(payload: ResourceCheckPayload): Promise<JobCreateResponse> {
   const { data } = await http.post<JobCreateResponse>('/api/synthesis/resource-check', payload)
   return data
 }

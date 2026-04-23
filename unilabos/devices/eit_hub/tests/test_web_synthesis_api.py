@@ -19,7 +19,12 @@ from unilabos.devices.eit_hub.web.deps import get_synthesis_manager
 from unilabos.devices.eit_hub.web.jobs import JobManager
 from unilabos.devices.eit_hub.web.routers import synthesis
 
-from .test_web_excel_codec import _create_template, _updated_payload
+from .test_web_excel_codec import (
+    _create_batch_in_template,
+    _create_template,
+    _updated_batch_in_payload,
+    _updated_payload,
+)
 
 
 class FakeSynthesisManager:
@@ -31,6 +36,7 @@ class FakeSynthesisManager:
     def __init__(self) -> None:
         self.submitted_path: Optional[str] = None
         self.resource_check_path: Optional[str] = None
+        self.resource_check_auto_generate_batch_file: Optional[bool] = None
         self.entered_event: Optional[threading.Event] = None
         self.release_event: Optional[threading.Event] = None
         self.device_init_calls = 0
@@ -79,7 +85,12 @@ class FakeSynthesisManager:
             记录物料核算路径并返回测试结果.
         """
         self.resource_check_path = template_path
-        return {"ready": True, "auto_generate_batch_file": auto_generate_batch_file}
+        self.resource_check_auto_generate_batch_file = auto_generate_batch_file
+        return {
+            "ready": True,
+            "missing": ["乙腈:1mL"],
+            "auto_generate_batch_file": auto_generate_batch_file,
+        }
 
     def device_init(self) -> Dict[str, Any]:
         """
@@ -124,10 +135,13 @@ def api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestCli
         创建隔离的 Hub TestClient 和测试模板.
     """
     template_path = tmp_path / "reaction_template.xlsx"
+    batch_in_path = tmp_path / "batch_in_tray.xlsx"
     _create_template(template_path)
+    _create_batch_in_template(batch_in_path)
     fake_manager = FakeSynthesisManager()
 
     monkeypatch.setattr(synthesis, "DEFAULT_REACTION_TEMPLATE", template_path)
+    monkeypatch.setattr(synthesis, "DEFAULT_BATCH_IN_TEMPLATE", batch_in_path)
     monkeypatch.setattr(synthesis, "job_manager", JobManager())
 
     app = create_app()
@@ -180,7 +194,7 @@ def test_submit_saves_template_and_uses_default_path(
 ) -> None:
     """
     功能:
-        验证提交任务会先保存 Web 表格, 再把默认模板路径交给 create_task_by_file.
+        验证上传任务会先保存 Web 表格, 再把默认模板路径交给 create_task_by_file.
     """
     client, fake_manager, template_path = api_client
     response = client.post("/api/synthesis/reaction-template/submit", json=_updated_payload())
@@ -188,6 +202,7 @@ def test_submit_saves_template_and_uses_default_path(
     job_id = response.json()["job_id"]
 
     job = _wait_job(client, job_id)
+    assert job["name"] == "上传任务"
     assert job["result"]["task_id"] == 321
     assert fake_manager.submitted_path == str(template_path)
 
@@ -203,14 +218,61 @@ def test_resource_check_uses_default_path(
         验证物料核算使用默认模板路径并开启上料文件生成.
     """
     client, fake_manager, template_path = api_client
-    response = client.post("/api/synthesis/resource-check", json=_updated_payload())
+    response = client.post(
+        "/api/synthesis/resource-check",
+        json={"template": _updated_payload(), "auto_generate_batch_file": True},
+    )
     assert response.status_code == 200
     job_id = response.json()["job_id"]
 
     job = _wait_job(client, job_id)
     assert job["result"]["ready"] is True
+    assert job["result"]["missing"] == ["乙腈:1mL"]
     assert job["result"]["auto_generate_batch_file"] is True
+    assert fake_manager.resource_check_auto_generate_batch_file is True
     assert fake_manager.resource_check_path == str(template_path)
+
+
+def test_resource_check_can_disable_batch_file_generation(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证物料核算可以关闭自动修改上料文件选项.
+    """
+    client, fake_manager, template_path = api_client
+    response = client.post(
+        "/api/synthesis/resource-check",
+        json={"template": _updated_payload(), "auto_generate_batch_file": False},
+    )
+    assert response.status_code == 200
+
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["result"]["auto_generate_batch_file"] is False
+    assert fake_manager.resource_check_auto_generate_batch_file is False
+    assert fake_manager.resource_check_path == str(template_path)
+
+
+def test_batch_in_template_api_reads_and_writes(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证上料文件接口可以读取并保存固定上料表格.
+    """
+    client, _fake_manager, _template_path = api_client
+
+    original = client.get("/api/synthesis/batch-in-template")
+    assert original.status_code == 200
+    assert original.json()["headers"] == ["position", "tray_type", "content", "shelf_position", "storage"]
+
+    response = client.put("/api/synthesis/batch-in-template", json=_updated_batch_in_payload())
+    assert response.status_code == 200
+    assert response.json()["rows"] == _updated_batch_in_payload()["rows"]
+
+    saved = client.get("/api/synthesis/batch-in-template")
+    assert saved.status_code == 200
+    assert saved.json()["rows"] == _updated_batch_in_payload()["rows"]
 
 
 def test_device_init_calls_manager(
@@ -321,7 +383,10 @@ def test_second_exclusive_job_returns_409(
     assert first.status_code == 200
     assert fake_manager.entered_event.wait(timeout=2) is True
 
-    second = client.post("/api/synthesis/resource-check", json=_updated_payload())
+    second = client.post(
+        "/api/synthesis/resource-check",
+        json={"template": _updated_payload(), "auto_generate_batch_file": True},
+    )
     assert second.status_code == 409
 
     fake_manager.release_event.set()

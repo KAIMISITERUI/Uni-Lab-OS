@@ -15,11 +15,14 @@ import {
 } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
 import {
+  type BatchInTemplate,
   type JobState,
   type ParamRow,
   type ReactionTemplate,
   checkResource,
+  fetchBatchInTemplate,
   fetchReactionTemplate,
+  saveBatchInTemplate,
   saveReactionTemplate,
   submitReactionTemplate,
 } from '../api/synthesis'
@@ -76,11 +79,18 @@ const ANALYSIS_PARAM_CONFIG: Record<
 }
 
 const templateData = ref<ReactionTemplate | null>(null)
+const batchInData = ref<BatchInTemplate | null>(null)
 const currentJobId = ref('')
 const loading = ref(false)
+const batchInLoading = ref(false)
 const chemicalLoading = ref(false)
 const methodsLoading = ref(false)
 const spreadsheetRef = ref<EditableSpreadsheetRef | null>(null)
+const batchInSpreadsheetRef = ref<EditableSpreadsheetRef | null>(null)
+const autoGenerateBatchFile = ref(true)
+const refreshBatchInAfterResourceCheck = ref(false)
+const activeTableTab = ref<'reagent' | 'batchIn'>('reagent')
+const batchInSpreadsheetVersion = ref(0)
 const methodOptions = ref<Record<AnalysisInstrumentKey, string[]>>({
   gc_ms: [],
   uplc_qtof: [],
@@ -198,6 +208,43 @@ const spreadsheetKey = computed(() => {
   return `${templateData.value.headers.join('|')}-${templateData.value.rows.length}`
 })
 
+const batchInColumns = computed<Array<Record<string, unknown>>>(() => {
+  if (batchInData.value === null) {
+    return []
+  }
+  return batchInData.value.headers.map((header, index) => {
+    const widthMap: Record<string, number> = {
+      position: 110,
+      tray_type: 320,
+      content: 320,
+      shelf_position: 120,
+      storage: 240,
+    }
+    if (header === 'tray_type') {
+      return {
+        data: index,
+        type: 'dropdown',
+        source: batchInData.value?.tray_type_options || [],
+        strict: false,
+        allowInvalid: true,
+        width: widthMap[header],
+      }
+    }
+    return {
+      data: index,
+      type: 'text',
+      width: widthMap[header] || 160,
+    }
+  })
+})
+
+const batchInSpreadsheetKey = computed(() => {
+  if (batchInData.value === null) {
+    return 'empty'
+  }
+  return `${batchInData.value.headers.join('|')}-${batchInData.value.rows.length}-${batchInSpreadsheetVersion.value}`
+})
+
 async function loadTemplate(useDraft = true, options: TemplateLoadOptions = {}) {
   loading.value = true
   try {
@@ -212,6 +259,22 @@ async function loadTemplate(useDraft = true, options: TemplateLoadOptions = {}) 
   } finally {
     loading.value = false
   }
+}
+
+async function loadBatchInTemplate() {
+  batchInLoading.value = true
+  try {
+    setBatchInData(await fetchBatchInTemplate())
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    batchInLoading.value = false
+  }
+}
+
+function reloadEditorData() {
+  loadTemplate(false)
+  loadBatchInTemplate()
 }
 
 async function loadAnalysisMethods() {
@@ -284,17 +347,24 @@ async function saveTemplate() {
   if (templateData.value === null) {
     return
   }
-  const payload = buildActionTemplatePayload()
-  if (payload === null) {
+  if (batchInData.value === null) {
+    ElMessage.error('上料表格尚未加载')
+    return
+  }
+  const templatePayload = buildActionTemplatePayload()
+  const batchInPayload = buildBatchInPayload()
+  if (templatePayload === null || batchInPayload === null) {
     return
   }
   try {
-    const savedTemplate = await saveReactionTemplate(payload)
+    const savedTemplate = await saveReactionTemplate(templatePayload)
+    const savedBatchIn = await saveBatchInTemplate(batchInPayload)
     setTemplateData(savedTemplate)
+    setBatchInData(savedBatchIn)
     void nextTick(() => {
       persistTemplateDraft()
     })
-    ElMessage.success('模板已保存')
+    ElMessage.success('任务和上料文件已保存')
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   }
@@ -309,7 +379,11 @@ async function runResourceCheck() {
     return
   }
   try {
-    const data = await checkResource(payload)
+    refreshBatchInAfterResourceCheck.value = autoGenerateBatchFile.value
+    const data = await checkResource({
+      template: payload,
+      auto_generate_batch_file: autoGenerateBatchFile.value,
+    })
     currentJobId.value = data.job_id
     ElMessage.success('物料核算已进入后台')
   } catch (error) {
@@ -328,20 +402,28 @@ async function submitTemplate() {
   try {
     const data = await submitReactionTemplate(payload)
     currentJobId.value = data.job_id
-    ElMessage.success('提交任务已进入后台')
+    ElMessage.success('上传任务已进入后台')
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   }
 }
 
-function onJobFinished(_job: JobState) {
+function onJobFinished(job: JobState) {
   loadTemplate(false, { keepExperimentId: true })
+  if (
+    job.name === '物料核算' &&
+    job.status === 'succeeded' &&
+    refreshBatchInAfterResourceCheck.value === true
+  ) {
+    loadBatchInTemplate()
+  }
 }
 
 function buildActionTemplatePayload(): ReactionTemplate | null {
   if (templateData.value === null) {
     return null
   }
+  syncTemplateSpreadsheet()
   if (validateAnalysisParams() === false) {
     return null
   }
@@ -352,8 +434,20 @@ function buildActionTemplatePayload(): ReactionTemplate | null {
   return payload
 }
 
+function buildBatchInPayload(): BatchInTemplate | null {
+  if (batchInData.value === null) {
+    return null
+  }
+  syncBatchInSpreadsheet()
+  return cloneBatchInTemplate(batchInData.value)
+}
+
 function cloneReactionTemplate(data: ReactionTemplate): ReactionTemplate {
   return JSON.parse(JSON.stringify(data)) as ReactionTemplate
+}
+
+function cloneBatchInTemplate(data: BatchInTemplate): BatchInTemplate {
+  return JSON.parse(JSON.stringify(data)) as BatchInTemplate
 }
 
 function clearExperimentId(data: ReactionTemplate) {
@@ -572,17 +666,7 @@ function setExperimentCount(count: number) {
     return
   }
   const width = templateData.value.headers.length
-  const nextRows: unknown[][] = []
-  for (let index = 0; index < count; index += 1) {
-    const source = templateData.value.rows[index]
-    const row = Array.isArray(source) ? [...source] : []
-    while (row.length < width) {
-      row.push('')
-    }
-    row[0] = index + 1
-    nextRows.push(row.slice(0, width))
-  }
-  templateData.value.rows = nextRows
+  templateData.value.rows = buildTemplateRows(templateData.value.rows, width, count)
 }
 
 function addReagentPair() {
@@ -651,11 +735,36 @@ function updateTemplateRows(rows: SpreadsheetRow[]) {
     return
   }
   const width = templateData.value.headers.length
-  templateData.value.rows = rows.map((row, rowIndex) => {
-    const nextRow = normalizeSpreadsheetRow(row, width)
-    nextRow[0] = rowIndex + 1
-    return nextRow
-  })
+  const rowCount = resolveTemplateRowCount(
+    rows,
+    templateData.value.rows.length,
+    templateData.value.supported_experiment_counts,
+  )
+  templateData.value.rows = buildTemplateRows(rows, width, rowCount)
+}
+
+function updateBatchInRows(rows: SpreadsheetRow[]) {
+  if (batchInData.value === null) {
+    return
+  }
+  const width = batchInData.value.headers.length
+  batchInData.value.rows = rows.map((row) => normalizeSpreadsheetRow(row, width))
+}
+
+function syncTemplateSpreadsheet() {
+  if (spreadsheetRef.value === null) {
+    return
+  }
+  const rows = spreadsheetRef.value.syncSourceData()
+  updateTemplateRows(rows)
+}
+
+function syncBatchInSpreadsheet() {
+  if (batchInSpreadsheetRef.value === null) {
+    return
+  }
+  const rows = batchInSpreadsheetRef.value.syncSourceData()
+  updateBatchInRows(rows)
 }
 
 function setTemplateData(data: ReactionTemplate, options: TemplateLoadOptions = {}) {
@@ -664,11 +773,17 @@ function setTemplateData(data: ReactionTemplate, options: TemplateLoadOptions = 
     clearExperimentId(nextData)
   }
   syncAnalysisParamState(nextData)
+  normalizeTemplateDataRows(nextData)
   skipTemplatePersist = true
   templateData.value = nextData
   void nextTick(() => {
     skipTemplatePersist = false
   })
+}
+
+function setBatchInData(data: BatchInTemplate) {
+  batchInData.value = cloneBatchInTemplate(data)
+  batchInSpreadsheetVersion.value += 1
 }
 
 function readTemplateDraft(remoteTemplate: ReactionTemplate): ReactionTemplate | null {
@@ -754,8 +869,81 @@ function normalizeSpreadsheetRow(row: SpreadsheetRow, width: number): unknown[] 
   return values.slice(0, width)
 }
 
+function normalizeTemplateDataRows(data: ReactionTemplate) {
+  const width = data.headers.length
+  const rowCount = resolveTemplateRowCount(
+    data.rows,
+    data.rows.length,
+    data.supported_experiment_counts,
+  )
+  data.rows = buildTemplateRows(data.rows, width, rowCount)
+}
+
+function buildTemplateRows(rows: SpreadsheetRow[], width: number, count: number): unknown[][] {
+  const nextRows: unknown[][] = []
+  for (let index = 0; index < count; index += 1) {
+    const nextRow = normalizeSpreadsheetRow(rows[index], width)
+    nextRow[0] = index + 1
+    nextRows.push(nextRow)
+  }
+  return nextRows
+}
+
+function resolveTemplateRowCount(
+  rows: SpreadsheetRow[],
+  currentCount: number,
+  supportedCounts: number[],
+): number {
+  const supported = normalizeSupportedExperimentCounts(supportedCounts)
+  if (supported.includes(currentCount) === true) {
+    return currentCount
+  }
+
+  const meaningfulCount = countMeaningfulTemplateRows(rows)
+  if (meaningfulCount <= 0) {
+    return supported[0] || 12
+  }
+
+  const exactCount = supported.find((count) => count === meaningfulCount)
+  if (exactCount !== undefined) {
+    return exactCount
+  }
+
+  const nextCount = supported.find((count) => count >= meaningfulCount)
+  if (nextCount !== undefined) {
+    return nextCount
+  }
+
+  return supported[supported.length - 1] || meaningfulCount
+}
+
+function normalizeSupportedExperimentCounts(counts: number[]): number[] {
+  const fallbackCounts = [12, 24, 36, 48]
+  const sourceCounts = Array.isArray(counts) === true && counts.length > 0 ? counts : fallbackCounts
+  return [...new Set(sourceCounts)]
+    .filter((count) => Number.isFinite(count) === true && count > 0)
+    .sort((left, right) => left - right)
+}
+
+function countMeaningfulTemplateRows(rows: SpreadsheetRow[]): number {
+  let lastMeaningfulIndex = -1
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex]
+    const values = Array.isArray(row) === true ? row : []
+    for (let colIndex = 1; colIndex < values.length; colIndex += 1) {
+      if (cellText(values[colIndex]) === '') {
+        continue
+      }
+      lastMeaningfulIndex = rowIndex
+      break
+    }
+  }
+  return lastMeaningfulIndex + 1
+}
+
 onActivated(() => {
   loadTemplate()
+  loadBatchInTemplate()
   loadAnalysisMethods()
 })
 
@@ -795,10 +983,9 @@ watch(
               :value="count"
             />
           </el-select>
-          <el-button size="small" :icon="Refresh" @click="loadTemplate(false)">重载</el-button>
+          <el-button size="small" :icon="Refresh" @click="reloadEditorData">重载</el-button>
           <el-button size="small" type="primary" :icon="DocumentChecked" @click="saveTemplate">保存</el-button>
-          <el-button size="small" type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
-          <el-button size="small" type="success" :icon="Upload" @click="submitTemplate">提交任务</el-button>
+          <el-button size="small" type="success" :icon="Upload" @click="submitTemplate">上传任务</el-button>
         </div>
       </div>
 
@@ -879,33 +1066,52 @@ watch(
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-title">
-        <h2>试剂表格</h2>
-        <div class="button-row">
-          <el-button :icon="Plus" @click="addReagentPair">试剂列</el-button>
-          <el-button :icon="Minus" @click="removeReagentPair">试剂列</el-button>
-          <el-button :icon="Delete" @click="clearTemplateSelection">清除内容</el-button>
-          <el-button :icon="DeleteFilled" @click="clearAllTemplateContent">清除所有内容</el-button>
-          <el-button :icon="TrendCharts" @click="fillTemplateTable('increment')">递增填充</el-button>
-          <el-button :icon="CopyDocument" @click="fillTemplateTable('copy')">复制填充</el-button>
-        </div>
-      </div>
+    <section class="panel editor-table-panel">
+      <el-tabs v-model="activeTableTab" type="card" class="editor-table-tabs">
+        <el-tab-pane label="试剂表格" name="reagent">
+          <div class="button-row table-button-row">
+            <el-button :icon="Plus" @click="addReagentPair">试剂列</el-button>
+            <el-button :icon="Minus" @click="removeReagentPair">试剂列</el-button>
+            <el-button :icon="Delete" @click="clearTemplateSelection">清除内容</el-button>
+            <el-button :icon="DeleteFilled" @click="clearAllTemplateContent">清除所有内容</el-button>
+            <el-button :icon="TrendCharts" @click="fillTemplateTable('increment')">递增填充</el-button>
+            <el-button :icon="CopyDocument" @click="fillTemplateTable('copy')">复制填充</el-button>
+            <el-checkbox v-model="autoGenerateBatchFile" class="resource-check-option">自动修改上料文件</el-checkbox>
+            <el-button type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
+          </div>
 
-      <div v-if="templateData !== null" class="spreadsheet-wrap">
-        <EditableSpreadsheet
-          :key="spreadsheetKey"
-          ref="spreadsheetRef"
-          :model-value="templateData.rows"
-          :col-headers="templateData.headers"
-          :columns="spreadsheetColumns"
-          :height="520"
-          @update:model-value="updateTemplateRows"
-        />
-      </div>
+          <div v-if="templateData !== null" class="spreadsheet-wrap">
+            <EditableSpreadsheet
+              :key="spreadsheetKey"
+              ref="spreadsheetRef"
+              :model-value="templateData.rows"
+              :col-headers="templateData.headers"
+              :columns="spreadsheetColumns"
+              :height="520"
+              @update:model-value="updateTemplateRows"
+            />
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="上料表格" name="batchIn">
+          <div v-loading="batchInLoading" class="batch-in-tab-body">
+            <div v-if="batchInData !== null" class="spreadsheet-wrap">
+              <EditableSpreadsheet
+                :key="batchInSpreadsheetKey"
+                ref="batchInSpreadsheetRef"
+                :model-value="batchInData.rows"
+                :col-headers="batchInData.headers"
+                :columns="batchInColumns"
+                :height="520"
+                @update:model-value="updateBatchInRows"
+              />
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </section>
 
-    <JobPanel v-if="currentJobId !== ''" :job-id="currentJobId" @finished="onJobFinished" />
+    <JobPanel :job-id="currentJobId" @finished="onJobFinished" />
   </div>
 </template>
 
@@ -1020,6 +1226,46 @@ watch(
   grid-template-columns: minmax(180px, 1fr) 96px;
   gap: 6px;
   width: 100%;
+}
+
+.editor-table-panel {
+  min-width: 0;
+}
+
+.editor-table-tabs {
+  width: 100%;
+}
+
+.editor-table-tabs :deep(.el-tabs__header) {
+  margin-bottom: 12px;
+}
+
+.editor-table-tabs :deep(.el-tabs__content) {
+  min-width: 0;
+  overflow: visible;
+}
+
+.table-button-row {
+  justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 2px 0;
+}
+
+.table-button-row :deep(.el-button) {
+  margin-left: 0;
+}
+
+.resource-check-option {
+  margin-left: 14px;
+  margin-right: 0;
+  min-height: 32px;
+}
+
+.batch-in-tab-body {
+  min-height: 520px;
 }
 
 .spreadsheet-wrap {
