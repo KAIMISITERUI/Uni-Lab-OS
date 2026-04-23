@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
+  Connection,
   Cpu,
   Document,
   EditPen,
@@ -56,6 +57,10 @@ function saveToken() {
       </div>
 
       <nav class="nav-list">
+        <RouterLink class="nav-link" to="/devices">
+          <el-icon><Connection /></el-icon>
+          <span>设备总览</span>
+        </RouterLink>
         <RouterLink class="nav-link" to="/synthesis">
           <el-icon><Cpu /></el-icon>
           <span>合成工站</span>

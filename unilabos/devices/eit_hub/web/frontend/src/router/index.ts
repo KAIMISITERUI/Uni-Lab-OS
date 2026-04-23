@@ -3,7 +3,13 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    redirect: '/synthesis',
+    redirect: '/devices',
+  },
+  {
+    path: '/devices',
+    name: 'devices',
+    component: () => import('../views/DeviceStatusView.vue'),
+    meta: { title: '设备总览' },
   },
   {
     path: '/synthesis',

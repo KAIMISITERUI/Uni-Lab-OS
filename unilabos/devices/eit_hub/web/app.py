@@ -21,7 +21,7 @@ from unilabos.devices.eit_chemical_manager.web.routers import (
     prepare as chemical_prepare,
 )
 
-from .routers import analysis, synthesis
+from .routers import analysis, devices, synthesis
 
 logger = logging.getLogger("EITHubWeb")
 
@@ -56,6 +56,7 @@ def create_app() -> FastAPI:
 
     app.include_router(synthesis.router)
     app.include_router(analysis.router)
+    app.include_router(devices.router)
     app.include_router(chemical_chemicals.router)
     app.include_router(chemical_lookup.router)
     app.include_router(chemical_prepare.router)
