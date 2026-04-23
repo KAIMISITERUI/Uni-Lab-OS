@@ -42,6 +42,7 @@ class FakeSynthesisManager:
         self.device_init_calls = 0
         self.door_ops: list[str] = []
         self.w1_calls: list[tuple[str, str]] = []
+        self.reagent_label_print_calls = 0
 
     def station_state(self) -> int:
         """功能: 返回测试工站状态."""
@@ -126,6 +127,15 @@ class FakeSynthesisManager:
         """
         self.w1_calls.append((position, action))
         return {"success": True, "position": position, "action": action}
+
+    def print_reagent_labels(self) -> None:
+        """
+        功能:
+            记录试剂标签打印调用.
+        返回:
+            None.
+        """
+        self.reagent_label_print_calls += 1
 
 
 @pytest.fixture()
@@ -269,6 +279,74 @@ def test_batch_in_template_api_reads_and_writes(
     response = client.put("/api/synthesis/batch-in-template", json=_updated_batch_in_payload())
     assert response.status_code == 200
     assert response.json()["rows"] == _updated_batch_in_payload()["rows"]
+
+    saved = client.get("/api/synthesis/batch-in-template")
+    assert saved.status_code == 200
+    assert saved.json()["rows"] == _updated_batch_in_payload()["rows"]
+
+
+def test_print_reagent_labels_saves_batch_in_payload_first(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证打印试剂标签会先保存 Web 上料表格, 再调用合成工站打印函数.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/batch-in-template/print-reagent-labels",
+        json=_updated_batch_in_payload(),
+    )
+    assert response.status_code == 200
+
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["name"] == "打印试剂标签"
+    assert job["result"]["printed"] is True
+    assert fake_manager.reagent_label_print_calls == 1
+
+    saved = client.get("/api/synthesis/batch-in-template")
+    assert saved.status_code == 200
+    assert saved.json()["rows"] == _updated_batch_in_payload()["rows"]
+
+
+def test_print_batch_in_table_saves_payload_and_uses_hp_printer(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能:
+        验证打印上料表格会保存 payload, 并固定使用 HP 打印机.
+    """
+    client, _fake_manager, _template_path = api_client
+    calls: list[tuple[Path, str]] = []
+
+    def _fake_print_batch_in_table(path: Path, printer_name: str) -> Dict[str, str]:
+        """
+        功能:
+            记录打印调用, 避免测试触发真实打印.
+        参数:
+            path: Path, 上料文件路径.
+            printer_name: str, 打印机名称.
+        返回:
+            Dict[str, str], 打印结果.
+        """
+        calls.append((Path(path), printer_name))
+        return {"printer_name": printer_name, "file_path": str(path)}
+
+    monkeypatch.setattr(synthesis, "print_batch_in_table", _fake_print_batch_in_table)
+
+    response = client.post(
+        "/api/synthesis/batch-in-template/print-table",
+        json=_updated_batch_in_payload(),
+    )
+    assert response.status_code == 200
+
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["name"] == "打印上料表格"
+    assert job["result"]["printer_name"] == "HP Laser MFP 1136-1139 1188"
+    assert len(calls) == 1
+    assert calls[0][0] == synthesis.DEFAULT_BATCH_IN_TEMPLATE
+    assert calls[0][1] == "HP Laser MFP 1136-1139 1188"
 
     saved = client.get("/api/synthesis/batch-in-template")
     assert saved.status_code == 200

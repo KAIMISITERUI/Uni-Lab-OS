@@ -91,6 +91,19 @@ export async function saveBatchInTemplate(payload: BatchInTemplate): Promise<Bat
   return data
 }
 
+export async function printBatchInReagentLabels(payload: BatchInTemplate): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>(
+    '/api/synthesis/batch-in-template/print-reagent-labels',
+    payload,
+  )
+  return data
+}
+
+export async function printBatchInTemplate(payload: BatchInTemplate): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>('/api/synthesis/batch-in-template/print-table', payload)
+  return data
+}
+
 export async function submitReactionTemplate(payload: ReactionTemplate): Promise<JobCreateResponse> {
   const { data } = await http.post<JobCreateResponse>('/api/synthesis/reaction-template/submit', payload)
   return data

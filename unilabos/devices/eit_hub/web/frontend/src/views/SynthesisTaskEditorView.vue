@@ -9,7 +9,9 @@ import {
   DocumentChecked,
   Minus,
   Plus,
+  Printer,
   Refresh,
+  Tickets,
   TrendCharts,
   Upload,
 } from '@element-plus/icons-vue'
@@ -22,6 +24,8 @@ import {
   checkResource,
   fetchBatchInTemplate,
   fetchReactionTemplate,
+  printBatchInReagentLabels,
+  printBatchInTemplate,
   saveBatchInTemplate,
   saveReactionTemplate,
   submitReactionTemplate,
@@ -91,6 +95,7 @@ const autoGenerateBatchFile = ref(true)
 const refreshBatchInAfterResourceCheck = ref(false)
 const activeTableTab = ref<'reagent' | 'batchIn'>('reagent')
 const batchInSpreadsheetVersion = ref(0)
+const selectedBatchInRow = ref<number | null>(null)
 const methodOptions = ref<Record<AnalysisInstrumentKey, string[]>>({
   gc_ms: [],
   uplc_qtof: [],
@@ -370,6 +375,80 @@ async function saveTemplate() {
   }
 }
 
+async function saveReactionTemplateOnly() {
+  if (templateData.value === null) {
+    return
+  }
+  const templatePayload = buildActionTemplatePayload()
+  if (templatePayload === null) {
+    return
+  }
+  try {
+    const savedTemplate = await saveReactionTemplate(templatePayload)
+    setTemplateData(savedTemplate)
+    void nextTick(() => {
+      persistTemplateDraft()
+    })
+    ElMessage.success('试剂表格已保存')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  }
+}
+
+async function saveBatchInTemplateOnly() {
+  if (batchInData.value === null) {
+    ElMessage.error('上料表格尚未加载')
+    return
+  }
+  const batchInPayload = buildBatchInPayload()
+  if (batchInPayload === null) {
+    return
+  }
+  try {
+    const savedBatchIn = await saveBatchInTemplate(batchInPayload)
+    setBatchInData(savedBatchIn)
+    ElMessage.success('上料表格已保存')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  }
+}
+
+async function printReagentLabels() {
+  if (batchInData.value === null) {
+    ElMessage.error('上料表格尚未加载')
+    return
+  }
+  const batchInPayload = buildBatchInPayload()
+  if (batchInPayload === null) {
+    return
+  }
+  try {
+    const data = await printBatchInReagentLabels(batchInPayload)
+    currentJobId.value = data.job_id
+    ElMessage.success('打印试剂标签已进入后台')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  }
+}
+
+async function printBatchInTable() {
+  if (batchInData.value === null) {
+    ElMessage.error('上料表格尚未加载')
+    return
+  }
+  const batchInPayload = buildBatchInPayload()
+  if (batchInPayload === null) {
+    return
+  }
+  try {
+    const data = await printBatchInTemplate(batchInPayload)
+    currentJobId.value = data.job_id
+    ElMessage.success('打印上料表格已进入后台')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  }
+}
+
 async function runResourceCheck() {
   if (templateData.value === null) {
     return
@@ -414,6 +493,12 @@ function onJobFinished(job: JobState) {
     job.name === '物料核算' &&
     job.status === 'succeeded' &&
     refreshBatchInAfterResourceCheck.value === true
+  ) {
+    loadBatchInTemplate()
+  }
+  if (
+    job.status === 'succeeded' &&
+    (job.name === '打印试剂标签' || job.name === '打印上料表格')
   ) {
     loadBatchInTemplate()
   }
@@ -730,6 +815,55 @@ function clearAllTemplateContent() {
   ElMessage.success('所有内容已清除')
 }
 
+function addBatchInRow() {
+  if (batchInData.value === null) {
+    return
+  }
+  syncBatchInSpreadsheet()
+  const width = batchInData.value.headers.length
+  batchInData.value.rows.push(Array.from({ length: width }, () => ''))
+  batchInSpreadsheetVersion.value += 1
+}
+
+function removeBatchInRow() {
+  if (batchInData.value === null) {
+    return
+  }
+  syncBatchInSpreadsheet()
+  const rowIndex = selectedBatchInRow.value
+  if (rowIndex === null || rowIndex < 0 || rowIndex >= batchInData.value.rows.length) {
+    ElMessage.warning('请先选择要删除的上料行')
+    return
+  }
+  batchInData.value.rows.splice(rowIndex, 1)
+  selectedBatchInRow.value = null
+  batchInSpreadsheetVersion.value += 1
+}
+
+function clearBatchInSelection() {
+  if (batchInSpreadsheetRef.value === null) {
+    ElMessage.warning('上料表格尚未就绪')
+    return
+  }
+  if (batchInSpreadsheetRef.value.clearSelectedRange() === true) {
+    ElMessage.success('选定内容已清除')
+  }
+}
+
+function clearAllBatchInContent() {
+  if (batchInData.value === null) {
+    return
+  }
+  syncBatchInSpreadsheet()
+  const width = batchInData.value.headers.length
+  batchInData.value.rows = batchInData.value.rows.map(() => {
+    return Array.from({ length: width }, () => '')
+  })
+  selectedBatchInRow.value = null
+  batchInSpreadsheetVersion.value += 1
+  ElMessage.success('所有上料内容已清除')
+}
+
 function updateTemplateRows(rows: SpreadsheetRow[]) {
   if (templateData.value === null) {
     return
@@ -970,19 +1104,6 @@ watch(
       <div class="panel-title">
         <h2>实验设定</h2>
         <div class="button-row editor-button-row">
-          <el-select
-            :model-value="experimentCount"
-            size="small"
-            style="width: 116px"
-            @change="setExperimentCount"
-          >
-            <el-option
-              v-for="count in templateData?.supported_experiment_counts || [12, 24, 36, 48]"
-              :key="count"
-              :label="String(count) + ' 个实验'"
-              :value="count"
-            />
-          </el-select>
           <el-button size="small" :icon="Refresh" @click="reloadEditorData">重载</el-button>
           <el-button size="small" type="primary" :icon="DocumentChecked" @click="saveTemplate">保存</el-button>
           <el-button size="small" type="success" :icon="Upload" @click="submitTemplate">上传任务</el-button>
@@ -1070,6 +1191,19 @@ watch(
       <el-tabs v-model="activeTableTab" type="card" class="editor-table-tabs">
         <el-tab-pane label="试剂表格" name="reagent">
           <div class="button-row table-button-row">
+            <el-select
+              :model-value="experimentCount"
+              size="small"
+              class="experiment-count-select"
+              @change="setExperimentCount"
+            >
+              <el-option
+                v-for="count in templateData?.supported_experiment_counts || [12, 24, 36, 48]"
+                :key="count"
+                :label="String(count) + ' 个实验'"
+                :value="count"
+              />
+            </el-select>
             <el-button :icon="Plus" @click="addReagentPair">试剂列</el-button>
             <el-button :icon="Minus" @click="removeReagentPair">试剂列</el-button>
             <el-button :icon="Delete" @click="clearTemplateSelection">清除内容</el-button>
@@ -1078,6 +1212,7 @@ watch(
             <el-button :icon="CopyDocument" @click="fillTemplateTable('copy')">复制填充</el-button>
             <el-checkbox v-model="autoGenerateBatchFile" class="resource-check-option">自动修改上料文件</el-checkbox>
             <el-button type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
+            <el-button type="primary" :icon="DocumentChecked" @click="saveReactionTemplateOnly">保存</el-button>
           </div>
 
           <div v-if="templateData !== null" class="spreadsheet-wrap">
@@ -1094,6 +1229,16 @@ watch(
         </el-tab-pane>
 
         <el-tab-pane label="上料表格" name="batchIn">
+          <div class="button-row table-button-row">
+            <el-button :icon="Plus" @click="addBatchInRow">新增行</el-button>
+            <el-button :icon="Delete" @click="removeBatchInRow">删除行</el-button>
+            <el-button :icon="Delete" @click="clearBatchInSelection">清除内容</el-button>
+            <el-button :icon="DeleteFilled" @click="clearAllBatchInContent">清除所有内容</el-button>
+            <el-button type="warning" :icon="Tickets" @click="printReagentLabels">打印试剂标签</el-button>
+            <el-button type="success" :icon="Printer" @click="printBatchInTable">打印上料表格</el-button>
+            <el-button type="primary" :icon="DocumentChecked" @click="saveBatchInTemplateOnly">保存</el-button>
+          </div>
+
           <div v-loading="batchInLoading" class="batch-in-tab-body">
             <div v-if="batchInData !== null" class="spreadsheet-wrap">
               <EditableSpreadsheet
@@ -1104,6 +1249,7 @@ watch(
                 :columns="batchInColumns"
                 :height="520"
                 @update:model-value="updateBatchInRows"
+                @selected-row="selectedBatchInRow = $event"
               />
             </div>
           </div>
@@ -1256,6 +1402,10 @@ watch(
 
 .table-button-row :deep(.el-button) {
   margin-left: 0;
+}
+
+.experiment-count-select {
+  width: 116px;
 }
 
 .resource-check-option {

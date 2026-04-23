@@ -25,6 +25,7 @@ from ..excel_codec import (
     write_batch_in_template,
     write_reaction_template,
 )
+from ..excel_printing import DEFAULT_BATCH_IN_TABLE_PRINTER, print_batch_in_table
 from ..jobs import JobBusyError, job_manager
 
 logger = logging.getLogger("EITHubSynthesisRouter")
@@ -194,6 +195,60 @@ def save_batch_in_template(payload: JsonDict = Body(...)) -> JsonDict:
     except Exception as exc:
         logger.exception("保存上料文件失败")
         raise _json_error(f"保存上料文件失败: {exc}") from exc
+
+
+@router.post("/batch-in-template/print-reagent-labels")
+def print_batch_in_reagent_labels(
+    payload: JsonDict = Body(...),
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        保存 Web 上料表格并创建打印试剂标签后台任务.
+    参数:
+        payload: Dict[str, Any], 上料表格结构.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 后台任务 ID.
+    """
+
+    def _target(log: Callable[[str], None]) -> JsonDict:
+        log("正在保存 Web 上料表格到本地 Excel 文件.")
+        saved = write_batch_in_template(payload, DEFAULT_BATCH_IN_TEMPLATE)
+        log("正在调用合成工站试剂标签打印逻辑.")
+        manager.print_reagent_labels()
+        log("试剂标签打印完成.")
+        return {
+            "file_path": saved.get("path", str(DEFAULT_BATCH_IN_TEMPLATE)),
+            "printed": True,
+        }
+
+    return _start_job("打印试剂标签", _target)
+
+
+@router.post("/batch-in-template/print-table")
+def print_batch_in_template(
+    payload: JsonDict = Body(...),
+) -> JsonDict:
+    """
+    功能:
+        保存 Web 上料表格并创建打印上料表格后台任务.
+    参数:
+        payload: Dict[str, Any], 上料表格结构.
+    返回:
+        Dict[str, Any], 后台任务 ID.
+    """
+
+    def _target(log: Callable[[str], None]) -> JsonDict:
+        log("正在保存 Web 上料表格到本地 Excel 文件.")
+        saved = write_batch_in_template(payload, DEFAULT_BATCH_IN_TEMPLATE)
+        log(f"正在打印上料表格, 打印机={DEFAULT_BATCH_IN_TABLE_PRINTER}.")
+        result = print_batch_in_table(DEFAULT_BATCH_IN_TEMPLATE, DEFAULT_BATCH_IN_TABLE_PRINTER)
+        log("上料表格打印任务已提交.")
+        result["file_path"] = saved.get("path", result.get("file_path", str(DEFAULT_BATCH_IN_TEMPLATE)))
+        return result
+
+    return _start_job("打印上料表格", _target)
 
 
 @router.post("/reaction-template/submit")

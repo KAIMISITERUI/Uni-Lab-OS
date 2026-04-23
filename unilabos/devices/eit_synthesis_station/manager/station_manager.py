@@ -1998,8 +1998,12 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         # 打印标签
         printer = self._get_label_printer()
         try:
-            printer.connect()
-            printer.print_batch(reagent_names)
+            connect_ok = printer.connect()
+            if connect_ok is not True:
+                raise RuntimeError("标签打印机连接失败")
+            print_ok = printer.print_batch(reagent_names)
+            if print_ok is not True:
+                raise RuntimeError("试剂标签打印失败")
         finally:
             printer.disconnect()
 
