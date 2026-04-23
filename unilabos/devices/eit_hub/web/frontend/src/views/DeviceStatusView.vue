@@ -19,7 +19,7 @@ interface DeviceStatusStats {
 }
 
 const snapshot = ref<DeviceStatusResponse | null>(null)
-const loading = ref(false)
+const refreshing = ref(false)
 let refreshTimer: number | undefined
 
 const items = computed<DeviceStatusItem[]>(() => {
@@ -57,17 +57,19 @@ const checkedAtText = computed(() => {
   return snapshot.value.checked_at
 })
 
+const initialLoading = computed(() => refreshing.value === true && snapshot.value === null)
+
 async function refreshDeviceStatus() {
-  if (loading.value === true) {
+  if (refreshing.value === true) {
     return
   }
-  loading.value = true
+  refreshing.value = true
   try {
     snapshot.value = await fetchDeviceStatus()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
-    loading.value = false
+    refreshing.value = false
   }
 }
 
@@ -138,7 +140,7 @@ onBeforeUnmount(() => {
         <h2>设备状态</h2>
         <div class="device-toolbar">
           <span class="muted">最后刷新: {{ checkedAtText }}</span>
-          <el-button type="primary" :icon="Refresh" :loading="loading" @click="refreshDeviceStatus">
+          <el-button type="primary" :icon="Refresh" :loading="initialLoading" @click="refreshDeviceStatus">
             刷新
           </el-button>
         </div>
@@ -175,7 +177,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="table-wrap">
-        <el-table :data="items" v-loading="loading" row-key="key">
+        <el-table :data="items" v-loading="initialLoading" row-key="key">
           <el-table-column label="设备" min-width="160">
             <template #default="{ row }">
               <div class="device-name-cell">

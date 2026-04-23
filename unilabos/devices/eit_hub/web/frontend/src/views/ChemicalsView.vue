@@ -89,6 +89,32 @@ function openDetail(row: ChemicalRow) {
   detailDialog.visible = true
 }
 
+function hasDisplayText(value: string | null | undefined): boolean {
+  return (value ?? '').trim() !== ''
+}
+
+function displayText(value: string | null | undefined): string {
+  const trimmedValue = (value ?? '').trim()
+  if (trimmedValue !== '') {
+    return trimmedValue
+  }
+  return '-'
+}
+
+function detailEntryLabel(row: ChemicalRow): string {
+  const chineseName = displayText(row.substance)
+  if (chineseName !== '-') {
+    return `查看${chineseName}`
+  }
+
+  const englishName = displayText(row.substance_english_name)
+  if (englishName !== '-') {
+    return `查看${englishName}`
+  }
+
+  return `查看化学品${row.id}`
+}
+
 // 详情弹窗点击"编辑"时, 关闭详情并打开编辑对话框
 function onDetailEdit(row: ChemicalRow) {
   openEdit(row)
@@ -163,11 +189,44 @@ onActivated(load)
             <el-table-column prop="id" label="ID" width="70" sortable align="center" header-align="center" />
             <el-table-column label="结构式" width="140" align="center" header-align="center">
               <template #default="{ row }">
-                <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
+                <button
+                  type="button"
+                  class="structure-detail-entry"
+                  :aria-label="detailEntryLabel(row)"
+                  @click="openDetail(row)"
+                >
+                  <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
+                </button>
               </template>
             </el-table-column>
-            <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center" />
-            <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center" />
+            <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center">
+              <template #default="{ row }">
+                <button
+                  v-if="hasDisplayText(row.substance)"
+                  type="button"
+                  class="name-detail-entry"
+                  :aria-label="detailEntryLabel(row)"
+                  @click="openDetail(row)"
+                >
+                  {{ displayText(row.substance) }}
+                </button>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center">
+              <template #default="{ row }">
+                <button
+                  v-if="hasDisplayText(row.substance_english_name)"
+                  type="button"
+                  class="name-detail-entry"
+                  :aria-label="detailEntryLabel(row)"
+                  @click="openDetail(row)"
+                >
+                  {{ displayText(row.substance_english_name) }}
+                </button>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
             <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
             <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
@@ -176,9 +235,8 @@ onActivated(load)
             <el-table-column prop="molecular_weight" label="MW" width="100" align="center" header-align="center" />
             <el-table-column prop="brand" label="品牌" width="120" align="center" header-align="center" />
             <el-table-column prop="package_size" label="规格" width="100" align="center" header-align="center" />
-            <el-table-column label="操作" fixed="right" width="180" align="center" header-align="center">
+            <el-table-column label="操作" fixed="right" width="120" align="center" header-align="center">
               <template #default="{ row }">
-                <el-button size="small" type="info" link @click="openDetail(row)">详情</el-button>
                 <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
                 <el-button size="small" type="danger" link @click="onDelete(row)">删除</el-button>
               </template>
@@ -224,5 +282,52 @@ onActivated(load)
 
 .chemicals-tabs {
   min-width: 0;
+}
+
+.structure-detail-entry,
+.name-detail-entry {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.structure-detail-entry {
+  display: inline-flex;
+  padding: 0;
+  line-height: 0;
+  border-radius: 4px;
+}
+
+.structure-detail-entry :deep(.structure-preview) {
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.structure-detail-entry:hover :deep(.structure-preview),
+.structure-detail-entry:focus-visible :deep(.structure-preview) {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 1px var(--el-color-primary-light-5);
+}
+
+.name-detail-entry {
+  max-width: 100%;
+  padding: 0;
+  color: inherit;
+  line-height: 1.4;
+  text-align: center;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.name-detail-entry:hover {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.structure-detail-entry:focus-visible,
+.name-detail-entry:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
 }
 </style>
