@@ -257,6 +257,9 @@ unilabos/devices/eit_synthesis_station/data/
 # EIT analysis station data (chromatogram data, plots, structures, cache)
 unilabos/devices/eit_analysis_station/data/
 
+# EIT Hub runtime data (battery history samples)
+unilabos/devices/eit_hub/web/data/
+
 # EIT test directories
 unilabos/devices/eit_analysis_station/tests/
 unilabos/devices/eit_synthesis_station/tests/
