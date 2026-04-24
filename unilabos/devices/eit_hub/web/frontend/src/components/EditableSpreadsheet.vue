@@ -68,6 +68,7 @@ const props = withDefaults(
     colHeaders: string[]
     columns: SpreadsheetColumn[]
     height?: string | number
+    rowHeights?: number | number[]
     rowHeaders?: boolean
     stretchH?: 'all' | 'last' | 'none'
   }>(),
@@ -131,11 +132,15 @@ const hotSettings = computed(() => {
     colHeaders: props.colHeaders,
     rowHeaders: props.rowHeaders,
     height: props.height,
+    rowHeights: props.rowHeights,
     width: '100%',
     stretchH: props.stretchH,
     licenseKey: 'non-commercial-and-evaluation',
     copyPaste: true,
-    fillHandle: true,
+    // 禁止拖拽填充时在表格底部自动插入新行, 避免固定实验数表格冒出第 13 行.
+    fillHandle: {
+      autoInsertRow: false,
+    },
     manualColumnResize: true,
     manualRowResize: true,
     autoWrapRow: true,
@@ -684,6 +689,30 @@ function formatIntegerText(value: number, width: number): string {
   text-align: center;
   vertical-align: middle;
   background: #eef4fb;
+}
+
+.editable-spreadsheet :deep(.handsontable tbody th) {
+  padding: 0;
+  vertical-align: middle;
+}
+
+.editable-spreadsheet :deep(.handsontable tbody th .relative) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+}
+
+.editable-spreadsheet :deep(.handsontable tbody th .rowHeader) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  line-height: 1;
+  text-align: center;
 }
 
 .editable-spreadsheet :deep(.handsontable td) {

@@ -1062,7 +1062,7 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         wb = Workbook()
         try:
             ws = wb.active
-            ws.title = "Sheet1"
+            ws.title = "实验方案设定"
 
             # 模板默认字体: 等线 11
             base_font = Font(name="Microsoft YaHei", charset=134, family=2, scheme="minor", sz=11)
@@ -1106,6 +1106,10 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
                 ("闪滤液用量(μL)", 500),
                 ("取样量(μL)", 1),
                 ("闪滤实验编号", "全部"),   # 空/"全部"=全部实验闪滤; 支持 "1-12,24,28" 格式
+                ("分析方法设定", ""),
+                ("GC_MS", "280_12min"),
+                ("UPLC_QTOF", ""),
+                ("HPLC", ""),
                 ("", ""),  # 空行
             ]
             left_param_rows = len(left_params)
@@ -1208,6 +1212,36 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
             }
             for col_letter, w in widths_map.items():
                 ws.column_dimensions[col_letter].width = w
+
+            gc_ws = wb.create_sheet("GC产率计算")
+            gc_rows = [
+                ("内标SMILES", "CC(C)C1=CC(C(C)C)=CC(C(C)C)=C1"),
+                ("内标预期RT(min)", "6.84"),
+                ("产率计算方法", "ECN"),
+                ("标准曲线斜率", ""),
+                ("标准曲线截距", ""),
+                ("响应因子", ""),
+                ("", ""),
+                ("适用实验", "目标产物名称", "当量(eq)", "SMILES", "预期RT(min)"),
+                ("1-12", "对叔丁基苯甲醛", 1, "O=CC1=CC=C(C(C)(C)C)C=C1", ""),
+            ]
+            for row_index, row_values in enumerate(gc_rows, start=1):
+                for col_index, value in enumerate(row_values, start=1):
+                    gc_ws.cell(row=row_index, column=col_index, value=value)
+
+            gc_ws.column_dimensions["A"].width = 18
+            gc_ws.column_dimensions["B"].width = 26
+            gc_ws.column_dimensions["C"].width = 14
+            gc_ws.column_dimensions["D"].width = 36
+            gc_ws.column_dimensions["E"].width = 16
+            for row_index in range(1, 40):
+                for col_index in range(1, 6):
+                    cell = gc_ws.cell(row=row_index, column=col_index)
+                    if row_index == 8:
+                        cell.font = title_font
+                    else:
+                        cell.font = base_font
+                    cell.alignment = center
 
             safe_workbook_save(wb, path)
             logger.info(f"已生成任务模板: {path}")

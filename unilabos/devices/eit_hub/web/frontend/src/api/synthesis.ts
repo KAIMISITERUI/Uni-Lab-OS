@@ -7,12 +7,32 @@ export interface ParamRow {
   type: 'section' | 'parameter'
 }
 
+export interface GcMsYieldProduct {
+  applicable_experiments: unknown
+  product_name: unknown
+  equivalent: unknown
+  smiles: unknown
+  expected_rt: unknown
+}
+
+export interface GcMsYieldConfig {
+  internal_standard_smiles: unknown
+  internal_standard_expected_rt: unknown
+  yield_method: unknown
+  curve_slope: unknown
+  curve_intercept: unknown
+  response_factor: unknown
+  products: GcMsYieldProduct[]
+}
+
 export interface ReactionTemplate {
   path: string
   sheet_name: string
+  has_gc_ms_yield_sheet?: boolean
   supported_experiment_counts: number[]
   param_rows: ParamRow[]
   params: Record<string, unknown>
+  gc_ms_yield: GcMsYieldConfig
   headers: string[]
   rows: unknown[][]
   reagent_pair_count: number
@@ -66,6 +86,19 @@ export interface ResourceCheckPayload {
   auto_generate_batch_file: boolean
 }
 
+export interface ReactionTemplateHistoryItem {
+  task_id: number
+  task_name: string
+  experiment_count: number
+}
+
+export interface ReactionTemplateHistoryResponse {
+  total: number
+  page: number
+  page_size: number
+  items: ReactionTemplateHistoryItem[]
+}
+
 export async function fetchDashboard(): Promise<DashboardData> {
   const { data } = await http.get<DashboardData>('/api/synthesis/dashboard')
   return data
@@ -78,6 +111,23 @@ export async function fetchReactionTemplate(): Promise<ReactionTemplate> {
 
 export async function saveReactionTemplate(payload: ReactionTemplate): Promise<ReactionTemplate> {
   const { data } = await http.put<ReactionTemplate>('/api/synthesis/reaction-template', payload)
+  return data
+}
+
+export async function fetchReactionTemplateHistory(params?: {
+  q?: string
+  page?: number
+  page_size?: number
+}): Promise<ReactionTemplateHistoryResponse> {
+  const { data } = await http.get<ReactionTemplateHistoryResponse>(
+    '/api/synthesis/reaction-template/history',
+    { params },
+  )
+  return data
+}
+
+export async function fetchHistoricalReactionTemplate(taskId: number): Promise<ReactionTemplate> {
+  const { data } = await http.get<ReactionTemplate>(`/api/synthesis/reaction-template/history/${taskId}`)
   return data
 }
 

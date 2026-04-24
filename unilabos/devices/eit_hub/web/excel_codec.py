@@ -70,6 +70,23 @@ SECTION_NAMES = (
 )
 
 SUPPORTED_EXPERIMENT_COUNTS = [12, 24, 36, 48]
+YIELD_CONFIG_SHEET_NAME = "GC产率计算"
+YIELD_PARAM_ROWS = (
+    ("内标SMILES", "internal_standard_smiles"),
+    ("内标预期RT(min)", "internal_standard_expected_rt"),
+    ("产率计算方法", "yield_method"),
+    ("标准曲线斜率", "curve_slope"),
+    ("标准曲线截距", "curve_intercept"),
+    ("响应因子", "response_factor"),
+)
+YIELD_PRODUCT_FIELDS = (
+    ("适用实验", "applicable_experiments"),
+    ("目标产物名称", "product_name"),
+    ("当量(eq)", "equivalent"),
+    ("SMILES", "smiles"),
+    ("预期RT(min)", "expected_rt"),
+)
+YIELD_PRODUCT_FIELD_NAMES = tuple(field_name for _header_text, field_name in YIELD_PRODUCT_FIELDS)
 
 
 def read_reaction_template(path: Path = DEFAULT_REACTION_TEMPLATE) -> JsonDict:
@@ -91,11 +108,13 @@ def read_reaction_template(path: Path = DEFAULT_REACTION_TEMPLATE) -> JsonDict:
         headers = _read_headers(worksheet, header_row, exp_col)
         rows = _read_experiment_rows(worksheet, header_row, exp_col, len(headers))
         param_rows = _read_param_rows(worksheet)
+        gc_ms_yield = _read_gc_ms_yield_optional(workbook)
         result = {
             "path": str(template_path),
             "sheet_name": worksheet.title,
             "header_row": header_row,
             "experiment_column": exp_col,
+            "has_gc_ms_yield_sheet": YIELD_CONFIG_SHEET_NAME in workbook.sheetnames,
             "supported_experiment_counts": SUPPORTED_EXPERIMENT_COUNTS,
             "param_rows": param_rows,
             "params": {
@@ -103,6 +122,7 @@ def read_reaction_template(path: Path = DEFAULT_REACTION_TEMPLATE) -> JsonDict:
                 for item in param_rows
                 if item.get("type") == "parameter"
             },
+            "gc_ms_yield": gc_ms_yield,
             "headers": headers,
             "rows": rows,
             "reagent_pair_count": _count_reagent_pairs(headers),
@@ -130,12 +150,15 @@ def write_reaction_template(payload: JsonDict, path: Path = DEFAULT_REACTION_TEM
     headers = _normalize_headers(payload.get("headers"))
     rows = _normalize_rows(payload.get("rows"), len(headers))
     params = _collect_params(payload)
-
     workbook = load_workbook(template_path, data_only=False)
     try:
-        worksheet, header_row, exp_col = _select_experiment_sheet(workbook.worksheets)
-        _write_params(worksheet, params)
-        _write_experiment_area(worksheet, header_row, exp_col, headers, rows)
+        worksheet_main, header_row, exp_col = _select_experiment_sheet(workbook.worksheets)
+        _write_params(worksheet_main, params)
+        _write_experiment_area(worksheet_main, header_row, exp_col, headers, rows)
+        if YIELD_CONFIG_SHEET_NAME in workbook.sheetnames:
+            gc_ms_yield = _normalize_gc_ms_yield(payload.get("gc_ms_yield"))
+            worksheet_yield = _select_gc_ms_yield_sheet(workbook)
+            _write_gc_ms_yield(worksheet_yield, gc_ms_yield)
         safe_workbook_save(workbook, template_path)
         logger.info("已保存合成任务模板: %s", template_path)
     finally:
@@ -513,6 +536,287 @@ def _read_param_rows(worksheet: Worksheet) -> List[JsonDict]:
     return result
 
 
+def _read_gc_ms_yield(workbook: Any) -> JsonDict:
+    """
+    功能:
+        读取 GC产率计算 Sheet 并转换为 Web 结构.
+    参数:
+        workbook: Any, openpyxl 工作簿对象.
+    返回:
+        Dict[str, Any], GC-MS 产率配置.
+    """
+    worksheet = _select_gc_ms_yield_sheet(workbook)
+    params = _read_sheet_kv_params(worksheet)
+    products = _read_gc_ms_yield_products(worksheet)
+
+    result = _build_default_gc_ms_yield()
+    for sheet_key, field_name in YIELD_PARAM_ROWS:
+        result[field_name] = params.get(sheet_key, "")
+    result["yield_method"] = _normalize_yield_method(result.get("yield_method"))
+    result["products"] = products
+    return result
+
+
+def _read_gc_ms_yield_optional(workbook: Any) -> JsonDict:
+    """
+    功能:
+        读取 GC产率计算 Sheet, 缺失时返回空的 GC-MS 产率配置.
+    参数:
+        workbook: Any, openpyxl 工作簿对象.
+    返回:
+        Dict[str, Any], GC-MS 产率配置.
+    """
+    if YIELD_CONFIG_SHEET_NAME not in workbook.sheetnames:
+        return _build_default_gc_ms_yield()
+    return _read_gc_ms_yield(workbook)
+
+
+def _select_gc_ms_yield_sheet(workbook: Any) -> Worksheet:
+    """
+    功能:
+        读取 GC产率计算工作表.
+    参数:
+        workbook: Any, openpyxl 工作簿对象.
+    返回:
+        Worksheet, GC产率计算工作表.
+    """
+    if YIELD_CONFIG_SHEET_NAME not in workbook.sheetnames:
+        raise ValueError(f"模板中未找到 '{YIELD_CONFIG_SHEET_NAME}' 工作表.")
+    return workbook[YIELD_CONFIG_SHEET_NAME]
+
+
+def _read_sheet_kv_params(worksheet: Worksheet) -> JsonDict:
+    """
+    功能:
+        从工作表 A/B 两列读取键值区.
+    参数:
+        worksheet: Worksheet, 工作表.
+    返回:
+        Dict[str, Any], 键值字典.
+    """
+    params: JsonDict = {}
+    header_row = _find_gc_ms_yield_header_row(worksheet)
+    stop_row = header_row if header_row is not None else worksheet.max_row + 1
+    for row_index in range(1, stop_row):
+        key = _cell_text(worksheet.cell(row_index, 1).value)
+        if key == "":
+            continue
+        params[key] = worksheet.cell(row_index, 2).value
+    return params
+
+
+def _find_gc_ms_yield_header_row(worksheet: Worksheet) -> Optional[int]:
+    """
+    功能:
+        查找 GC产率计算产物表表头行.
+    参数:
+        worksheet: Worksheet, 工作表.
+    返回:
+        Optional[int], 表头行号.
+    """
+    max_scan_row = min(worksheet.max_row, 80)
+    max_scan_col = min(worksheet.max_column, 20)
+    for row_index in range(1, max_scan_row + 1):
+        row_values = [
+            _cell_text(worksheet.cell(row_index, col_index).value)
+            for col_index in range(1, max_scan_col + 1)
+        ]
+        if "适用实验" in row_values and any("目标产物" in value for value in row_values):
+            return row_index
+    return None
+
+
+def _build_gc_ms_yield_header_map(worksheet: Worksheet, header_row: int) -> Dict[str, int]:
+    """
+    功能:
+        构造 GC产率计算产物表字段到列号的映射.
+    参数:
+        worksheet: Worksheet, 工作表.
+        header_row: int, 表头行号.
+    返回:
+        Dict[str, int], 字段到列号的映射.
+    """
+    header_map: Dict[str, int] = {}
+    for col_index in range(1, worksheet.max_column + 1):
+        header_text = _cell_text(worksheet.cell(header_row, col_index).value)
+        if header_text == "":
+            continue
+        if "适用实验" in header_text:
+            header_map["applicable_experiments"] = col_index
+            continue
+        if "目标产物" in header_text:
+            header_map["product_name"] = col_index
+            continue
+        if "当量" in header_text or "eq" in header_text.lower():
+            header_map["equivalent"] = col_index
+            continue
+        if "SMILES" in header_text.upper():
+            header_map["smiles"] = col_index
+            continue
+        if "RT" in header_text.upper():
+            header_map["expected_rt"] = col_index
+    missing_fields = [
+        field_name
+        for field_name in YIELD_PRODUCT_FIELD_NAMES
+        if field_name not in header_map
+    ]
+    if len(missing_fields) > 0:
+        raise ValueError(
+            f"{YIELD_CONFIG_SHEET_NAME} 工作表缺少产物表头字段: {', '.join(missing_fields)}."
+        )
+    return header_map
+
+
+def _read_gc_ms_yield_products(worksheet: Worksheet) -> List[JsonDict]:
+    """
+    功能:
+        读取 GC产率计算产物表.
+    参数:
+        worksheet: Worksheet, 工作表.
+    返回:
+        List[Dict[str, Any]], 产物行列表.
+    """
+    header_row = _find_gc_ms_yield_header_row(worksheet)
+    if header_row is None:
+        return []
+    header_map = _build_gc_ms_yield_header_map(worksheet, header_row)
+
+    products: List[JsonDict] = []
+    for row_index in range(header_row + 1, worksheet.max_row + 1):
+        row_data: JsonDict = {}
+        has_any_value = False
+        for field_name, col_index in header_map.items():
+            value = worksheet.cell(row_index, col_index).value
+            row_data[field_name] = "" if value is None else value
+            if _cell_text(value) != "":
+                has_any_value = True
+        if has_any_value is False:
+            continue
+        products.append(row_data)
+    return products
+
+
+def _build_default_gc_ms_yield() -> JsonDict:
+    """
+    功能:
+        构造默认 GC-MS 产率配置结构.
+    返回:
+        Dict[str, Any], 默认结构.
+    """
+    return {
+        "internal_standard_smiles": "",
+        "internal_standard_expected_rt": "",
+        "yield_method": "ECN",
+        "curve_slope": "",
+        "curve_intercept": "",
+        "response_factor": "",
+        "products": [],
+    }
+
+
+def _normalize_gc_ms_yield(raw_gc_ms_yield: Any) -> JsonDict:
+    """
+    功能:
+        校验并规范化前端提交的 GC-MS 产率配置.
+    参数:
+        raw_gc_ms_yield: Any, 原始 GC-MS 产率配置.
+    返回:
+        Dict[str, Any], 规范化后的 GC-MS 产率配置.
+    """
+    if isinstance(raw_gc_ms_yield, dict) is False:
+        raise ValueError("gc_ms_yield 必须是对象.")
+
+    result = _build_default_gc_ms_yield()
+    result["internal_standard_smiles"] = _cell_text(
+        raw_gc_ms_yield.get("internal_standard_smiles")
+    )
+    result["internal_standard_expected_rt"] = raw_gc_ms_yield.get(
+        "internal_standard_expected_rt", ""
+    )
+    result["yield_method"] = _normalize_yield_method(raw_gc_ms_yield.get("yield_method"))
+    result["curve_slope"] = raw_gc_ms_yield.get("curve_slope", "")
+    result["curve_intercept"] = raw_gc_ms_yield.get("curve_intercept", "")
+    result["response_factor"] = raw_gc_ms_yield.get("response_factor", "")
+    result["products"] = _normalize_gc_ms_yield_products(raw_gc_ms_yield.get("products"))
+
+    if result["internal_standard_smiles"] == "":
+        raise ValueError("GC-MS 数据分析中的内标SMILES不能为空.")
+
+    if result["yield_method"] == "ECN":
+        result["curve_slope"] = ""
+        result["curve_intercept"] = ""
+        result["response_factor"] = ""
+    elif result["yield_method"] == "标准曲线":
+        if _cell_text(result["curve_slope"]) == "":
+            raise ValueError("GC-MS 数据分析选择标准曲线法时必须填写标准曲线斜率.")
+        result["response_factor"] = ""
+    elif result["yield_method"] == "响应因子":
+        if _cell_text(result["response_factor"]) == "":
+            raise ValueError("GC-MS 数据分析选择响应因子法时必须填写响应因子.")
+        result["curve_slope"] = ""
+        result["curve_intercept"] = ""
+
+    return result
+
+
+def _normalize_yield_method(raw_value: Any) -> str:
+    """
+    功能:
+        规范化产率计算方法文本.
+    参数:
+        raw_value: Any, 原始方法值.
+    返回:
+        str, 规范化后的方法值.
+    """
+    text = _cell_text(raw_value)
+    upper_text = text.upper()
+    if text == "" or upper_text == "ECN":
+        return "ECN"
+    if text == "标准曲线" or upper_text in {"CALIBRATION", "CURVE"}:
+        return "标准曲线"
+    if text == "响应因子" or upper_text in {"RF", "RESPONSE_FACTOR"}:
+        return "响应因子"
+    raise ValueError(f"不支持的产率计算方法: {text}.")
+
+
+def _normalize_gc_ms_yield_products(raw_products: Any) -> List[JsonDict]:
+    """
+    功能:
+        校验并规范化 GC-MS 产率配置中的目标产物表.
+    参数:
+        raw_products: Any, 原始产物表数据.
+    返回:
+        List[Dict[str, Any]], 规范化后的产物列表.
+    """
+    if isinstance(raw_products, list) is False:
+        raise ValueError("gc_ms_yield.products 必须是列表.")
+
+    products: List[JsonDict] = []
+    for row_index, raw_item in enumerate(raw_products, start=1):
+        if isinstance(raw_item, dict) is False:
+            raise ValueError(f"GC-MS 目标产物第 {row_index} 行必须是对象.")
+        normalized_item = {
+            "applicable_experiments": raw_item.get("applicable_experiments", ""),
+            "product_name": raw_item.get("product_name", ""),
+            "equivalent": raw_item.get("equivalent", ""),
+            "smiles": raw_item.get("smiles", ""),
+            "expected_rt": raw_item.get("expected_rt", ""),
+        }
+        non_empty_fields = [
+            field_name
+            for field_name, value in normalized_item.items()
+            if _cell_text(value) != ""
+        ]
+        if len(non_empty_fields) == 0:
+            continue
+        if _cell_text(normalized_item["product_name"]) == "":
+            raise ValueError(f"GC-MS 目标产物第 {row_index} 行缺少目标产物名称.")
+        if _cell_text(normalized_item["smiles"]) == "":
+            raise ValueError(f"GC-MS 目标产物第 {row_index} 行缺少 SMILES.")
+        products.append(normalized_item)
+    return products
+
+
 def _normalize_headers(raw_headers: Any) -> List[str]:
     """
     功能:
@@ -702,6 +1006,86 @@ def _write_batch_in_area(
     for row_offset, row_values in enumerate(rows, start=1):
         for col_offset, value in enumerate(row_values):
             worksheet.cell(header_row + row_offset, start_col + col_offset, value=value)
+
+
+def _write_gc_ms_yield(worksheet: Worksheet, gc_ms_yield: JsonDict) -> None:
+    """
+    功能:
+        将 GC-MS 产率配置写回 GC产率计算工作表.
+    参数:
+        worksheet: Worksheet, GC产率计算工作表.
+        gc_ms_yield: Dict[str, Any], 规范化后的产率配置.
+    返回:
+        None.
+    """
+    _write_gc_ms_yield_params(worksheet, gc_ms_yield)
+    _write_gc_ms_yield_products(worksheet, gc_ms_yield.get("products", []))
+
+
+def _write_gc_ms_yield_params(worksheet: Worksheet, gc_ms_yield: JsonDict) -> None:
+    """
+    功能:
+        写回 GC产率计算上半区键值配置.
+    参数:
+        worksheet: Worksheet, GC产率计算工作表.
+        gc_ms_yield: Dict[str, Any], 规范化后的产率配置.
+    返回:
+        None.
+    """
+    row_map: Dict[str, int] = {}
+    for row_index in range(1, worksheet.max_row + 1):
+        key_text = _cell_text(worksheet.cell(row_index, 1).value)
+        if key_text != "":
+            row_map[key_text] = row_index
+
+    missing_keys = [sheet_key for sheet_key, _field_name in YIELD_PARAM_ROWS if sheet_key not in row_map]
+    if len(missing_keys) > 0:
+        raise ValueError(
+            f"{YIELD_CONFIG_SHEET_NAME} 工作表缺少参数行: {', '.join(missing_keys)}."
+        )
+
+    for sheet_key, field_name in YIELD_PARAM_ROWS:
+        row_index = row_map[sheet_key]
+        value = gc_ms_yield.get(field_name, "")
+        worksheet.cell(row_index, 2).value = None if _cell_text(value) == "" else value
+
+
+def _write_gc_ms_yield_products(worksheet: Worksheet, products: Any) -> None:
+    """
+    功能:
+        写回 GC产率计算下半区目标产物表.
+    参数:
+        worksheet: Worksheet, GC产率计算工作表.
+        products: Any, 目标产物列表.
+    返回:
+        None.
+    """
+    header_row = _find_gc_ms_yield_header_row(worksheet)
+    if header_row is None:
+        raise ValueError(f"{YIELD_CONFIG_SHEET_NAME} 工作表缺少目标产物表头.")
+    header_map = _build_gc_ms_yield_header_map(worksheet, header_row)
+
+    min_col = min(header_map.values())
+    max_col = max(header_map.values())
+    clear_height = max(worksheet.max_row - header_row, len(products) + 12)
+    for row_offset in range(1, clear_height + 1):
+        for col_index in range(min_col, max_col + 1):
+            cell = worksheet.cell(header_row + row_offset, col_index)
+            if isinstance(cell, MergedCell):
+                continue
+            cell.value = None
+
+    if isinstance(products, list) is False:
+        raise ValueError("GC-MS 目标产物列表格式错误.")
+
+    for row_offset, product in enumerate(products, start=1):
+        if isinstance(product, dict) is False:
+            raise ValueError("GC-MS 目标产物列表格式错误.")
+        row_index = header_row + row_offset
+        for _header_text, field_name in YIELD_PRODUCT_FIELDS:
+            col_index = header_map[field_name]
+            value = product.get(field_name, "")
+            worksheet.cell(row_index, col_index).value = None if _cell_text(value) == "" else value
 
 
 def _count_reagent_pairs(headers: List[str]) -> int:

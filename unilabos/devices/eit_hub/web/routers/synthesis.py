@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from unilabos.devices.eit_synthesis_station.manager.station_manager import (
@@ -37,6 +38,7 @@ router = APIRouter(prefix="/api/synthesis", tags=["synthesis"])
 W1_SHELF_POSITIONS = {"W-1-1", "W-1-3", "W-1-5", "W-1-7"}
 W1_SHELF_ACTIONS = {"outside", "home"}
 OUTER_DOOR_ACTIONS = {"open", "close"}
+DEFAULT_HISTORY_TASKS_DIR = DEFAULT_REACTION_TEMPLATE.parent.parent / "data" / "tasks"
 
 
 class OuterDoorRequest(BaseModel):
@@ -142,6 +144,57 @@ def get_reaction_template() -> JsonDict:
         Dict[str, Any], 模板结构.
     """
     return read_reaction_template(DEFAULT_REACTION_TEMPLATE)
+
+
+@router.get("/reaction-template/history")
+def list_reaction_template_history(
+    q: Optional[str] = Query(default=None, description="按实验名称搜索"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> JsonDict:
+    """
+    功能:
+        返回可载入的历史实验模板摘要列表.
+    参数:
+        q: Optional[str], 按实验名称模糊搜索.
+        page: int, 页码, 从 1 开始.
+        page_size: int, 每页条数.
+    返回:
+        Dict[str, Any], 包含历史任务摘要分页列表.
+    """
+    try:
+        all_items = _list_reaction_template_history(query_text=q)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return {
+            "total": len(all_items),
+            "page": page,
+            "page_size": page_size,
+            "items": all_items[start:end],
+        }
+    except Exception as exc:
+        logger.exception("读取历史实验模板列表失败")
+        raise _json_error(f"读取历史实验模板列表失败: {exc}") from exc
+
+
+@router.get("/reaction-template/history/{task_id}")
+def get_reaction_template_history(task_id: int) -> JsonDict:
+    """
+    功能:
+        读取指定历史任务的实验模板, 仅做读取不修改历史文件.
+    参数:
+        task_id: int, 历史任务 ID.
+    返回:
+        Dict[str, Any], 历史任务模板结构.
+    """
+    try:
+        history_path = _find_history_reaction_template_path(task_id)
+        return read_reaction_template(history_path)
+    except FileNotFoundError as exc:
+        raise _json_error(str(exc), status.HTTP_404_NOT_FOUND) from exc
+    except Exception as exc:
+        logger.exception("读取历史实验模板失败, task_id=%s", task_id)
+        raise _json_error(f"读取历史实验模板失败: {exc}") from exc
 
 
 @router.put("/reaction-template")
@@ -479,6 +532,134 @@ def _load_recent_tasks(manager: SynthesisStationManager) -> List[JsonDict]:
             if isinstance(nested, list):
                 return nested
     return []
+
+
+def _list_reaction_template_history(query_text: Optional[str] = None) -> List[JsonDict]:
+    """
+    功能:
+        扫描任务目录并返回可读取的历史实验模板摘要.
+    参数:
+        query_text: Optional[str], 实验名称搜索关键词.
+    返回:
+        List[Dict[str, Any]], 历史模板摘要列表.
+    """
+    tasks_dir = Path(DEFAULT_HISTORY_TASKS_DIR)
+    if tasks_dir.is_dir() is False:
+        return []
+
+    normalized_query = "" if query_text is None else str(query_text).strip().lower()
+    task_dirs = [item for item in tasks_dir.iterdir() if item.is_dir() is True]
+    task_dirs.sort(key=_history_task_sort_key, reverse=True)
+
+    result: List[JsonDict] = []
+    for task_dir in task_dirs:
+        task_id_text = task_dir.name.strip()
+        if task_id_text == "":
+            continue
+
+        try:
+            task_id = int(task_id_text)
+        except ValueError:
+            continue
+
+        try:
+            template_path = _find_history_reaction_template_path(task_id)
+            template = read_reaction_template(template_path)
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            logger.warning("跳过不可读取的历史实验模板, task_id=%s, err=%s", task_id, exc)
+            continue
+
+        result.append(
+            _build_history_template_summary(
+                task_id=task_id,
+                task_name=str(template.get("params", {}).get("实验名称", "")).strip(),
+                experiment_count=len(template.get("rows", [])),
+                normalized_query=normalized_query,
+            )
+        )
+
+    return [item for item in result if item is not None]
+
+
+def _build_history_template_summary(
+    task_id: int,
+    task_name: str,
+    experiment_count: int,
+    normalized_query: str,
+) -> Optional[JsonDict]:
+    """
+    功能:
+        构造历史实验模板摘要, 并按实验名称执行模糊筛选.
+    参数:
+        task_id: int, 任务 ID.
+        task_name: str, 实验名称.
+        experiment_count: int, 实验个数.
+        normalized_query: str, 已规范化的小写搜索关键词.
+    返回:
+        Optional[Dict[str, Any]], 命中筛选时返回摘要, 否则返回 None.
+    """
+    if normalized_query != "" and normalized_query not in task_name.lower():
+        return None
+    return {
+        "task_id": task_id,
+        "task_name": task_name,
+        "experiment_count": experiment_count,
+    }
+
+
+def _history_task_sort_key(task_dir: Path) -> tuple[int, float]:
+    """
+    功能:
+        生成历史任务目录排序键, 优先按数字任务 ID 倒序.
+    参数:
+        task_dir: Path, 任务目录路径.
+    返回:
+        tuple[int, float], 排序键.
+    """
+    try:
+        return int(task_dir.name), task_dir.stat().st_mtime
+    except ValueError:
+        return -1, task_dir.stat().st_mtime
+
+
+def _find_history_reaction_template_path(task_id: int) -> Path:
+    """
+    功能:
+        定位历史任务目录中的实验模板文件.
+    参数:
+        task_id: int, 任务 ID.
+    返回:
+        Path, 历史模板文件路径.
+    """
+    task_dir = Path(DEFAULT_HISTORY_TASKS_DIR) / str(task_id)
+    if task_dir.is_dir() is False:
+        raise FileNotFoundError(f"未找到历史任务目录: {task_dir}")
+
+    preferred_paths = [
+        task_dir / f"{task_id}_experiment_plan.xlsx",
+        task_dir / f"{task_id}.xlsx",
+    ]
+    for path in preferred_paths:
+        if path.is_file() is True:
+            return path
+
+    plan_candidates = sorted(task_dir.glob("*_experiment_plan.xlsx"))
+    if len(plan_candidates) > 0:
+        return plan_candidates[0]
+
+    generic_candidates = [
+        path
+        for path in sorted(task_dir.glob("*.xlsx"))
+        if path.name.endswith("_integration_report.xlsx") is False
+        and path.name.endswith("_yield_report.xlsx") is False
+        and path.name.endswith("_task_report.xlsx") is False
+    ]
+    if len(generic_candidates) > 0:
+        return generic_candidates[0]
+
+    raise FileNotFoundError(f"任务 {task_id} 未找到可读取的历史实验模板文件")
 
 
 def _read_outer_door_action(value: Any) -> str:

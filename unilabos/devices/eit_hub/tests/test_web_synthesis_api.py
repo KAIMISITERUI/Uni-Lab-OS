@@ -16,11 +16,13 @@ from fastapi.testclient import TestClient
 
 from unilabos.devices.eit_hub.web.app import create_app
 from unilabos.devices.eit_hub.web.deps import get_synthesis_manager
+from unilabos.devices.eit_hub.web.excel_codec import write_reaction_template
 from unilabos.devices.eit_hub.web.jobs import JobManager
 from unilabos.devices.eit_hub.web.routers import synthesis
 
 from .test_web_excel_codec import (
     _create_batch_in_template,
+    _create_legacy_template_without_gc_sheet,
     _create_template,
     _updated_batch_in_payload,
     _updated_payload,
@@ -146,12 +148,15 @@ def api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestCli
     """
     template_path = tmp_path / "reaction_template.xlsx"
     batch_in_path = tmp_path / "batch_in_tray.xlsx"
+    history_tasks_dir = tmp_path / "tasks"
     _create_template(template_path)
     _create_batch_in_template(batch_in_path)
+    history_tasks_dir.mkdir(parents=True, exist_ok=True)
     fake_manager = FakeSynthesisManager()
 
     monkeypatch.setattr(synthesis, "DEFAULT_REACTION_TEMPLATE", template_path)
     monkeypatch.setattr(synthesis, "DEFAULT_BATCH_IN_TEMPLATE", batch_in_path)
+    monkeypatch.setattr(synthesis, "DEFAULT_HISTORY_TASKS_DIR", history_tasks_dir)
     monkeypatch.setattr(synthesis, "job_manager", JobManager())
 
     app = create_app()
@@ -199,6 +204,102 @@ def test_dashboard_returns_station_snapshot(api_client: tuple[TestClient, FakeSy
     assert body["recent_tasks"][0]["task_id"] == 7
 
 
+def test_reaction_template_history_returns_summary_and_loads_read_only_copy(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证历史实验模板列表与载入接口只读取历史文件, 不修改历史 xlsx 中的实验ID.
+    """
+    client, _fake_manager, template_path = api_client
+    history_tasks_dir = synthesis.DEFAULT_HISTORY_TASKS_DIR
+
+    history_task_dir = history_tasks_dir / "901"
+    history_task_dir.mkdir(parents=True, exist_ok=True)
+    history_template_path = history_task_dir / "901_experiment_plan.xlsx"
+    _create_template(history_template_path)
+
+    history_task_dir_2 = history_tasks_dir / "900"
+    history_task_dir_2.mkdir(parents=True, exist_ok=True)
+    history_template_path_2 = history_task_dir_2 / "900_experiment_plan.xlsx"
+    _create_template(history_template_path_2)
+
+    history_task_dir_3 = history_tasks_dir / "899"
+    history_task_dir_3.mkdir(parents=True, exist_ok=True)
+    history_template_path_3 = history_task_dir_3 / "899_experiment_plan.xlsx"
+    _create_legacy_template_without_gc_sheet(history_template_path_3)
+
+    (history_tasks_dir / "898").mkdir(parents=True, exist_ok=True)
+
+    payload = _updated_payload()
+    payload["param_rows"][1]["value"] = "历史任务A"
+    payload["param_rows"][2]["value"] = 901
+    payload["params"] = {
+        "实验名称": "历史任务A",
+        "实验ID": 901,
+    }
+    payload["rows"] = payload["rows"] + [
+        [13, "对叔丁基苯甲醛", "13.0eq", "乙腈", "1mL"],
+        [14, "对叔丁基苯甲醛", "14.0eq", "乙腈", "1mL"],
+    ]
+    write_reaction_template(payload, history_template_path)
+
+    payload_2 = _updated_payload()
+    payload_2["param_rows"][1]["value"] = "第二个历史任务"
+    payload_2["param_rows"][2]["value"] = 900
+    payload_2["params"] = {
+        "实验名称": "第二个历史任务",
+        "实验ID": 900,
+    }
+    write_reaction_template(payload_2, history_template_path_2)
+
+    list_response = client.get(
+        "/api/synthesis/reaction-template/history",
+        params={"page": 1, "page_size": 10},
+    )
+    assert list_response.status_code == 200
+    list_body = list_response.json()
+    items = list_body["items"]
+    assert list_body["total"] == 3
+    assert list_body["page"] == 1
+    assert list_body["page_size"] == 10
+    assert items[0]["task_id"] == 901
+    assert items[0]["task_name"] == "历史任务A"
+    assert items[0]["experiment_count"] == 14
+    assert any(item["task_id"] == 899 for item in items)
+
+    search_response = client.get(
+        "/api/synthesis/reaction-template/history",
+        params={"q": "第二个", "page": 1, "page_size": 10},
+    )
+    assert search_response.status_code == 200
+    search_body = search_response.json()
+    assert search_body["total"] == 1
+    assert search_body["items"][0]["task_id"] == 900
+
+    load_response = client.get("/api/synthesis/reaction-template/history/901")
+    assert load_response.status_code == 200
+    body = load_response.json()
+    assert body["params"]["实验名称"] == "历史任务A"
+    assert body["params"]["实验ID"] == 901
+    assert body["has_gc_ms_yield_sheet"] is True
+    assert len(body["rows"]) == 14
+
+    legacy_load_response = client.get("/api/synthesis/reaction-template/history/899")
+    assert legacy_load_response.status_code == 200
+    legacy_body = legacy_load_response.json()
+    assert legacy_body["has_gc_ms_yield_sheet"] is False
+    assert legacy_body["gc_ms_yield"]["internal_standard_smiles"] == ""
+    assert legacy_body["gc_ms_yield"]["products"] == []
+
+    reloaded_history = write_reaction_template(_updated_payload(), template_path)
+    assert reloaded_history["params"]["实验名称"] == "Web任务"
+
+    history_template_after = client.get("/api/synthesis/reaction-template/history/901")
+    assert history_template_after.status_code == 200
+    assert history_template_after.json()["params"]["实验ID"] == 901
+
+
 def test_submit_saves_template_and_uses_default_path(
     api_client: tuple[TestClient, FakeSynthesisManager, Path],
 ) -> None:
@@ -218,6 +319,8 @@ def test_submit_saves_template_and_uses_default_path(
 
     saved = client.get("/api/synthesis/reaction-template").json()
     assert saved["params"]["实验名称"] == "Web任务"
+    assert saved["gc_ms_yield"]["yield_method"] == "标准曲线"
+    assert len(saved["gc_ms_yield"]["products"]) == 2
 
 
 def test_resource_check_uses_default_path(
@@ -241,6 +344,8 @@ def test_resource_check_uses_default_path(
     assert job["result"]["auto_generate_batch_file"] is True
     assert fake_manager.resource_check_auto_generate_batch_file is True
     assert fake_manager.resource_check_path == str(template_path)
+    saved = client.get("/api/synthesis/reaction-template").json()
+    assert saved["gc_ms_yield"]["internal_standard_smiles"] == "CC(C)C1=CC(C(C)C)=CC(C(C)C)=C1"
 
 
 def test_resource_check_can_disable_batch_file_generation(

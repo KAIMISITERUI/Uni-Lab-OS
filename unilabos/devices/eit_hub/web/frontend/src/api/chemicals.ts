@@ -92,6 +92,13 @@ export async function getChemical(id: number): Promise<ChemicalRow> {
   return data
 }
 
+export async function getChemicalBySubstance(substance: string): Promise<ChemicalRow> {
+  const { data } = await http.get<ChemicalRow>('/api/chemicals/by-substance', {
+    params: { substance },
+  })
+  return data
+}
+
 export async function createChemical(payload: Partial<ChemicalRow>): Promise<ChemicalRow> {
   const { data } = await http.post<ChemicalRow>('/api/chemicals', payload)
   return data

@@ -64,6 +64,36 @@ def list_chemicals(
     )
 
 
+@router.get("/by-substance", response_model=ChemicalOut)
+def get_chemical_by_substance(
+    substance: str = Query(..., description="按 substance 中文名精确查询"),
+    manager: ChemicalManager = Depends(get_manager),
+) -> ChemicalOut:
+    """
+    功能:
+        按 substance 中文名精确查询单条化学品记录.
+    参数:
+        substance: str, 中文名.
+        manager: ChemicalManager, 化学品管理器.
+    返回:
+        ChemicalOut, 命中的化学品记录.
+    """
+    normalized_substance = str(substance or "").strip()
+    if normalized_substance == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="substance 不能为空",
+        )
+
+    row = manager.db.find_by_substance_exact(normalized_substance)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"未找到化学品 substance={normalized_substance}",
+        )
+    return ChemicalOut(**row)
+
+
 @router.get("/{row_id}", response_model=ChemicalOut)
 def get_chemical(
     row_id: int,

@@ -131,6 +131,33 @@ def test_get_unknown_returns_404(client: TestClient) -> None:
     assert r.status_code == 404
 
 
+def test_get_by_substance_returns_exact_match(client: TestClient) -> None:
+    """功能: /api/chemicals/by-substance 按 substance 精确命中并返回 smiles."""
+    create_resp = client.post(
+        "/api/chemicals",
+        json=_new_chem(substance="1,3,5-三异丙基苯", smiles="CC(C)C1=CC(C(C)C)=CC(C(C)C)=C1"),
+    )
+    assert create_resp.status_code == 201
+
+    response = client.get(
+        "/api/chemicals/by-substance",
+        params={"substance": "1,3,5-三异丙基苯"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == create_resp.json()["id"]
+    assert body["smiles"] == "CC(C)C1=CC(C(C)C)=CC(C(C)C)=C1"
+
+
+def test_get_by_substance_returns_404_when_missing(client: TestClient) -> None:
+    """功能: /api/chemicals/by-substance 未命中时返回 404."""
+    response = client.get(
+        "/api/chemicals/by-substance",
+        params={"substance": "不存在的化学品"},
+    )
+    assert response.status_code == 404
+
+
 def test_list_pagination(client: TestClient) -> None:
     """功能: 列表分页字段正确."""
     for name in ["甲醇", "乙醇", "丙醇"]:
