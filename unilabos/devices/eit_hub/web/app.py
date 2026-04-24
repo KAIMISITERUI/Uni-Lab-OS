@@ -21,7 +21,8 @@ from unilabos.devices.eit_chemical_manager.web.routers import (
     prepare as chemical_prepare,
 )
 
-from .routers import analysis, devices, synthesis
+from .deps import get_battery_sampler_service, get_charge_loop_service
+from .routers import agv, analysis, devices, synthesis
 
 logger = logging.getLogger("EITHubWeb")
 
@@ -57,10 +58,38 @@ def create_app() -> FastAPI:
     app.include_router(synthesis.router)
     app.include_router(analysis.router)
     app.include_router(devices.router)
+    app.include_router(agv.router)
     app.include_router(chemical_chemicals.router)
     app.include_router(chemical_lookup.router)
     app.include_router(chemical_prepare.router)
     app.include_router(chemical_admin.router)
+
+    @app.on_event("startup")
+    def _on_startup() -> None:
+        """
+        功能:
+            应用启动时拉起 AGV 电量采样服务.
+        返回:
+            None.
+        """
+        get_battery_sampler_service().start()
+
+    @app.on_event("shutdown")
+    def _on_shutdown() -> None:
+        """
+        功能:
+            应用停止时关闭 AGV 电量采样和充电循环.
+        返回:
+            None.
+        """
+        try:
+            get_charge_loop_service().stop()
+        except Exception as exc:
+            logger.warning("关闭充电循环失败: %s", exc)
+        try:
+            get_battery_sampler_service().stop()
+        except Exception as exc:
+            logger.warning("关闭电量采样失败: %s", exc)
 
     @app.get("/api/health", tags=["health"])
     def health() -> dict:

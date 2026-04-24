@@ -71,7 +71,13 @@ function saveToken() {
         </RouterLink>
         <RouterLink class="nav-link" to="/agv">
           <el-icon><Van /></el-icon>
-          <span>AGV 工站</span>
+          <span>AGV 状态</span>
+        </RouterLink>
+        <RouterLink class="nav-link nav-sub" to="/agv/calibration">
+          <span>└ 点位校准</span>
+        </RouterLink>
+        <RouterLink class="nav-link nav-sub" to="/agv/shelf">
+          <span>└ 货架状态</span>
         </RouterLink>
         <RouterLink class="nav-link" to="/chemicals">
           <el-icon><Files /></el-icon>

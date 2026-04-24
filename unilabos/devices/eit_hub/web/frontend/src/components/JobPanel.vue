@@ -3,17 +3,28 @@ import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, 
 import { CircleCheck, CircleClose, Loading, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { fetchJob, type JobState } from '../api/synthesis'
+import { fetchAgvJob } from '../api/agv'
 import { getErrorMessage } from '../api/http'
 
 const props = withDefaults(
   defineProps<{
     jobId: string
     title?: string
+    source?: 'synthesis' | 'agv'
   }>(),
   {
     title: '运行结果',
+    source: 'synthesis',
   },
 )
+
+async function dispatchFetchJob(jobId: string): Promise<JobState> {
+  if (props.source === 'agv') {
+    const data = await fetchAgvJob(jobId)
+    return data as JobState
+  }
+  return fetchJob(jobId)
+}
 
 const emit = defineEmits<{
   updated: [job: JobState]
@@ -92,7 +103,7 @@ async function loadJob() {
   }
   loading.value = true
   try {
-    const data = await fetchJob(props.jobId)
+    const data = await dispatchFetchJob(props.jobId)
     job.value = data
     emit('updated', data)
     if (data.status === 'succeeded' || data.status === 'failed') {

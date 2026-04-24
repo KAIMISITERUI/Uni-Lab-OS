@@ -26,8 +26,20 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/agv',
     name: 'agv',
-    component: () => import('../views/PlaceholderView.vue'),
-    meta: { title: 'AGV 工站' },
+    component: () => import('../views/AgvStatusView.vue'),
+    meta: { title: 'AGV 状态' },
+  },
+  {
+    path: '/agv/calibration',
+    name: 'agv-calibration',
+    component: () => import('../views/AgvCalibrationView.vue'),
+    meta: { title: 'AGV 点位校准' },
+  },
+  {
+    path: '/agv/shelf',
+    name: 'agv-shelf',
+    component: () => import('../views/AgvShelfView.vue'),
+    meta: { title: 'AGV 货架' },
   },
   {
     path: '/chemicals',
