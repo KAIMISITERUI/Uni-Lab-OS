@@ -393,12 +393,14 @@ function runOuterDoorButton() {
 }
 
 function onJobFinished(job: JobState) {
-  if (job.status === 'succeeded' || job.status === 'failed') {
-    pendingOperation.value = null
-  }
   if (actionRefreshTimer !== undefined) {
     window.clearTimeout(actionRefreshTimer)
     actionRefreshTimer = undefined
+  }
+  // job 成功: 交由 loadDashboard -> syncPendingOperation 基于真实 device_status 统一判定清除, 避免旧状态瞬时回显
+  // job 失败: 设备不会到达 targetStatus, 必须主动清除以解锁 UI
+  if (job.status === 'failed') {
+    pendingOperation.value = null
   }
   loadDashboard()
 }
