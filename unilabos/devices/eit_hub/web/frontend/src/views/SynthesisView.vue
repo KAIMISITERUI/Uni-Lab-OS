@@ -33,6 +33,13 @@ interface ReagentDisplayRow {
 }
 
 type DeviceTargetStatus = 'OPEN' | 'CLOSE' | 'OUTSIDE' | 'HOME'
+type ConsumableIcon =
+  | 'reactionTube'
+  | 'sealCap'
+  | 'magnet'
+  | 'tip'
+  | 'filterInnerBottle'
+  | 'filterOuterBottle'
 
 interface PendingOperation {
   kind: 'outer-door' | 'w1-shelf'
@@ -68,15 +75,15 @@ let dashboardTimer: number | undefined
 let actionRefreshTimer: number | undefined
 
 const reagentResourceTypeCodes = new Set([201000600, 201000730, 201000502, 201000503, 220000023])
-const consumableCardConfigs = [
-  { resourceType: 201000726, label: '2 mL 反应试管' },
-  { resourceType: 201000712, label: '反应密封盖' },
-  { resourceType: 201000711, label: '2 mL 试管磁子' },
-  { resourceType: 201000512, label: '5 mL Tip 头' },
-  { resourceType: 201000731, label: '1 mL Tip 头' },
-  { resourceType: 201000815, label: '50 μL Tip 头' },
-  { resourceType: 201000727, label: '闪滤瓶内瓶' },
-  { resourceType: 201000728, label: '闪滤瓶外瓶' },
+const consumableCardConfigs: Array<{ resourceType: number; label: string; icon: ConsumableIcon }> = [
+  { resourceType: 201000726, label: '2 mL 反应试管', icon: 'reactionTube' },
+  { resourceType: 201000712, label: '反应密封盖', icon: 'sealCap' },
+  { resourceType: 201000711, label: '2 mL 试管磁子', icon: 'magnet' },
+  { resourceType: 201000512, label: '5 mL Tip 头', icon: 'tip' },
+  { resourceType: 201000731, label: '1 mL Tip 头', icon: 'tip' },
+  { resourceType: 201000815, label: '50 μL Tip 头', icon: 'tip' },
+  { resourceType: 201000727, label: '闪滤瓶内瓶', icon: 'filterInnerBottle' },
+  { resourceType: 201000728, label: '闪滤瓶外瓶', icon: 'filterOuterBottle' },
 ]
 const w1ShelfPositions = ['W-1-1', 'W-1-3', 'W-1-5', 'W-1-7']
 const synthesisControlUrl =
@@ -672,6 +679,86 @@ onBeforeUnmount(stopDashboardPolling)
                       <div class="consumable-card-label">{{ card.label }}</div>
                       <div class="consumable-card-count">{{ card.count }}</div>
                     </div>
+                    <div class="consumable-card-icon-wrap" aria-hidden="true">
+                      <el-icon class="card-icon">
+                        <svg v-if="card.icon === 'reactionTube'" viewBox="0 0 32 32" fill="none">
+                          <path d="M11 5h10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+                          <path
+                            d="M12 5v19c0 3.3 2.7 6 6 6s6-2.7 6-6V5"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          />
+                        </svg>
+                        <svg v-else-if="card.icon === 'sealCap'" viewBox="0 0 32 32" fill="none">
+                          <rect
+                            x="9"
+                            y="3"
+                            width="14"
+                            height="26"
+                            rx="2"
+                            stroke="currentColor"
+                            stroke-width="2.4"
+                            stroke-linejoin="round"
+                          />
+                          <circle cx="16" cy="16" r="1.8" fill="currentColor" />
+                        </svg>
+                        <svg v-else-if="card.icon === 'magnet'" viewBox="0 0 32 32" fill="none">
+                          <ellipse
+                            cx="16"
+                            cy="16"
+                            rx="11"
+                            ry="6"
+                            stroke="currentColor"
+                            stroke-width="2.4"
+                          />
+                        </svg>
+                        <svg v-else-if="card.icon === 'tip'" viewBox="0 0 32 32" fill="none">
+                          <path
+                            d="M22 6 26 10 12 24 7 25 8 20Z"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linejoin="round"
+                            stroke-linecap="round"
+                          />
+                          <path
+                            d="M19 9 23 13"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                          />
+                        </svg>
+                        <svg v-else-if="card.icon === 'filterInnerBottle'" viewBox="0 0 32 32" fill="none">
+                          <rect
+                            x="12"
+                            y="5"
+                            width="8"
+                            height="3"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linejoin="round"
+                          />
+                          <path
+                            d="M14 8V11L11 13V25a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V13L18 11V8"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linejoin="round"
+                            stroke-linecap="round"
+                          />
+                        </svg>
+                        <svg v-else viewBox="0 0 32 32" fill="none">
+                          <path d="M11 5h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                          <path
+                            d="M11 5V26a3 3 0 0 0 3 3h4a3 3 0 0 0 3-3V5"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linejoin="round"
+                            stroke-linecap="round"
+                          />
+                        </svg>
+                      </el-icon>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -877,6 +964,7 @@ onBeforeUnmount(stopDashboardPolling)
   gap: 12px;
   min-width: 0;
   min-height: 88px;
+  overflow: hidden;
   padding: 16px 18px;
   background: #f3f8ff;
   border: 1px solid #e3ebf8;
@@ -885,6 +973,7 @@ onBeforeUnmount(stopDashboardPolling)
 
 .consumable-card-content {
   display: grid;
+  flex: 1 1 auto;
   gap: 12px;
   min-width: 0;
 }
@@ -904,6 +993,26 @@ onBeforeUnmount(stopDashboardPolling)
   font-size: 28px;
   font-weight: 700;
   line-height: 1;
+}
+
+.consumable-card-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+}
+
+.card-icon {
+  width: 28px;
+  height: 28px;
+  color: #8595ae;
+}
+
+.card-icon svg {
+  width: 100%;
+  height: 100%;
 }
 
 .reagent-occurrence-list {
