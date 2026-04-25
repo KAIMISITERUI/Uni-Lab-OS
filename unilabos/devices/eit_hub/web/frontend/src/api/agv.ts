@@ -38,6 +38,12 @@ export interface AgvSlotsStatus {
   tray: boolean[]
 }
 
+export interface AgvArmState {
+  drive_ready: boolean | null
+  quick_change_locked: boolean | null
+  gripper_open: boolean | null
+}
+
 export interface ChargeLoopStatus {
   running: boolean
   standby: string
@@ -61,6 +67,7 @@ export interface AgvStatusResponse {
   tcp_pose: number[] | null
   joints: number[] | null
   is_moving: boolean | null
+  arm_state: AgvArmState
   charge_loop: ChargeLoopStatus
 }
 
@@ -76,6 +83,19 @@ export interface AgvMapStation {
 export interface AgvMapResponse {
   stations: AgvMapStation[]
   current_station_id: string | null
+}
+
+export interface TrayPointOption {
+  name: string
+  label: string
+  description: string
+  station_id: string | null
+  station_name: string | null
+}
+
+export interface TrayOptionsResponse {
+  station_id: string | null
+  options: TrayPointOption[]
 }
 
 export interface BatteryHistoryRecord {
@@ -137,6 +157,13 @@ export async function fetchAgvMap(): Promise<AgvMapResponse> {
   return data
 }
 
+export async function saveAgvMapLayout(
+  stations: Array<{ id: string; x: number; y: number }>,
+): Promise<AgvMapResponse> {
+  const { data } = await http.post<AgvMapResponse>('/api/agv/map/layout', { stations })
+  return data
+}
+
 export async function connectChassis(): Promise<AgvConnections> {
   const { data } = await http.post<AgvConnections>('/api/agv/chassis/connect')
   return data
@@ -191,6 +218,13 @@ export async function armGripper(action: GripperAction): Promise<JobCreateRespon
 
 export async function navigateToStation(stationId: string): Promise<JobCreateResponse> {
   const { data } = await http.post<JobCreateResponse>('/api/agv/navigate', { station_id: stationId })
+  return data
+}
+
+export async function fetchTrayOptions(stationId?: string | null): Promise<TrayOptionsResponse> {
+  const { data } = await http.get<TrayOptionsResponse>('/api/agv/tray-options', {
+    params: { station_id: stationId ?? undefined },
+  })
   return data
 }
 

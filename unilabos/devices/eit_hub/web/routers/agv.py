@@ -13,6 +13,9 @@ from typing import Any, Callable, Dict, List, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from unilabos.devices.eit_agv.config.agv_config import STATION_POSITIONS
+from unilabos.devices.eit_agv.utils.position_manager import PositionManager
+
 from ..deps import (
     get_agv_context,
     get_battery_sampler_service,
@@ -22,7 +25,7 @@ from ..jobs import JobBusyError, job_manager
 from ..services.agv_context import AgvContext
 from ..services.battery_sampler import BatterySamplerService
 from ..services.charge_loop import ChargeLoopService
-from ..services.station_map import build_map_payload
+from ..services.station_map import build_map_payload, save_station_layout
 
 logger = logging.getLogger("EITHubAgvRouter")
 
@@ -118,6 +121,130 @@ def _safe_call(loader: Callable[[], Any]) -> Any:
         return None
 
 
+def _empty_arm_state() -> JsonDict:
+    """
+    功能:
+        生成机械臂可执行动作判断的空状态.
+    返回:
+        Dict[str, Any], 包含 drive_ready/quick_change_locked/gripper_open.
+    """
+    return {
+        "drive_ready": None,
+        "quick_change_locked": None,
+        "gripper_open": None,
+    }
+
+
+def _bool_or_none(value: Any) -> Optional[bool]:
+    """
+    功能:
+        将底层布尔值统一转换为 Optional[bool].
+    参数:
+        value: Any, 底层接口返回值.
+    返回:
+        Optional[bool], 可判断时返回 bool, 否则返回 None.
+    """
+    if isinstance(value, bool) is False:
+        return None
+    return value
+
+
+def _derive_drive_ready(robot_status: Any) -> Optional[bool]:
+    """
+    功能:
+        从 Duco RobotStatus 中判断机械臂驱动是否就绪.
+    参数:
+        robot_status: Any, 底层 RobotStatus 对象.
+    返回:
+        Optional[bool], True 表示所有从站就绪, False 表示存在未就绪, None 表示无法判断.
+    """
+    slave_ready = getattr(robot_status, "slaveReady", None)
+    if isinstance(slave_ready, list) is False:
+        return None
+    if len(slave_ready) == 0:
+        return None
+    for ready in slave_ready:
+        if ready is not True:
+            return False
+    return True
+
+
+def _build_arm_state(controller: Any) -> JsonDict:
+    """
+    功能:
+        汇总机械臂当前可执行动作状态, 供前端只展示当前可执行的配对动作.
+    参数:
+        controller: Any, AGVController 实例.
+    返回:
+        Dict[str, Any], 包含 drive_ready/quick_change_locked/gripper_open.
+    """
+    quick_change_output = _safe_call(lambda: controller.arm.get_digital_output(1))
+    gripper_output = _safe_call(lambda: controller.arm.get_digital_output(2))
+    return {
+        "drive_ready": _derive_drive_ready(_safe_call(controller.arm.get_robot_status)),
+        "quick_change_locked": None if _bool_or_none(quick_change_output) is None else quick_change_output is False,
+        "gripper_open": _bool_or_none(gripper_output),
+    }
+
+
+def _add_current_station(payload: JsonDict, context: AgvContext) -> JsonDict:
+    """
+    功能:
+        给地图 payload 添加当前 AGV 工站 ID.
+    参数:
+        payload: Dict[str, Any], 地图响应体.
+        context: AgvContext, AGV 上下文.
+    返回:
+        Dict[str, Any], 带 current_station_id 的地图响应体.
+    """
+    current_station_id: Optional[str] = None
+    if context.is_chassis_connected() is True:
+        station = _safe_call(context.get_or_create().query_current_station)
+        if isinstance(station, dict) is True:
+            current_station_id = station.get("station_id")
+    payload["current_station_id"] = current_station_id
+    return payload
+
+
+def _build_tray_options(station_id: Optional[str]) -> List[JsonDict]:
+    """
+    功能:
+        按当前工站筛选可用于物料转移的托盘点位, 同时保留 AGV 自身点位.
+    参数:
+        station_id: Optional[str], 当前工站 ID.
+    返回:
+        List[Dict[str, Any]], 可选点位列表.
+    """
+    tray_positions = PositionManager().get_category("tray_position")
+    if tray_positions is None:
+        raise ValueError("未找到托盘位置配置.")
+
+    normalized_station_id = station_id.strip().upper() if station_id is not None else None
+    station_name = None
+    if normalized_station_id is not None and (normalized_station_id in STATION_POSITIONS) is True:
+        station_name = STATION_POSITIONS[normalized_station_id]["name"]
+
+    options: List[JsonDict] = []
+    for tray_name, tray_meta in tray_positions.items():
+        is_agv_tray = tray_name.startswith("agv")
+        is_current_station_tray = station_name is not None and tray_name.startswith(station_name)
+        if is_agv_tray is False and is_current_station_tray is False:
+            continue
+        options.append(
+            {
+                "name": tray_name,
+                "label": tray_name,
+                "description": tray_meta.get("description", ""),
+                "station_id": normalized_station_id if is_current_station_tray is True else None,
+                "station_name": station_name if is_current_station_tray is True else None,
+            }
+        )
+
+    if len(options) == 0:
+        raise ValueError("当前工站没有可用的托盘位置.")
+    return options
+
+
 # ==================== 请求模型 ====================
 
 
@@ -130,6 +257,32 @@ class NavigateRequest(BaseModel):
     """
 
     station_id: str = Field(..., min_length=1)
+
+
+class MapLayoutStationItem(BaseModel):
+    """
+    功能:
+        工站地图坐标保存项.
+    参数:
+        id: str, 工站 ID.
+        x: float, 横向百分比坐标, 范围 0 到 100.
+        y: float, 纵向百分比坐标, 范围 0 到 100.
+    """
+
+    id: str = Field(..., min_length=1)
+    x: float = Field(..., ge=0.0, le=100.0)
+    y: float = Field(..., ge=0.0, le=100.0)
+
+
+class MapLayoutSaveRequest(BaseModel):
+    """
+    功能:
+        工站地图布局保存请求.
+    参数:
+        stations: List[MapLayoutStationItem], 工站坐标列表.
+    """
+
+    stations: List[MapLayoutStationItem]
 
 
 class TransferRequest(BaseModel):
@@ -314,6 +467,7 @@ def get_status(
         "tcp_pose": None,
         "joints": None,
         "is_moving": None,
+        "arm_state": _empty_arm_state(),
         "charge_loop": charger.status(),
     }
 
@@ -334,6 +488,7 @@ def get_status(
                 result["tcp_pose"] = _safe_call(controller.arm.get_tcp_pose)
                 result["joints"] = _safe_call(controller.arm.get_joints_position)
                 result["is_moving"] = _safe_call(controller.arm.is_moving)
+                result["arm_state"] = _build_arm_state(controller)
             finally:
                 context.arm_lock.release()
         # 锁超时则跳过, 本轮保留上次值为 None, 下一轮轮询继续尝试
@@ -350,13 +505,28 @@ def get_station_map(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
         Dict[str, Any], 包含 stations 列表和 current_station_id.
     """
     payload = build_map_payload()
-    current_station_id: Optional[str] = None
-    if context.is_chassis_connected() is True:
-        station = _safe_call(context.get_or_create().query_current_station)
-        if isinstance(station, dict):
-            current_station_id = station.get("station_id")
-    payload["current_station_id"] = current_station_id
-    return payload
+    return _add_current_station(payload, context)
+
+
+@router.post("/map/layout")
+def save_station_map_layout(
+    request: MapLayoutSaveRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        保存 AGV 工站地图相对布局坐标.
+    参数:
+        request: MapLayoutSaveRequest, 工站地图布局保存请求.
+        context: AgvContext, AGV 上下文.
+    返回:
+        Dict[str, Any], 更新后的地图 payload.
+    """
+    try:
+        payload = save_station_layout([item.model_dump() for item in request.stations])
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
+    return _add_current_station(payload, context)
 
 
 @router.post("/chassis/connect")
@@ -565,6 +735,26 @@ def arm_gripper(
 
 
 # ==================== 分节 B: 导航与转运 ====================
+
+
+@router.get("/tray-options")
+def get_tray_options(
+    station_id: Optional[str] = Query(default=None),
+) -> JsonDict:
+    """
+    功能:
+        返回当前工站可用于物料转移的托盘点位选项.
+    参数:
+        station_id: Optional[str], 当前工站 ID, 未识别时只返回 AGV 自身点位.
+    返回:
+        Dict[str, Any], 包含 station_id 与 options.
+    """
+    normalized_station_id = station_id.strip().upper() if station_id is not None else None
+    try:
+        options = _build_tray_options(normalized_station_id)
+    except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"station_id": normalized_station_id, "options": options}
 
 
 @router.post("/navigate")

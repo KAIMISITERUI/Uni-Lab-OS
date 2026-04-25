@@ -27,7 +27,7 @@ const routes: RouteRecordRaw[] = [
     path: '/agv',
     name: 'agv',
     component: () => import('../views/AgvStatusView.vue'),
-    meta: { title: 'AGV 状态' },
+    meta: { title: 'AGV 运输车' },
   },
   {
     path: '/agv/calibration',

@@ -664,6 +664,15 @@ class ArmDriver:
         """
         return self.robot.get_robot_state()
 
+    def get_robot_status(self):
+        """
+        功能:
+            获取机器人底层运行状态, 包含各轴从站就绪等信息.
+        返回:
+            RobotStatus, Duco 底层机器人状态对象.
+        """
+        return self.robot.getRobotStatus()
+
     def get_tcp_pose(self):
         """
         功能:
@@ -754,6 +763,17 @@ class ArmDriver:
             bool, True为高电平, False为低电平
         """
         return self.robot.get_standard_digital_in(num)
+
+    def get_digital_output(self, num):
+        """
+        功能:
+            读取控制柜数字IO输出.
+        参数:
+            num: IO输出口序号, 范围1-16.
+        返回:
+            bool, True为高电平, False为低电平.
+        """
+        return self.robot.get_standard_digital_out(num)
 
     def get_tool_digital_input(self, num):
         """
