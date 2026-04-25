@@ -7,7 +7,9 @@ import {
   type AgvStatusResponse,
   type BatteryHistoryRecord,
   type ChargingStandby,
+  type MaterialOption,
   type TrayPointOption,
+  type TrayPositionRecord,
   armGripper,
   armHome,
   armPowerOff,
@@ -22,11 +24,14 @@ import {
   fetchAgvMap,
   fetchAgvStatus,
   fetchBatteryHistory,
+  fetchMaterials,
   fetchTrayOptions,
+  fetchTrayPositions,
   navigateToStation,
   saveAgvMapLayout,
   startCharging,
   stopCharging,
+  batchTransferMaterials,
   transferMaterial,
 } from '../api/agv'
 import { getErrorMessage } from '../api/http'
@@ -43,6 +48,8 @@ const mapSaving = ref(false)
 const historyRecords = ref<BatteryHistoryRecord[]>([])
 const historyHours = ref(6)
 const trayOptions = ref<TrayPointOption[]>([])
+const trayPositionRecords = ref<TrayPositionRecord[]>([])
+const materials = ref<MaterialOption[]>([])
 
 const currentJobId = ref('')
 const actionLoading = ref('')
@@ -76,7 +83,18 @@ interface HardwareButtonView {
   group: HardwareActionGroup
 }
 
-const transferForm = ref({ source_tray: '', target_tray: '', material_type: '' })
+interface TransferTaskForm {
+  source_tray: string
+  target_tray: string
+  material_type: string
+}
+
+const MAX_INTERSTATION_TRANSFER_COUNT = 4
+const stationTransferDialogVisible = ref(false)
+const interstationTransferDialogVisible = ref(false)
+const stationTransferForm = ref<TransferTaskForm>(createTransferTaskForm())
+const interstationTaskCount = ref(1)
+const interstationTransferTasks = ref<TransferTaskForm[]>([createTransferTaskForm()])
 const chargingForm = ref({
   standby: 'PP5' as ChargingStandby,
   interval_minutes: 30,
@@ -166,6 +184,19 @@ const displayStations = computed(() => {
   }
   return mapData.value?.stations ?? []
 })
+
+const interstationTrayOptions = computed<TrayPointOption[]>(() =>
+  trayPositionRecords.value
+    .filter((position) => position.name.startsWith('agv') === false)
+    .map((position) => ({
+      name: position.name,
+      label: position.name,
+      description: position.description,
+      station_id: resolveTrayStationName(position.name),
+      station_name: resolveTrayStationName(position.name),
+    })),
+)
+
 const armState = computed(() => {
   return status.value?.arm_state ?? {
     drive_ready: null,
@@ -209,6 +240,10 @@ const gripperButton = computed<HardwareButtonView>(() => {
 
 function cloneStations(stations: AgvMapStation[]): AgvMapStation[] {
   return stations.map((station) => ({ ...station }))
+}
+
+function createTransferTaskForm(): TransferTaskForm {
+  return { source_tray: '', target_tray: '', material_type: '' }
 }
 
 function getPendingButton(group: HardwareActionGroup): HardwareButtonView | null {
@@ -298,11 +333,11 @@ function optionExists(optionName: string): boolean {
 }
 
 function syncTransferSelection() {
-  if (transferForm.value.source_tray !== '' && optionExists(transferForm.value.source_tray) === false) {
-    transferForm.value.source_tray = ''
+  if (stationTransferForm.value.source_tray !== '' && optionExists(stationTransferForm.value.source_tray) === false) {
+    stationTransferForm.value.source_tray = ''
   }
-  if (transferForm.value.target_tray !== '' && optionExists(transferForm.value.target_tray) === false) {
-    transferForm.value.target_tray = ''
+  if (stationTransferForm.value.target_tray !== '' && optionExists(stationTransferForm.value.target_tray) === false) {
+    stationTransferForm.value.target_tray = ''
   }
 }
 
@@ -311,6 +346,43 @@ function formatTrayOption(option: TrayPointOption): string {
     return option.name
   }
   return `${option.name} · ${option.description}`
+}
+
+function formatMaterialOption(material: MaterialOption): string {
+  if (material.description.trim() === '') {
+    return material.name
+  }
+  return `${material.name} · ${material.description}`
+}
+
+function resolveTrayStationName(trayName: string): string | null {
+  const marker = '_tray_'
+  const markerIndex = trayName.indexOf(marker)
+  if (markerIndex <= 0) {
+    return null
+  }
+  return trayName.slice(0, markerIndex)
+}
+
+function resetInterstationTransferTasks(target: number) {
+  const current = interstationTransferTasks.value.length
+  if (target > current) {
+    for (let index = 0; index < target - current; index += 1) {
+      interstationTransferTasks.value.push(createTransferTaskForm())
+    }
+    return
+  }
+  if (target < current) {
+    interstationTransferTasks.value.splice(target)
+  }
+}
+
+function buildTransferPayload(task: TransferTaskForm) {
+  return {
+    source_tray: task.source_tray.trim(),
+    target_tray: task.target_tray.trim(),
+    material_type: task.material_type.trim() || null,
+  }
 }
 
 async function loadStatus() {
@@ -363,11 +435,29 @@ async function loadHistory() {
   }
 }
 
+async function loadTrayPositions() {
+  try {
+    trayPositionRecords.value = await fetchTrayPositions()
+  } catch (error) {
+    trayPositionRecords.value = []
+  }
+}
+
+async function loadMaterials() {
+  try {
+    materials.value = await fetchMaterials()
+  } catch (error) {
+    materials.value = []
+  }
+}
+
 function startAutoRefresh() {
   stopAutoRefresh()
   loadStatus()
   loadMap()
   loadHistory()
+  loadTrayPositions()
+  loadMaterials()
   statusTimer = window.setInterval(loadStatus, 5000)
   historyTimer = window.setInterval(loadHistory, 60000)
 }
@@ -611,17 +701,61 @@ async function saveMapEdit() {
   }
 }
 
-function handleTransfer() {
-  const payload = {
-    source_tray: transferForm.value.source_tray.trim(),
-    target_tray: transferForm.value.target_tray.trim(),
-    material_type: transferForm.value.material_type.trim() || null,
-  }
+function openStationTransferDialog() {
+  stationTransferForm.value = createTransferTaskForm()
+  stationTransferDialogVisible.value = true
+}
+
+function openInterstationTransferDialog() {
+  interstationTaskCount.value = 1
+  interstationTransferTasks.value = [createTransferTaskForm()]
+  interstationTransferDialogVisible.value = true
+}
+
+function handleInterstationTaskCountChange(value: number) {
+  resetInterstationTransferTasks(value)
+}
+
+function handleStationTransfer() {
+  const payload = buildTransferPayload(stationTransferForm.value)
   if (payload.source_tray === '' || payload.target_tray === '') {
-    ElMessage.warning('请填写源托盘和目标托盘')
+    ElMessage.warning('请选择源点位和目标点位')
     return
   }
-  runJobAction('transfer', () => transferMaterial(payload))
+  if (payload.source_tray === payload.target_tray) {
+    ElMessage.warning('源点位和目标点位不能相同')
+    return
+  }
+  stationTransferDialogVisible.value = false
+  runJobAction('station-transfer', () => transferMaterial(payload))
+}
+
+function handleInterstationTransfer() {
+  const tasks = interstationTransferTasks.value.map((task) => buildTransferPayload(task))
+  const invalidTaskIndex = tasks.findIndex((task) => task.source_tray === '' || task.target_tray === '')
+  if (invalidTaskIndex >= 0) {
+    ElMessage.warning(`请填写任务 ${invalidTaskIndex + 1} 的源点位和目标点位`)
+    return
+  }
+
+  const samePointTaskIndex = tasks.findIndex((task) => task.source_tray === task.target_tray)
+  if (samePointTaskIndex >= 0) {
+    ElMessage.warning(`任务 ${samePointTaskIndex + 1} 的源点位和目标点位不能相同`)
+    return
+  }
+
+  const sameStationTaskIndex = tasks.findIndex((task) => {
+    const sourceStation = resolveTrayStationName(task.source_tray)
+    const targetStation = resolveTrayStationName(task.target_tray)
+    return sourceStation !== null && sourceStation === targetStation
+  })
+  if (sameStationTaskIndex >= 0) {
+    ElMessage.warning(`任务 ${sameStationTaskIndex + 1} 的源点位和目标点位需要属于不同工站`)
+    return
+  }
+
+  interstationTransferDialogVisible.value = false
+  runJobAction('interstation-transfer', () => batchTransferMaterials(tasks))
 }
 
 // ==================== 充电管理 ====================
@@ -842,57 +976,30 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel transfer-card">
           <div class="panel-title">
             <h3>物料转移</h3>
           </div>
-          <el-form class="transfer-form" size="small" label-width="86px">
-            <el-form-item label="源点位">
-              <el-select
-                v-model="transferForm.source_tray"
-                filterable
-                clearable
-                placeholder="请选择源点位"
-                class="tray-select"
-              >
-                <el-option
-                  v-for="option in trayOptions"
-                  :key="`source-${option.name}`"
-                  :label="formatTrayOption(option)"
-                  :value="option.name"
-                />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="目标点位">
-              <el-select
-                v-model="transferForm.target_tray"
-                filterable
-                clearable
-                placeholder="请选择目标点位"
-                class="tray-select"
-              >
-                <el-option
-                  v-for="option in trayOptions"
-                  :key="`target-${option.name}`"
-                  :label="formatTrayOption(option)"
-                  :value="option.name"
-                />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="物料类型">
-              <el-input v-model="transferForm.material_type" placeholder="可留空" />
-            </el-form-item>
-            <el-form-item class="transfer-action-row" label=" ">
-              <el-button
-                type="primary"
-                :loading="isActionLoading('transfer')"
-                @click="handleTransfer"
-                :disabled="isArmConnected === false"
-              >
-                执行单次转移
-              </el-button>
-            </el-form-item>
-          </el-form>
+          <div class="transfer-action-grid">
+            <el-button
+              class="transfer-action-button"
+              type="primary"
+              :loading="isActionLoading('station-transfer')"
+              :disabled="isArmConnected === false"
+              @click="openStationTransferDialog"
+            >
+              工站内物料转移
+            </el-button>
+            <el-button
+              class="transfer-action-button"
+              type="primary"
+              :loading="isActionLoading('interstation-transfer')"
+              :disabled="isChassisConnected === false || isArmConnected === false"
+              @click="openInterstationTransferDialog"
+            >
+              工站间物料转移
+            </el-button>
+          </div>
         </section>
       </div>
     </div>
@@ -1002,6 +1109,177 @@ onBeforeUnmount(() => {
       title="运行结果"
       @finished="handleJobFinished"
     />
+
+    <el-dialog
+      v-model="stationTransferDialogVisible"
+      title="工站内物料转移"
+      width="min(560px, 92vw)"
+      top="8vh"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-form class="transfer-dialog-form" size="default" label-width="96px">
+        <el-form-item label="源点位">
+          <el-select
+            v-model="stationTransferForm.source_tray"
+            filterable
+            clearable
+            placeholder="请选择源点位"
+            class="tray-select"
+          >
+            <el-option
+              v-for="option in trayOptions"
+              :key="`station-source-${option.name}`"
+              :label="formatTrayOption(option)"
+              :value="option.name"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="目标点位">
+          <el-select
+            v-model="stationTransferForm.target_tray"
+            filterable
+            clearable
+            placeholder="请选择目标点位"
+            class="tray-select"
+          >
+            <el-option
+              v-for="option in trayOptions"
+              :key="`station-target-${option.name}`"
+              :label="formatTrayOption(option)"
+              :value="option.name"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="物料类型">
+          <el-select
+            v-model="stationTransferForm.material_type"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            placeholder="可留空"
+            class="tray-select"
+          >
+            <el-option
+              v-for="material in materials"
+              :key="`station-material-${material.name}`"
+              :label="formatMaterialOption(material)"
+              :value="material.name"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="stationTransferDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="isActionLoading('station-transfer')"
+          @click="handleStationTransfer"
+        >
+          开始转移
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="interstationTransferDialogVisible"
+      title="工站间物料转移"
+      width="min(860px, 94vw)"
+      top="6vh"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-form class="transfer-dialog-form" size="default" label-width="96px">
+        <el-form-item label="任务数量">
+          <el-radio-group v-model="interstationTaskCount" @change="handleInterstationTaskCountChange">
+            <el-radio-button
+              v-for="count in MAX_INTERSTATION_TRANSFER_COUNT"
+              :key="count"
+              :label="count"
+            >
+              {{ count }}
+            </el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+
+      <div class="interstation-task-list">
+        <div
+          v-for="(task, index) in interstationTransferTasks"
+          :key="index"
+          class="interstation-task-row"
+        >
+          <div class="interstation-task-title">任务 {{ index + 1 }}</div>
+          <div class="interstation-task-fields">
+            <el-select
+              v-model="task.source_tray"
+              filterable
+              clearable
+              placeholder="源点位"
+              class="task-select"
+            >
+              <el-option
+                v-for="option in interstationTrayOptions"
+                :key="`inter-source-${index}-${option.name}`"
+                :label="formatTrayOption(option)"
+                :value="option.name"
+              />
+            </el-select>
+            <span class="transfer-arrow">→</span>
+            <el-select
+              v-model="task.target_tray"
+              filterable
+              clearable
+              placeholder="目标点位"
+              class="task-select"
+            >
+              <el-option
+                v-for="option in interstationTrayOptions"
+                :key="`inter-target-${index}-${option.name}`"
+                :label="formatTrayOption(option)"
+                :value="option.name"
+              />
+            </el-select>
+            <el-select
+              v-model="task.material_type"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              placeholder="物料类型, 可留空"
+              class="task-select"
+            >
+              <el-option
+                v-for="material in materials"
+                :key="`inter-material-${index}-${material.name}`"
+                :label="formatMaterialOption(material)"
+                :value="material.name"
+              />
+            </el-select>
+          </div>
+        </div>
+      </div>
+
+      <el-alert
+        type="warning"
+        :closable="false"
+        title="此操作将控制 AGV 导航并执行批量物料转运, 请确保周围安全."
+        show-icon
+        style="margin-top: 12px"
+      />
+
+      <template #footer>
+        <el-button @click="interstationTransferDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="isActionLoading('interstation-transfer')"
+          @click="handleInterstationTransfer"
+        >
+          开始转移
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1040,7 +1318,7 @@ onBeforeUnmount(() => {
 
 .agv-map-control-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.62fr);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.48fr);
   gap: 16px;
   align-items: stretch;
   min-width: 0;
@@ -1056,6 +1334,11 @@ onBeforeUnmount(() => {
 
 .transfer-panel {
   min-height: 0;
+}
+
+.transfer-card {
+  display: flex;
+  flex-direction: column;
 }
 
 .panel-title-actions {
@@ -1085,33 +1368,73 @@ onBeforeUnmount(() => {
   margin-left: 0;
 }
 
-.transfer-form {
+.transfer-action-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  width: calc(100% - 96px);
+  max-width: 640px;
+  margin: auto auto;
+  transform: translateY(2px);
+}
+
+.transfer-action-button {
   width: 100%;
-}
-
-.transfer-form :deep(.el-form-item) {
-  margin-bottom: 14px;
-}
-
-.transfer-form :deep(.el-form-item__label) {
-  color: #53647b;
-  font-weight: 600;
-}
-
-.transfer-form :deep(.el-select),
-.transfer-form :deep(.el-input) {
-  width: 100%;
-}
-
-.transfer-action-row {
-  margin-bottom: 0;
-}
-
-.transfer-action-row :deep(.el-button) {
-  min-width: 142px;
-  min-height: 36px;
+  min-height: 42px;
   margin-left: 0;
-  font-weight: 600;
+  font-weight: 700;
+  white-space: normal;
+}
+
+.transfer-action-grid :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.transfer-dialog-form {
+  width: 100%;
+}
+
+.transfer-dialog-form :deep(.el-select) {
+  width: 100%;
+}
+
+.interstation-task-list {
+  display: grid;
+  gap: 10px;
+}
+
+.interstation-task-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #dce5f0;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.interstation-task-title {
+  color: #34445d;
+  font-weight: 700;
+}
+
+.interstation-task-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-select {
+  width: 100%;
+}
+
+.transfer-arrow {
+  color: #66758a;
+  text-align: center;
+  font-weight: 700;
 }
 
 .tray-select {
@@ -1270,6 +1593,20 @@ onBeforeUnmount(() => {
   .control-actions,
   .charge-action-row :deep(.el-form-item__content) {
     grid-template-columns: 1fr;
+  }
+
+  .interstation-task-row,
+  .interstation-task-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .transfer-action-grid {
+    width: 100%;
+    max-width: none;
+  }
+
+  .transfer-arrow {
+    display: none;
   }
 }
 </style>

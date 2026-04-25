@@ -44,6 +44,11 @@ export interface AgvArmState {
   gripper_open: boolean | null
 }
 
+export interface AgvCollisionInfo {
+  active: boolean
+  axis: number | null
+}
+
 export interface ChargeLoopStatus {
   running: boolean
   standby: string
@@ -68,6 +73,7 @@ export interface AgvStatusResponse {
   joints: number[] | null
   is_moving: boolean | null
   arm_state: AgvArmState
+  collision: AgvCollisionInfo
   charge_loop: ChargeLoopStatus
 }
 
@@ -201,6 +207,11 @@ export async function armHome(): Promise<JobCreateResponse> {
 
 export async function armStop(): Promise<{ ok: boolean }> {
   const { data } = await http.post<{ ok: boolean }>('/api/agv/arm/stop')
+  return data
+}
+
+export async function resetArmCollision(): Promise<{ ok: boolean }> {
+  const { data } = await http.post<{ ok: boolean }>('/api/agv/arm/reset-collision')
   return data
 }
 
@@ -346,6 +357,237 @@ export async function moveToGraspPosition(trayName: string): Promise<JobCreateRe
   const { data } = await http.post<JobCreateResponse>('/api/agv/calibration/move-to-grasp', {
     tray_name: trayName,
   })
+  return data
+}
+
+export interface StationCalibrationOffset {
+  x: number
+  y: number
+  z: number
+  dx: number
+  dy: number
+  dz: number
+}
+
+export async function fetchStationOffset(station: string): Promise<{
+  station: string
+  offset: StationCalibrationOffset | null
+}> {
+  const { data } = await http.get<{ station: string; offset: StationCalibrationOffset | null }>(
+    '/api/agv/calibration/station/offset',
+    { params: { station } },
+  )
+  return data
+}
+
+export interface TrayCalibrationPreview {
+  tray_name: string
+  original_pose: number[] | null
+  current_pose: number[]
+  pose_to_save: number[]
+  station_offset: StationCalibrationOffset | null
+}
+
+export async function previewTrayCalibration(trayName: string): Promise<TrayCalibrationPreview> {
+  const { data } = await http.post<TrayCalibrationPreview>('/api/agv/calibration/tray/preview', {
+    tray_name: trayName,
+  })
+  return data
+}
+
+export async function saveTrayCalibration(payload: {
+  tray_name: string
+  pose: number[]
+}): Promise<{ tray_name: string; ok: boolean }> {
+  const { data } = await http.post<{ tray_name: string; ok: boolean }>(
+    '/api/agv/calibration/tray/save',
+    payload,
+  )
+  return data
+}
+
+export interface StationOffsetPreparePayload {
+  station: string
+  reference_tray: string
+  use_loaded_tray: boolean
+  source_tray?: string
+  run_vision?: boolean
+  move_to_point?: boolean
+}
+
+export async function prepareStationOffsetCalibration(
+  payload: StationOffsetPreparePayload,
+): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>(
+    '/api/agv/calibration/station-offset/prepare',
+    payload,
+  )
+  return data
+}
+
+export interface StationOffsetVector {
+  x: number
+  y: number
+  z: number
+  rx: number
+  ry: number
+  rz: number
+}
+
+export interface StationOffsetPreviewResponse {
+  station: string
+  reference_tray: string
+  original_pose: number[]
+  current_pose: number[]
+  expected_pose: number[]
+  offset: StationOffsetVector
+  affected_trays: string[]
+}
+
+export async function previewStationOffset(payload: {
+  station: string
+  reference_tray: string
+  vision_offset?: StationCalibrationOffset | null
+}): Promise<StationOffsetPreviewResponse> {
+  const { data } = await http.post<StationOffsetPreviewResponse>(
+    '/api/agv/calibration/station-offset/preview',
+    payload,
+  )
+  return data
+}
+
+export async function applyStationOffset(payload: {
+  station: string
+  offset: StationOffsetVector
+}): Promise<{
+  station: string
+  success_count: number
+  fail_count: number
+  affected_trays: string[]
+}> {
+  const { data } = await http.post('/api/agv/calibration/station-offset/apply', payload)
+  return data
+}
+
+export async function cleanupStationOffsetCalibration(payload: {
+  reference_tray: string
+  use_loaded_tray: boolean
+}): Promise<JobCreateResponse | { ok: boolean; skipped: boolean }> {
+  const { data } = await http.post('/api/agv/calibration/station-offset/cleanup', payload)
+  return data
+}
+
+// ==================== 取放托盘测试 ====================
+
+export async function testPickTray(payload: {
+  tray_name: string
+  material_type?: string | null
+}): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>('/api/agv/test/pick-tray', payload)
+  return data
+}
+
+export async function testPutTray(payload: {
+  tray_name: string
+  material_type?: string | null
+}): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>('/api/agv/test/put-tray', payload)
+  return data
+}
+
+// ==================== 批量测试 ====================
+
+export interface BatchTransferTaskItem {
+  source_tray: string
+  target_tray: string
+  material_type: string
+}
+
+export async function testAllPositions(payload: {
+  material_type: string
+}): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>('/api/agv/test/all-positions', payload)
+  return data
+}
+
+export async function testBatchTransferCycle(payload: {
+  cycle_count: number
+  transfer_tasks: BatchTransferTaskItem[]
+}): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>('/api/agv/test/batch-transfer-cycle', payload)
+  return data
+}
+
+// ==================== 物料与点位管理 ====================
+
+export interface MaterialOption {
+  name: string
+  gripper: string
+  description: string
+}
+
+export async function fetchMaterials(): Promise<MaterialOption[]> {
+  const { data } = await http.get<{ materials: MaterialOption[] }>('/api/agv/materials')
+  return data.materials
+}
+
+export interface TrayPositionRecord {
+  name: string
+  pose: number[] | null
+  joints: number[] | null
+  descend_z: number | null
+  lift_z: number | null
+  drop_z: number | null
+  speed: number | null
+  acceleration: number | null
+  description: string
+}
+
+export async function fetchTrayPositions(): Promise<TrayPositionRecord[]> {
+  const { data } = await http.get<{ positions: TrayPositionRecord[] }>('/api/agv/positions/tray')
+  return data.positions
+}
+
+export interface TrayPositionUpdatePayload {
+  pose?: number[]
+  descend_z?: number
+  lift_z?: number
+  drop_z?: number
+  speed?: number
+  acceleration?: number
+  description?: string
+}
+
+export async function updateTrayPosition(
+  trayName: string,
+  payload: TrayPositionUpdatePayload,
+): Promise<{ tray_name: string; ok: boolean }> {
+  const { data } = await http.put<{ tray_name: string; ok: boolean }>(
+    `/api/agv/positions/tray/${encodeURIComponent(trayName)}`,
+    payload,
+  )
+  return data
+}
+
+export async function createTrayPosition(payload: {
+  tray_name: string
+  template_tray: string
+  pose: number[]
+  description?: string
+}): Promise<{ tray_name: string; ok: boolean }> {
+  const { data } = await http.post<{ tray_name: string; ok: boolean }>(
+    '/api/agv/positions/tray',
+    payload,
+  )
+  return data
+}
+
+export async function deleteTrayPosition(
+  trayName: string,
+): Promise<{ tray_name: string; ok: boolean }> {
+  const { data } = await http.delete<{ tray_name: string; ok: boolean }>(
+    `/api/agv/positions/tray/${encodeURIComponent(trayName)}`,
+  )
   return data
 }
 
