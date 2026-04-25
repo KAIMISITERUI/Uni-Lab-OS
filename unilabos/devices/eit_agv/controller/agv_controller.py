@@ -384,7 +384,7 @@ class AGVController:
             return {
                 "station_id": current_station_id,
                 "station_name": "未知站点",
-                "description": "未在配置中找到该站点"
+                "description": "未知站点"
             }
 
         return self._query_with_retry_detailed(
@@ -1720,7 +1720,7 @@ class AGVController:
                 return {
                     "station_id": current_station_id,
                     "station_name": "未知站点",
-                    "description": "未在配置中找到该站点"
+                    "description": "未知站点"
                 }
 
         return self._query_with_retry(_do_query, "查询站点")
@@ -4170,7 +4170,7 @@ class AGVController:
     def batch_transfer_cycle_test(self, transfer_tasks, cycle_count=1, block=True):
         """
         功能:
-            批量物料转运循环测试, 执行正向转运->充电站->反向转运->充电站的循环
+            批量物料转运循环测试, 执行正向转运->充电过渡点->反向转运->充电过渡点的循环
         参数:
             transfer_tasks: 转运任务列表, 每个任务为字典{"source_tray": str, "target_tray": str, "material_type": str}
                           例如: [{"source_tray": "shelf_tray_1", "target_tray": "agv_tray_1", "material_type": "vial_10ml"}]
@@ -4212,7 +4212,7 @@ class AGVController:
             logger.info(f"任务{idx}: {task['source_tray']} <-> {task['target_tray']}, 物料类型: {task.get('material_type', '未指定')}")
 
         completed_cycles = 0
-        charging_station_wait_seconds = 10
+        charging_transition_wait_seconds = 10
 
         try:
             for cycle in range(cycle_count):
@@ -4234,27 +4234,28 @@ class AGVController:
                     }
                 logger.info(f"第{cycle + 1}轮正向转运完成")
 
-                # 步骤2: AGV移动到充电站
-                logger.info(f"\n步骤2: AGV移动到充电站")
+                # 步骤2: AGV移动到充电过渡点 PP5
+                logger.info(f"\n步骤2: AGV移动到充电过渡点 PP5")
                 logger.info(f"-" * 80)
-                result = self.go_to_charging_station(block=True)
+                # 停泊在充电过渡点而非充电站, 避免触发充电进出站动作
+                result = self.safe_navigate_to_station("PP5")
                 if result is None:
-                    logger.error(f"第{cycle + 1}轮正向转运后移动到充电站失败")
+                    logger.error(f"第{cycle + 1}轮正向转运后移动到充电过渡点失败")
                     return {
                         "success": False,
                         "completed_cycles": completed_cycles,
                         "total_cycles": cycle_count,
-                        "failed_at": f"第{cycle + 1}轮正向转运后移动到充电站"
+                        "failed_at": f"第{cycle + 1}轮正向转运后移动到充电过渡点"
                     }
-                logger.info(f"第{cycle + 1}轮正向转运后成功到达充电站")
+                logger.info(f"第{cycle + 1}轮正向转运后成功到达充电过渡点")
 
                 # 步骤3: 反向转运(目标->源)
                 logger.info(f"\n步骤3: 反向转运(目标->源)")
                 logger.info(f"-" * 80)
                 # 构建反向任务列表(交换源和目标)
-                # 回到充电站后停留 10 秒, 再执行下一段循环测试.
-                logger.info(f"第{cycle + 1}轮回到充电站后等待{charging_station_wait_seconds}秒, 然后开始反向转运")
-                time.sleep(charging_station_wait_seconds)
+                # 回到充电过渡点后停留 10 秒, 再执行下一段循环测试.
+                logger.info(f"第{cycle + 1}轮回到充电过渡点后等待{charging_transition_wait_seconds}秒, 然后开始反向转运")
+                time.sleep(charging_transition_wait_seconds)
                 reverse_tasks = []
                 for task in transfer_tasks:
                     reverse_task = {
@@ -4275,25 +4276,26 @@ class AGVController:
                     }
                 logger.info(f"第{cycle + 1}轮反向转运完成")
 
-                # 步骤4: AGV移动到充电站
-                logger.info(f"\n步骤4: AGV移动到充电站")
+                # 步骤4: AGV移动到充电过渡点 PP5
+                logger.info(f"\n步骤4: AGV移动到充电过渡点 PP5")
                 logger.info(f"-" * 80)
-                result = self.go_to_charging_station(block=True)
+                # 停泊在充电过渡点而非充电站, 避免触发充电进出站动作
+                result = self.safe_navigate_to_station("PP5")
                 if result is None:
-                    logger.error(f"第{cycle + 1}轮反向转运后移动到充电站失败")
+                    logger.error(f"第{cycle + 1}轮反向转运后移动到充电过渡点失败")
                     return {
                         "success": False,
                         "completed_cycles": completed_cycles,
                         "total_cycles": cycle_count,
-                        "failed_at": f"第{cycle + 1}轮反向转运后移动到充电站"
+                        "failed_at": f"第{cycle + 1}轮反向转运后移动到充电过渡点"
                     }
-                logger.info(f"第{cycle + 1}轮反向转运后成功到达充电站")
+                logger.info(f"第{cycle + 1}轮反向转运后成功到达充电过渡点")
 
                 # 完成一轮循环
                 if cycle < cycle_count - 1:
-                    # 非最后一轮时, 从充电站再次出发前同样等待 10 秒.
-                    logger.info(f"第{cycle + 1}轮结束后回到充电站, 等待{charging_station_wait_seconds}秒再开始下一轮")
-                    time.sleep(charging_station_wait_seconds)
+                    # 非最后一轮时, 从充电过渡点再次出发前同样等待 10 秒.
+                    logger.info(f"第{cycle + 1}轮结束后回到充电过渡点, 等待{charging_transition_wait_seconds}秒再开始下一轮")
+                    time.sleep(charging_transition_wait_seconds)
 
                 completed_cycles += 1
                 logger.info(f"\n{'=' * 80}")
@@ -4668,6 +4670,166 @@ class AGVController:
         except Exception as e:
             logger.error(f"保存托盘位置失败: {e}")
             return False
+
+    def compute_tray_pose_from_current_pose(self, tray_name):
+        """
+        功能:
+            读取当前 TCP 位姿, 对非 AGV 点位减去站点校准偏移量, 返回保存前后对比
+            供 Web 弹窗的"预览 before/after"步骤使用, 不会写盘
+        参数:
+            tray_name: 托盘位置名称, 例如"agv_tray_1", "shelf_tray_1-1"
+        返回:
+            Dict, 包含 tray_name/original_pose/current_pose/pose_to_save/station_offset
+        """
+        if self._ensure_connected() is False:
+            raise RuntimeError("机械臂连接失败, 无法读取 TCP 位姿")
+
+        tray_position = self.position_manager.get_position('tray_position', tray_name)
+        if tray_position is None:
+            raise ValueError(f"未找到托盘位置配置: tray_position.{tray_name}")
+
+        current_pose = list(self.arm.get_tcp_pose())
+        original_pose = list(tray_position.pose) if tray_position.pose is not None else None
+
+        is_agv_position = tray_name.startswith('agv')
+        station_offset = None
+        pose_to_save = current_pose
+
+        if is_agv_position is False:
+            # 非 AGV 点位需要减去站点校准偏移, 落盘的应是原始位姿
+            import yaml as _yaml
+            with open(self.position_manager.config_file, 'r', encoding='utf-8') as f:
+                config = _yaml.safe_load(f)
+            matched_station = None
+            if config is not None and 'station_calibration' in config:
+                for station_name in config['station_calibration'].keys():
+                    if tray_name.startswith(station_name):
+                        matched_station = station_name
+                        break
+            if matched_station is not None:
+                station_offset = self.position_manager.get_calibration_offset(matched_station)
+                if station_offset is not None:
+                    pose_to_save = [
+                        current_pose[0] - station_offset['x'],
+                        current_pose[1] - station_offset['y'],
+                        current_pose[2] - station_offset['z'],
+                        current_pose[3] - station_offset['dx'],
+                        current_pose[4] - station_offset['dy'],
+                        current_pose[5] - station_offset['dz'],
+                    ]
+
+        return {
+            "tray_name": tray_name,
+            "original_pose": original_pose,
+            "current_pose": current_pose,
+            "pose_to_save": pose_to_save,
+            "station_offset": station_offset,
+        }
+
+    def compute_station_offset_from_current_pose(self, station_name, reference_tray_name, vision_offset=None):
+        """
+        功能:
+            基于当前 TCP 位姿与配置文件中的参考点位姿, 计算工站整体偏差
+            非 AGV 工站若已经做过视觉补偿, 需把视觉偏移叠加在期望位姿上再计算差值
+        参数:
+            station_name: 工站名称, 用于过滤受影响的所有点位
+            reference_tray_name: 参考点位名称
+            vision_offset: 可选 dict, 包含 x/y/z/dx/dy/dz 视觉补偿偏移
+        返回:
+            Dict, 包含 station/reference_tray/original_pose/current_pose/expected_pose/offset/affected_trays
+        """
+        if self._ensure_connected() is False:
+            raise RuntimeError("机械臂连接失败, 无法读取 TCP 位姿")
+
+        tray_position = self.position_manager.get_position('tray_position', reference_tray_name)
+        if tray_position is None or tray_position.pose is None:
+            raise ValueError(f"参考点位 {reference_tray_name} 没有有效的位姿数据")
+
+        original_pose = list(tray_position.pose)
+        current_pose = list(self.arm.get_tcp_pose())
+
+        if vision_offset is not None:
+            expected_pose = [
+                original_pose[0] + vision_offset["x"],
+                original_pose[1] + vision_offset["y"],
+                original_pose[2] + vision_offset["z"],
+                original_pose[3] + vision_offset["dx"],
+                original_pose[4] + vision_offset["dy"],
+                original_pose[5] + vision_offset["dz"],
+            ]
+        else:
+            expected_pose = list(original_pose)
+
+        offset = {
+            "x": current_pose[0] - expected_pose[0],
+            "y": current_pose[1] - expected_pose[1],
+            "z": current_pose[2] - expected_pose[2],
+            "rx": current_pose[3] - expected_pose[3],
+            "ry": current_pose[4] - expected_pose[4],
+            "rz": current_pose[5] - expected_pose[5],
+        }
+
+        # 过滤该工站受影响的所有点位
+        tray_positions = self.position_manager.get_category('tray_position') or {}
+        affected_trays = [name for name in tray_positions.keys() if name.startswith(station_name)]
+
+        return {
+            "station": station_name,
+            "reference_tray": reference_tray_name,
+            "original_pose": original_pose,
+            "current_pose": current_pose,
+            "expected_pose": expected_pose,
+            "offset": offset,
+            "affected_trays": affected_trays,
+        }
+
+    def apply_station_offset(self, station_name, offset):
+        """
+        功能:
+            将给定偏移量累加到工站所有点位的 pose 上并写盘
+        参数:
+            station_name: 工站名称
+            offset: 偏移字典, 必须包含 x/y/z/rx/ry/rz
+        返回:
+            Dict, 包含 station/success_count/fail_count/affected_trays
+        """
+        tray_positions = self.position_manager.get_category('tray_position')
+        if tray_positions is None:
+            raise ValueError("未找到托盘位置配置")
+
+        affected_trays = [name for name in tray_positions.keys() if name.startswith(station_name)]
+        if len(affected_trays) == 0:
+            raise ValueError(f"工站 {station_name} 没有可应用的点位")
+
+        success_count = 0
+        fail_count = 0
+        for tray_name in affected_trays:
+            try:
+                tray_pos = self.position_manager.get_position("tray_position", tray_name)
+                if tray_pos is None or tray_pos.pose is None:
+                    fail_count += 1
+                    continue
+                old_pose = list(tray_pos.pose)
+                new_pose = [
+                    old_pose[0] + offset["x"],
+                    old_pose[1] + offset["y"],
+                    old_pose[2] + offset["z"],
+                    old_pose[3] + offset["rx"],
+                    old_pose[4] + offset["ry"],
+                    old_pose[5] + offset["rz"],
+                ]
+                self.position_manager.save_tray_position(tray_name, new_pose)
+                success_count += 1
+            except Exception as exc:
+                logger.error(f"更新点位 {tray_name} 失败: {exc}")
+                fail_count += 1
+
+        return {
+            "station": station_name,
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "affected_trays": affected_trays,
+        }
 
     def calibrate_station_offset(self, block=True):
         """

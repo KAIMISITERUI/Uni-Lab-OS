@@ -281,6 +281,59 @@ class TestQueryCurrentStationRetry(unittest.TestCase):
 
     @patch(_CONTROLLER_SLEEP_PATH)
     @patch(_AGV_DRIVER_CLS_PATH)
+    def test_unknown_station_returns_unknown_description(self, mock_driver_cls, mock_sleep):
+        """
+        功能:
+            验证普通站点查询遇到配置外站点时返回面向展示的未知站点描述.
+        参数:
+            mock_driver_cls: 模拟 AGVDriver 类.
+            mock_sleep: 模拟重试等待.
+        返回:
+            None.
+        """
+        mock_driver = MagicMock()
+        mock_driver.query_robot_location.return_value = {
+            "current_station": "UNKNOWN_SITE"
+        }
+        mock_driver_cls.return_value = mock_driver
+
+        result = self.controller.query_current_station()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["station_id"], "UNKNOWN_SITE")
+        self.assertEqual(result["station_name"], "未知站点")
+        self.assertEqual(result["description"], "未知站点")
+        mock_sleep.assert_not_called()
+
+    @patch(_CONTROLLER_SLEEP_PATH)
+    @patch(_AGV_DRIVER_CLS_PATH)
+    def test_unknown_station_detailed_returns_unknown_description(self, mock_driver_cls, mock_sleep):
+        """
+        功能:
+            验证详细站点查询遇到配置外站点时返回面向展示的未知站点描述.
+        参数:
+            mock_driver_cls: 模拟 AGVDriver 类.
+            mock_sleep: 模拟重试等待.
+        返回:
+            None.
+        """
+        mock_driver = MagicMock()
+        mock_driver.query_robot_location.return_value = {
+            "current_station": "UNKNOWN_SITE"
+        }
+        mock_driver_cls.return_value = mock_driver
+
+        result = self.controller._query_current_station_detailed()
+
+        self.assertIs(result["ok"], True)
+        self.assertIsNone(result["failure"])
+        self.assertEqual(result["data"]["station_id"], "UNKNOWN_SITE")
+        self.assertEqual(result["data"]["station_name"], "未知站点")
+        self.assertEqual(result["data"]["description"], "未知站点")
+        mock_sleep.assert_not_called()
+
+    @patch(_CONTROLLER_SLEEP_PATH)
+    @patch(_AGV_DRIVER_CLS_PATH)
     def test_station_query_all_fail_returns_none(self, mock_driver_cls, mock_sleep):
         """
         验收条件:

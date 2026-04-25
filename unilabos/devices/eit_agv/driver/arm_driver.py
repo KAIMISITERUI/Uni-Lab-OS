@@ -1120,6 +1120,16 @@ class ArmDriver:
         logger.info(f"设置碰撞检测等级: {level}")
         return self.robot.collision_detect(level)
 
+    def reset_collision(self):
+        """
+        功能:
+            清除碰撞检测标志, 让机械臂可以接受新的运动指令
+        返回:
+            任务结束时的状态
+        """
+        logger.info("清除碰撞检测标志")
+        return self.robot.collision_detection_reset()
+
     # ==================== 错误处理 ====================
 
     def get_last_error(self):
