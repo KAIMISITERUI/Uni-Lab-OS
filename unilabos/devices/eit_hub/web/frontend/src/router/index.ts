@@ -30,10 +30,10 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'AGV 运输车' },
   },
   {
-    path: '/agv/calibration',
-    name: 'agv-calibration',
+    path: '/agv/positions',
+    name: 'agv-positions',
     component: () => import('../views/AgvCalibrationView.vue'),
-    meta: { title: 'AGV 点位校准' },
+    meta: { title: 'AGV 点位管理' },
   },
   {
     path: '/agv/shelf',

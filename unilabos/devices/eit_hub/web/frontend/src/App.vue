@@ -153,8 +153,8 @@ function saveToken() {
           </button>
         </div>
         <div v-if="agvMenuExpanded" class="nav-sub-list">
-          <RouterLink class="nav-link nav-sub" to="/agv/calibration">
-            <span>点位校准</span>
+          <RouterLink class="nav-link nav-sub" to="/agv/positions">
+            <span>点位管理</span>
           </RouterLink>
           <RouterLink class="nav-link nav-sub" to="/agv/shelf">
             <span>货架状态</span>
