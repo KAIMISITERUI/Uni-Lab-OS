@@ -105,6 +105,21 @@ def _require_arm(context: AgvContext) -> None:
         raise _json_error("机械臂未连接, 请先点击连接机械臂按钮.", status.HTTP_409_CONFLICT)
 
 
+def _reload_positions(context: AgvContext) -> None:
+    """
+    功能:
+        在执行点位相关动作前重新加载 yaml, 确保读取到最新的 arm_positions 配置.
+    参数:
+        context: AgvContext, AGV 上下文.
+    返回:
+        None.
+    """
+    try:
+        context.get_or_create().position_manager.reload()
+    except Exception as exc:
+        logger.warning("点位配置 reload 失败: %s", exc)
+
+
 def _safe_call(loader: Callable[[], Any]) -> Any:
     """
     功能:
@@ -169,22 +184,41 @@ def _derive_drive_ready(robot_status: Any) -> Optional[bool]:
     return True
 
 
-def _build_arm_state(controller: Any) -> JsonDict:
+def _build_arm_state(controller: Any, robot_status: Any) -> JsonDict:
     """
     功能:
         汇总机械臂当前可执行动作状态, 供前端只展示当前可执行的配对动作.
     参数:
         controller: Any, AGVController 实例.
+        robot_status: Any, 已查询的底层 RobotStatus 对象, 复用避免重复 RPC.
     返回:
         Dict[str, Any], 包含 drive_ready/quick_change_locked/gripper_open.
     """
     quick_change_output = _safe_call(lambda: controller.arm.get_digital_output(1))
     gripper_output = _safe_call(lambda: controller.arm.get_digital_output(2))
     return {
-        "drive_ready": _derive_drive_ready(_safe_call(controller.arm.get_robot_status)),
+        "drive_ready": _derive_drive_ready(robot_status),
         "quick_change_locked": None if _bool_or_none(quick_change_output) is None else quick_change_output is False,
         "gripper_open": _bool_or_none(gripper_output),
     }
+
+
+def _build_collision_info(robot_status: Any) -> JsonDict:
+    """
+    功能:
+        从 Duco RobotStatus 中提取碰撞检测状态, 供前端展示告警.
+    参数:
+        robot_status: Any, 底层 RobotStatus 对象, 为 None 时降级为未碰撞.
+    返回:
+        Dict[str, Any], 包含 active (bool, 是否处于碰撞) 和 axis (Optional[int], 触发碰撞的轴号).
+    """
+    if robot_status is None:
+        return {"active": False, "axis": None}
+    collision_flag = getattr(robot_status, "collision", None)
+    collision_axis = getattr(robot_status, "collisionAxis", None)
+    active = collision_flag is True
+    axis = collision_axis if isinstance(collision_axis, int) else None
+    return {"active": active, "axis": axis}
 
 
 def _add_current_station(payload: JsonDict, context: AgvContext) -> JsonDict:
@@ -439,6 +473,134 @@ class ShelfResetRequest(BaseModel):
     confirm: bool = False
 
 
+class TestTrayActionRequest(BaseModel):
+    """
+    功能:
+        取/放托盘测试请求.
+    参数:
+        tray_name: str, 目标托盘名称.
+        material_type: Optional[str], 物料类型, 决定夹爪与高度偏移; 为 None 时使用默认参数.
+    """
+
+    tray_name: str = Field(..., min_length=1)
+    material_type: Optional[str] = None
+
+
+class TraySaveRequest(BaseModel):
+    """
+    功能:
+        显式保存托盘点位 TCP 位姿请求.
+    参数:
+        tray_name: str, 托盘名称.
+        pose: List[float], 6 维 TCP 位姿 [x, y, z, rx, ry, rz].
+    """
+
+    tray_name: str = Field(..., min_length=1)
+    pose: List[float] = Field(..., min_length=6, max_length=6)
+
+
+class StationOffsetPrepareRequest(BaseModel):
+    """
+    功能:
+        工站整体偏差校准准备请求.
+    参数:
+        station: str, 选择的工站名称, 例如 "agv" 或 "synthesis_station".
+        reference_tray: str, 选定的参考点位名称.
+        use_loaded_tray: bool, 是否带托盘校准.
+        source_tray: str, 带托盘场景的源托盘, 默认 "agv_tray_1".
+        run_vision: bool, 是否先做视觉补偿 (仅非 agv 工站有效).
+        move_to_point: bool, 空载场景下是否运动到参考点位.
+    """
+
+    station: str = Field(..., min_length=1)
+    reference_tray: str = Field(..., min_length=1)
+    use_loaded_tray: bool = False
+    source_tray: str = "agv_tray_1"
+    run_vision: bool = False
+    move_to_point: bool = True
+
+
+class StationOffsetPreviewRequest(BaseModel):
+    """
+    功能:
+        工站整体偏差预览计算请求, 不写盘.
+    参数:
+        station: str, 工站名称.
+        reference_tray: str, 参考点位名称.
+        vision_offset: Optional[Dict[str, float]], 视觉补偿偏移, 字段 x/y/z/dx/dy/dz.
+    """
+
+    station: str = Field(..., min_length=1)
+    reference_tray: str = Field(..., min_length=1)
+    vision_offset: Optional[Dict[str, float]] = None
+
+
+class StationOffsetApplyRequest(BaseModel):
+    """
+    功能:
+        工站整体偏差应用请求, 写盘.
+    参数:
+        station: str, 工站名称.
+        offset: Dict[str, float], 偏移量 x/y/z/rx/ry/rz.
+    """
+
+    station: str = Field(..., min_length=1)
+    offset: Dict[str, float]
+
+
+class StationOffsetCleanupRequest(BaseModel):
+    """
+    功能:
+        工站整体偏差校准收尾请求, 仅带托盘场景需要松爪+回零.
+    参数:
+        reference_tray: str, 参考点位名称.
+        use_loaded_tray: bool, 是否带托盘校准.
+    """
+
+    reference_tray: str = Field(..., min_length=1)
+    use_loaded_tray: bool = False
+
+
+class TrayPositionCreateRequest(BaseModel):
+    """
+    功能:
+        从模板创建托盘点位请求.
+    参数:
+        tray_name: str, 新点位名称.
+        template_tray: str, 模板点位名称, 用于继承非 pose 字段.
+        pose: List[float], 6 维 TCP 位姿.
+        description: Optional[str], 描述.
+    """
+
+    tray_name: str = Field(..., min_length=1)
+    template_tray: str = Field(..., min_length=1)
+    pose: List[float] = Field(..., min_length=6, max_length=6)
+    description: Optional[str] = None
+
+
+class TrayPositionUpdateRequest(BaseModel):
+    """
+    功能:
+        更新托盘点位字段请求, 字段为 None 表示不修改.
+    参数:
+        pose: Optional[List[float]], 6 维 TCP 位姿.
+        descend_z: Optional[float], 下探距离.
+        lift_z: Optional[float], 提升距离.
+        drop_z: Optional[float], 放置下落距离.
+        speed: Optional[float], 速度百分比.
+        acceleration: Optional[float], 加速度百分比.
+        description: Optional[str], 描述.
+    """
+
+    pose: Optional[List[float]] = Field(default=None, min_length=6, max_length=6)
+    descend_z: Optional[float] = None
+    lift_z: Optional[float] = None
+    drop_z: Optional[float] = None
+    speed: Optional[float] = None
+    acceleration: Optional[float] = None
+    description: Optional[str] = None
+
+
 # ==================== 分节 A: 基础状态与连接 ====================
 
 
@@ -468,6 +630,7 @@ def get_status(
         "joints": None,
         "is_moving": None,
         "arm_state": _empty_arm_state(),
+        "collision": {"active": False, "axis": None},
         "charge_loop": charger.status(),
     }
 
@@ -488,7 +651,10 @@ def get_status(
                 result["tcp_pose"] = _safe_call(controller.arm.get_tcp_pose)
                 result["joints"] = _safe_call(controller.arm.get_joints_position)
                 result["is_moving"] = _safe_call(controller.arm.is_moving)
-                result["arm_state"] = _build_arm_state(controller)
+                # 单次查询 RobotStatus, 同时驱动 arm_state 和 collision 派生字段
+                robot_status = _safe_call(controller.arm.get_robot_status)
+                result["arm_state"] = _build_arm_state(controller, robot_status)
+                result["collision"] = _build_collision_info(robot_status)
             finally:
                 context.arm_lock.release()
         # 锁超时则跳过, 本轮保留上次值为 None, 下一轮轮询继续尝试
@@ -666,6 +832,23 @@ def arm_stop(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
     return {"ok": True}
 
 
+@router.post("/arm/reset-collision")
+def arm_reset_collision(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+    """
+    功能:
+        清除机械臂碰撞检测标志, 让机械臂可以接受新的运动指令. 同步执行, 不占 Job 槽.
+    返回:
+        Dict[str, Any], 执行结果.
+    """
+    _require_arm(context)
+    try:
+        with context.arm_lock:
+            context.get_or_create().arm.reset_collision()
+    except Exception as exc:
+        raise _json_error(f"清除碰撞标志失败: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"ok": True}
+
+
 @router.post("/arm/quick-change")
 def arm_quick_change(
     request: QuickChangeRequest,
@@ -800,6 +983,7 @@ def transfer(
     _require_arm(context)
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log(f"开始转移物料: {request.source_tray} → {request.target_tray}.")
         with context.arm_lock:
             result = context.get_or_create().transfer_material(
@@ -835,6 +1019,7 @@ def batch_transfer(
     tasks_payload = [item.model_dump() for item in request.tasks]
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log(f"开始批量转运, 任务数={len(tasks_payload)}.")
         with context.arm_lock:
             result = context.get_or_create().batch_transfer_materials(tasks_payload, block=True)
@@ -978,6 +1163,7 @@ def calibration_station(context: AgvContext = Depends(get_agv_context)) -> JsonD
     _require_arm(context)
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log("开始工站点位校准.")
         with context.arm_lock:
             result = context.get_or_create().calibrate_station(block=True)
@@ -1003,6 +1189,7 @@ def calibration_tray(
     _require_arm(context)
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log(f"开始托盘点位校准: {request.tray_name}.")
         with context.arm_lock:
             result = context.get_or_create().calibrate_tray_position(request.tray_name, block=True)
@@ -1024,6 +1211,7 @@ def calibration_station_offset(context: AgvContext = Depends(get_agv_context)) -
     _require_arm(context)
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log("开始工站整体偏差矫正.")
         with context.arm_lock:
             result = context.get_or_create().calibrate_station_offset(block=True)
@@ -1049,6 +1237,7 @@ def calibration_loaded_tray_prepare(
     _require_arm(context)
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log(f"开始带托盘校准准备: source={request.source_tray}, target={request.target_tray}.")
         with context.arm_lock:
             result = context.get_or_create().prepare_loaded_tray_calibration(
@@ -1074,6 +1263,7 @@ def calibration_loaded_tray_record(
         Dict[str, Any], 包含保存的位姿.
     """
     _require_arm(context)
+    _reload_positions(context)
     try:
         with context.arm_lock:
             pose = context.get_or_create().get_calibrated_tray_pose_from_current_pose(request.tray_name)
@@ -1099,6 +1289,7 @@ def calibration_loaded_tray_complete(
     _require_arm(context)
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log(f"开始带托盘校准收尾: {request.tray_name}.")
         with context.arm_lock:
             result = context.get_or_create().complete_loaded_tray_calibration(
@@ -1123,6 +1314,7 @@ def calibration_middle_tray_preview(
     返回:
         Dict[str, Any], 包含 station_name 和 rows 列表.
     """
+    _reload_positions(context)
     try:
         rows = context.get_or_create().preview_station_middle_tray_updates(station)
     except Exception as exc:
@@ -1144,6 +1336,7 @@ def calibration_middle_tray_apply(
     返回:
         Dict[str, Any], 应用统计信息.
     """
+    _reload_positions(context)
     try:
         result = context.get_or_create().apply_station_middle_tray_updates(request.station_name)
     except Exception as exc:
@@ -1168,6 +1361,7 @@ def calibration_move_to_grasp(
     _require_arm(context)
 
     def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
         log(f"运动到抓取点位: {request.tray_name}.")
         with context.arm_lock:
             result = context.get_or_create().move_to_grasp_position(request.tray_name, block=True)
@@ -1175,6 +1369,578 @@ def calibration_move_to_grasp(
         return {"ok": bool(result)}
 
     return _start_job(f"移动到抓取点位 {request.tray_name}", _target)
+
+
+@router.get("/calibration/station/offset")
+def calibration_station_offset_query(
+    station: str = Query(..., min_length=1),
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        查询指定工站当前已保存的校准偏移量, 同步接口.
+    参数:
+        station: str, 工站名称, 例如 "shelf" / "synthesis_station".
+    返回:
+        Dict[str, Any], 包含 station 与 offset (None 表示未校准).
+    """
+    _reload_positions(context)
+    try:
+        offset = context.get_or_create().position_manager.get_calibration_offset(station)
+    except Exception as exc:
+        logger.exception("读取工站校准偏移量失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"station": station, "offset": offset}
+
+
+@router.post("/calibration/tray/preview")
+def calibration_tray_preview(
+    request: TrayNameRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        预览空载托盘校准: 读取当前 TCP 位姿并与配置文件中的位姿对比, 不写盘.
+    参数:
+        request: TrayNameRequest, 托盘名称请求.
+    返回:
+        Dict[str, Any], 包含 original_pose/current_pose/pose_to_save/station_offset.
+    """
+    _require_arm(context)
+    _reload_positions(context)
+    try:
+        with context.arm_lock:
+            return context.get_or_create().compute_tray_pose_from_current_pose(request.tray_name)
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
+    except RuntimeError as exc:
+        raise _json_error(str(exc), status.HTTP_409_CONFLICT) from exc
+    except Exception as exc:
+        logger.exception("预览托盘校准失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+
+
+@router.post("/calibration/tray/save")
+def calibration_tray_save(
+    request: TraySaveRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        显式保存托盘点位 TCP 位姿到配置文件.
+    参数:
+        request: TraySaveRequest, 包含托盘名称与待写入的位姿.
+    返回:
+        Dict[str, Any], 包含 tray_name 与 ok.
+    """
+    _reload_positions(context)
+    try:
+        ok = context.get_or_create().save_calibrated_tray_position(request.tray_name, request.pose)
+    except Exception as exc:
+        logger.exception("保存托盘校准位姿失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    if ok is False:
+        raise _json_error("保存托盘位姿失败.")
+    return {"tray_name": request.tray_name, "ok": True}
+
+
+@router.post("/calibration/station-offset/prepare")
+def calibration_station_offset_prepare(
+    request: StationOffsetPrepareRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        工站整体偏差校准准备阶段 (Job 任务): 视觉补偿 + 取托盘 + 运动到参考点过渡位.
+    参数:
+        request: StationOffsetPrepareRequest, 准备请求.
+    返回:
+        Dict[str, Any], Job ID. 任务结果含 vision_offset (供后续 preview 使用).
+    """
+    _require_arm(context)
+    if request.run_vision is True:
+        _require_chassis(context)
+
+    def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
+        controller = context.get_or_create()
+        vision_offset: Optional[Dict[str, float]] = None
+        with context.arm_lock:
+            if request.run_vision is True:
+                log(f"执行 {request.station} 工站视觉补偿校准.")
+                vision_offset = controller.calibrate_station(block=True)
+                if vision_offset is None:
+                    raise RuntimeError("视觉补偿校准失败")
+                log(f"视觉补偿完成, 偏移量={vision_offset}.")
+
+            if request.use_loaded_tray is True:
+                log(f"带托盘准备: {request.source_tray} -> {request.reference_tray} 过渡位.")
+                ok = controller.prepare_loaded_tray_calibration(
+                    request.reference_tray,
+                    source_tray_name=request.source_tray,
+                    block=True,
+                )
+                if ok is False:
+                    raise RuntimeError("带托盘准备失败")
+            elif request.move_to_point is True:
+                log(f"运动到参考点位: {request.reference_tray}.")
+                ok = controller.move_to_grasp_position(request.reference_tray, block=True)
+                if ok is False:
+                    raise RuntimeError("运动到参考点位失败")
+            else:
+                log("跳过运动, 用户将手动到达参考点.")
+
+        log("准备阶段完成, 请使用机械臂微调到精确位置.")
+        return {"vision_offset": vision_offset, "use_loaded_tray": request.use_loaded_tray}
+
+    return _start_job(f"工站整体偏差准备 {request.station}", _target)
+
+
+@router.post("/calibration/station-offset/preview")
+def calibration_station_offset_preview(
+    request: StationOffsetPreviewRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        计算工站整体偏差 (同步), 不写盘. 前置: 已通过 prepare 让用户微调到位.
+    参数:
+        request: StationOffsetPreviewRequest, 预览请求.
+    返回:
+        Dict[str, Any], 包含 original_pose/current_pose/expected_pose/offset/affected_trays.
+    """
+    _require_arm(context)
+    _reload_positions(context)
+    try:
+        with context.arm_lock:
+            return context.get_or_create().compute_station_offset_from_current_pose(
+                request.station,
+                request.reference_tray,
+                vision_offset=request.vision_offset,
+            )
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
+    except RuntimeError as exc:
+        raise _json_error(str(exc), status.HTTP_409_CONFLICT) from exc
+    except Exception as exc:
+        logger.exception("预览工站整体偏差失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+
+
+@router.post("/calibration/station-offset/apply")
+def calibration_station_offset_apply(
+    request: StationOffsetApplyRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        将偏移量应用到工站所有点位并写盘 (同步).
+    参数:
+        request: StationOffsetApplyRequest, 应用请求.
+    返回:
+        Dict[str, Any], 包含 station/success_count/fail_count/affected_trays.
+    """
+    required_keys = {"x", "y", "z", "rx", "ry", "rz"}
+    if required_keys.issubset(request.offset.keys()) is False:
+        raise _json_error("offset 必须包含 x/y/z/rx/ry/rz 六个字段.")
+    _reload_positions(context)
+    try:
+        return context.get_or_create().apply_station_offset(request.station, request.offset)
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
+    except Exception as exc:
+        logger.exception("应用工站整体偏差失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+
+
+@router.post("/calibration/station-offset/cleanup")
+def calibration_station_offset_cleanup(
+    request: StationOffsetCleanupRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        工站整体偏差校准收尾 (Job 任务). 带托盘场景下走 complete_loaded_tray_calibration.
+    参数:
+        request: StationOffsetCleanupRequest, 收尾请求.
+    返回:
+        Dict[str, Any], Job ID 或同步 ok.
+    """
+    if request.use_loaded_tray is False:
+        return {"ok": True, "skipped": True}
+
+    _require_arm(context)
+
+    def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
+        log(f"带托盘收尾: {request.reference_tray}.")
+        with context.arm_lock:
+            ok = context.get_or_create().complete_loaded_tray_calibration(
+                request.reference_tray, block=True
+            )
+        if ok is False:
+            raise RuntimeError("带托盘收尾失败, 请人工处理.")
+        log("收尾完成.")
+        return {"ok": True}
+
+    return _start_job(f"工站整体偏差收尾 {request.reference_tray}", _target)
+
+
+# ==================== 分节 E2: 取放托盘测试 ====================
+
+
+@router.post("/test/pick-tray")
+def test_pick_tray(
+    request: TestTrayActionRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        测试取托盘 (Job 任务), 复刻 main 菜单第 7 项.
+    参数:
+        request: TestTrayActionRequest, 含托盘名称与可选物料类型.
+    返回:
+        Dict[str, Any], Job ID.
+    """
+    _require_arm(context)
+
+    def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
+        log(f"测试取托盘: {request.tray_name}, material_type={request.material_type}.")
+        with context.arm_lock:
+            ok = context.get_or_create().pick_tray_with_material(
+                request.tray_name,
+                material_type=request.material_type,
+                block=True,
+            )
+        log(f"取托盘结果: {'成功' if ok else '失败'}.")
+        return {"ok": bool(ok)}
+
+    return _start_job(f"测试取托盘 {request.tray_name}", _target)
+
+
+@router.post("/test/put-tray")
+def test_put_tray(
+    request: TestTrayActionRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        测试放托盘 (Job 任务), 复刻 main 菜单第 8 项.
+    参数:
+        request: TestTrayActionRequest, 含托盘名称与可选物料类型.
+    返回:
+        Dict[str, Any], Job ID.
+    """
+    _require_arm(context)
+
+    def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
+        log(f"测试放托盘: {request.tray_name}, material_type={request.material_type}.")
+        with context.arm_lock:
+            ok = context.get_or_create().put_tray_with_material(
+                request.tray_name,
+                material_type=request.material_type,
+                block=True,
+            )
+        log(f"放托盘结果: {'成功' if ok else '失败'}.")
+        return {"ok": bool(ok)}
+
+    return _start_job(f"测试放托盘 {request.tray_name}", _target)
+
+
+# ==================== 分节 E3: 批量测试 ====================
+
+
+class _JobLogBridge(logging.Handler):
+    """
+    功能:
+        将控制器 logger 的运行日志实时转发到 Job 日志缓冲, 供前端 JobPanel 流式显示.
+    参数:
+        log_fn: Job target 闭包提供的 log 回调.
+    """
+
+    def __init__(self, log_fn: Callable[[str], None]) -> None:
+        super().__init__(level=logging.INFO)
+        self._log_fn = log_fn
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._log_fn(record.getMessage())
+        except Exception:
+            self.handleError(record)
+
+
+class TestAllPositionsRequest(BaseModel):
+    """
+    功能:
+        全点位测试请求体.
+    参数:
+        material_type: str, 托盘物料类型, 决定夹爪与高度偏移.
+    """
+
+    material_type: str = Field(..., description="托盘物料类型名称")
+
+
+class BatchTransferTaskItem(BaseModel):
+    """
+    功能:
+        批量物料转运循环测试中的单条任务.
+    参数:
+        source_tray: str, 源托盘点位名称.
+        target_tray: str, 目标托盘点位名称.
+        material_type: str, 物料类型名称, 决定夹爪与高度偏移.
+    """
+
+    source_tray: str = Field(..., description="源托盘点位名称")
+    target_tray: str = Field(..., description="目标托盘点位名称")
+    material_type: str = Field(..., description="物料类型名称")
+
+
+class BatchTransferCycleRequest(BaseModel):
+    """
+    功能:
+        批量物料转运循环测试请求体.
+    参数:
+        cycle_count: int, 循环轮数, 至少 1.
+        transfer_tasks: List[BatchTransferTaskItem], 转运任务, 1-4 个.
+    """
+
+    cycle_count: int = Field(..., ge=1, description="循环轮数")
+    transfer_tasks: List[BatchTransferTaskItem] = Field(
+        ..., min_length=1, max_length=4, description="转运任务列表(1-4个)",
+    )
+
+
+@router.post("/test/all-positions")
+def test_all_positions(
+    request: TestAllPositionsRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        全点位测试 (Job 任务). 从 agv_tray_1 取托盘依次放到当前工站每个点位再取回, 验证点位准确性.
+    参数:
+        request: TestAllPositionsRequest, 含物料类型.
+    返回:
+        Dict[str, Any], Job ID 响应.
+    """
+    _require_arm(context)
+
+    def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
+        controller = context.get_or_create()
+        # 全点位测试只覆盖当前工站, 未识别工站时直接终止
+        if controller.current_station is None:
+            raise RuntimeError("未识别当前工站, 请先校准或移动到目标工站.")
+        log(f"开始全点位测试, 物料类型: {request.material_type}, 当前工站: {controller.current_station}.")
+        # 桥接控制器 logger, 把 logger.info 内容实时推送到 Job 日志
+        target_logger = logging.getLogger(type(controller).__module__)
+        bridge = _JobLogBridge(log)
+        target_logger.addHandler(bridge)
+        try:
+            with context.arm_lock:
+                results = controller.test_all_positions(
+                    request.material_type,
+                    block=True,
+                )
+        finally:
+            target_logger.removeHandler(bridge)
+        success_count = len(results.get("success", []))
+        failed_count = len(results.get("failed", []))
+        skipped_count = len(results.get("skipped", []))
+        log(
+            f"全点位测试结束, 成功 {success_count} 个, 失败 {failed_count} 个, 跳过 {skipped_count} 个.",
+        )
+        return results
+
+    return _start_job(f"全点位测试 {request.material_type}", _target)
+
+
+@router.post("/test/batch-transfer-cycle")
+def test_batch_transfer_cycle(
+    request: BatchTransferCycleRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        批量物料转运循环测试 (Job 任务). 1-4 个任务, 每轮执行 正向转运 -> 充电过渡点 -> 反向转运 -> 充电过渡点.
+    参数:
+        request: BatchTransferCycleRequest, 含循环轮数与任务列表.
+    返回:
+        Dict[str, Any], Job ID 响应.
+    """
+    _require_chassis(context)
+    _require_arm(context)
+
+    # pydantic 列表转控制器期望的 dict 列表
+    transfer_tasks: List[Dict[str, str]] = [
+        {
+            "source_tray": item.source_tray,
+            "target_tray": item.target_tray,
+            "material_type": item.material_type,
+        }
+        for item in request.transfer_tasks
+    ]
+    cycle_count = request.cycle_count
+
+    def _target(log: Callable[[str], None]) -> Any:
+        _reload_positions(context)
+        controller = context.get_or_create()
+        log(f"开始批量物料转运循环测试, 共 {cycle_count} 轮, {len(transfer_tasks)} 个任务.")
+        for index, task in enumerate(transfer_tasks, 1):
+            log(
+                f"任务 {index}: {task['source_tray']} <-> {task['target_tray']}, "
+                f"物料类型 {task['material_type']}.",
+            )
+        # 桥接控制器 logger, 把 logger.info 内容实时推送到 Job 日志
+        target_logger = logging.getLogger(type(controller).__module__)
+        bridge = _JobLogBridge(log)
+        target_logger.addHandler(bridge)
+        try:
+            with context.arm_lock:
+                result = controller.batch_transfer_cycle_test(
+                    transfer_tasks,
+                    cycle_count=cycle_count,
+                    block=True,
+                )
+        finally:
+            target_logger.removeHandler(bridge)
+        log(
+            f"循环测试结束, 完成 {result.get('completed_cycles', 0)}/"
+            f"{result.get('total_cycles', cycle_count)} 轮, "
+            f"状态: {'成功' if result.get('success') else '失败'}.",
+        )
+        return result
+
+    return _start_job(f"批量物料转运循环测试 x{cycle_count}", _target)
+
+
+# ==================== 分节 E4: 物料与点位管理 ====================
+
+
+@router.get("/materials")
+def list_materials(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+    """
+    功能:
+        列出物料类型选项, 用于取放测试下拉.
+    返回:
+        Dict[str, Any], 包含 materials 列表, 元素含 name/gripper/description.
+    """
+    _reload_positions(context)
+    try:
+        materials = context.get_or_create().position_manager.materials
+    except Exception as exc:
+        logger.exception("读取物料配置失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+
+    items: List[JsonDict] = []
+    for name, data in materials.items():
+        items.append({
+            "name": name,
+            "gripper": getattr(data, "gripper", ""),
+            "description": getattr(data, "description", ""),
+        })
+    return {"materials": items}
+
+
+@router.get("/positions/tray")
+def list_tray_positions(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+    """
+    功能:
+        列出全部托盘点位的完整字段, 供前端点位管理页渲染表格.
+    返回:
+        Dict[str, Any], 包含 positions 列表.
+    """
+    _reload_positions(context)
+    try:
+        positions = context.get_or_create().position_manager.list_tray_positions()
+    except Exception as exc:
+        logger.exception("读取托盘点位列表失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"positions": positions}
+
+
+@router.put("/positions/tray/{tray_name}")
+def update_tray_position(
+    tray_name: str,
+    request: TrayPositionUpdateRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        更新托盘点位字段, 字段为 None 表示不修改.
+    参数:
+        tray_name: str, 待更新的托盘名称.
+        request: TrayPositionUpdateRequest, 待更新字段.
+    返回:
+        Dict[str, Any], 包含 tray_name 与 ok.
+    """
+    fields = request.model_dump(exclude_none=True)
+    if len(fields) == 0:
+        raise _json_error("至少提供一个待更新字段.")
+    _reload_positions(context)
+    try:
+        context.get_or_create().position_manager.update_tray_fields(tray_name, fields)
+    except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_404_NOT_FOUND) from exc
+    except Exception as exc:
+        logger.exception("更新托盘点位失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"tray_name": tray_name, "ok": True}
+
+
+@router.post("/positions/tray")
+def create_tray_position(
+    request: TrayPositionCreateRequest,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        基于模板创建新托盘点位.
+    参数:
+        request: TrayPositionCreateRequest, 创建请求.
+    返回:
+        Dict[str, Any], 包含 tray_name 与 ok.
+    """
+    _reload_positions(context)
+    try:
+        context.get_or_create().position_manager.save_tray_position_from_template(
+            request.tray_name,
+            request.pose,
+            request.template_tray,
+            description=request.description,
+        )
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
+    except Exception as exc:
+        logger.exception("创建托盘点位失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"tray_name": request.tray_name, "ok": True}
+
+
+@router.delete("/positions/tray/{tray_name}")
+def delete_tray_position(
+    tray_name: str,
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        删除指定托盘点位.
+    参数:
+        tray_name: str, 待删除的托盘名称.
+    返回:
+        Dict[str, Any], 包含 tray_name 与 ok.
+    """
+    _reload_positions(context)
+    try:
+        context.get_or_create().position_manager.delete_tray_position(tray_name)
+    except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_404_NOT_FOUND) from exc
+    except Exception as exc:
+        logger.exception("删除托盘点位失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"tray_name": tray_name, "ok": True}
 
 
 # ==================== 分节 F: 货架 ====================
