@@ -761,6 +761,120 @@ class PositionManager:
             logger.error(f"保存托盘位置失败: {e}")
             raise
 
+    def list_tray_positions(self) -> List[Dict]:
+        """
+        功能:
+            列出所有托盘点位的完整字段, 用于前端点位管理页直接渲染
+        返回:
+            List[Dict], 每个元素含 name/pose/joints/descend_z/lift_z/drop_z/speed/acceleration/description
+        """
+        result: List[Dict] = []
+        if 'tray_position' not in self.positions:
+            return result
+
+        for tray_name, pos in self.positions['tray_position'].items():
+            result.append({
+                'name': tray_name,
+                'pose': list(pos.pose) if pos.pose is not None else None,
+                'joints': list(pos.joints) if pos.joints is not None else None,
+                'descend_z': pos.descend_z,
+                'lift_z': pos.lift_z,
+                'drop_z': pos.drop_z,
+                'speed': pos.speed,
+                'acceleration': pos.acceleration,
+                'description': pos.description,
+            })
+        return result
+
+    def delete_tray_position(self, tray_name: str) -> None:
+        """
+        功能:
+            从配置文件的 tray_position 节中删除指定点位, 保留 yaml 注释和格式
+        参数:
+            tray_name: 待删除的托盘点位名称
+        """
+        try:
+            yaml_handler = YAML()
+            yaml_handler.preserve_quotes = True
+            yaml_handler.default_flow_style = False
+            yaml_handler.width = 4096
+
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config = yaml_handler.load(f)
+
+            if config is None or 'tray_position' not in config:
+                raise ValueError(f"配置文件不存在 tray_position 节")
+
+            if tray_name not in config['tray_position']:
+                raise ValueError(f"托盘点位不存在: {tray_name}")
+
+            del config['tray_position'][tray_name]
+
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                yaml_handler.dump(config, f)
+
+            logger.info(f"已删除托盘点位 {tray_name}")
+            self.reload()
+
+        except Exception as e:
+            logger.error(f"删除托盘点位失败: {e}")
+            raise
+
+    def update_tray_fields(self, tray_name: str, fields: Dict) -> None:
+        """
+        功能:
+            更新托盘点位的指定字段, 保留 yaml 注释和未传字段
+        参数:
+            tray_name: 托盘点位名称
+            fields: 待更新字段字典, 可包含 pose/descend_z/lift_z/drop_z/speed/acceleration/description
+        """
+        try:
+            from ruamel.yaml.comments import CommentedSeq
+            from ruamel.yaml.tokens import CommentToken
+            from ruamel.yaml.error import CommentMark
+
+            yaml_handler = YAML()
+            yaml_handler.preserve_quotes = True
+            yaml_handler.default_flow_style = False
+            yaml_handler.width = 4096
+
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config = yaml_handler.load(f)
+
+            if config is None or 'tray_position' not in config or tray_name not in config['tray_position']:
+                raise ValueError(f"托盘点位不存在: {tray_name}")
+
+            tray_config = config['tray_position'][tray_name]
+
+            # 处理 pose, 写入带行内注释的 flow 风格列表
+            if 'pose' in fields and fields['pose'] is not None:
+                pose_list = [float(v) for v in fields['pose']]
+                if len(pose_list) != 6:
+                    raise ValueError(f"pose 必须为 6 维列表")
+                pose_seq = CommentedSeq(pose_list)
+                pose_seq.fa.set_flow_style()
+                pose_seq.fa.set_block_style()
+                pose_comments = ['x, 单位mm', 'y, 单位mm', 'z, 单位mm', 'rx, 单位rad', 'ry, 单位rad', 'rz, 单位rad']
+                for i, comment in enumerate(pose_comments):
+                    pose_seq.ca.items[i] = [None, None, CommentToken(f'  # {comment}\n', CommentMark(0), None), None]
+                tray_config['pose'] = pose_seq
+
+            # 处理标量运动参数
+            scalar_fields = ['descend_z', 'lift_z', 'drop_z', 'speed', 'acceleration', 'description']
+            for key in scalar_fields:
+                if key in fields and fields[key] is not None:
+                    tray_config[key] = fields[key]
+
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                yaml_handler.dump(config, f)
+
+            logger.info(f"已更新托盘点位 {tray_name} 的字段: {list(fields.keys())}")
+            self.reload()
+
+        except Exception as e:
+            logger.error(f"更新托盘点位字段失败: {e}")
+            raise
+
     def print_summary(self):
         """
         功能:
