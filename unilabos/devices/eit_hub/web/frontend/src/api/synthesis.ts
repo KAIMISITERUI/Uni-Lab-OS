@@ -81,6 +81,76 @@ export interface JobCreateResponse {
   job_id: string
 }
 
+export type WorkflowStepId =
+  | 'batch_in'
+  | 'resource_check'
+  | 'start_task'
+  | 'wait_task'
+  | 'batch_out'
+  | 'auto_unload'
+  | 'submit_analysis'
+  | 'poll_analysis'
+  | 'calculate_yields'
+
+export type WorkflowStatus = 'queued' | 'running' | 'pausing' | 'paused' | 'succeeded' | 'failed'
+
+export type WorkflowStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
+
+export type WorkflowBatchInMode = 'manual' | 'agv'
+
+export interface WorkflowStepState {
+  id: WorkflowStepId
+  name: string
+  status: WorkflowStepStatus
+  result?: unknown
+  error?: string | null
+}
+
+export interface WorkflowState {
+  workflow_id: string
+  job_id: string
+  status: WorkflowStatus
+  current_step: WorkflowStepId | null
+  experiment_id: number
+  experiment_name: string
+  start_step: WorkflowStepId
+  steps: WorkflowStepState[]
+  logs: string[]
+  result?: unknown
+  error?: string | null
+}
+
+export interface WorkflowStartPayload {
+  experiment_id: number
+  experiment_name: string
+  start_step: WorkflowStepId
+  batch_in: {
+    mode: WorkflowBatchInMode
+    chamber_capacity: number
+  }
+  start_task: {
+    check_glovebox_env: boolean
+    water_limit_ppm: number
+    oxygen_limit_ppm: number
+  }
+  wait_task: {
+    poll_interval_s: number
+  }
+  has_analysis_task: boolean
+  submit_analysis: {
+    auto_submit_after_agv: boolean
+  }
+  poll_analysis: {
+    poll_interval: number
+  }
+}
+
+export interface WorkflowStartResponse {
+  workflow_id: string
+  job_id: string
+  status: 'queued'
+}
+
 export interface ResourceCheckPayload {
   template: ReactionTemplate
   auto_generate_batch_file: boolean
@@ -181,5 +251,25 @@ export async function controlW1Shelf(payload: W1ShelfPayload): Promise<JobCreate
 
 export async function fetchJob(jobId: string): Promise<JobState> {
   const { data } = await http.get<JobState>(`/api/synthesis/jobs/${jobId}`)
+  return data
+}
+
+export async function startSynthesisWorkflow(payload: WorkflowStartPayload): Promise<WorkflowStartResponse> {
+  const { data } = await http.post<WorkflowStartResponse>('/api/synthesis/workflow/start', payload)
+  return data
+}
+
+export async function fetchSynthesisWorkflow(workflowId: string): Promise<WorkflowState> {
+  const { data } = await http.get<WorkflowState>(`/api/synthesis/workflow/${workflowId}`)
+  return data
+}
+
+export async function pauseSynthesisWorkflow(workflowId: string): Promise<WorkflowState> {
+  const { data } = await http.post<WorkflowState>(`/api/synthesis/workflow/${workflowId}/pause`)
+  return data
+}
+
+export async function resumeSynthesisWorkflow(workflowId: string): Promise<WorkflowState> {
+  const { data } = await http.post<WorkflowState>(`/api/synthesis/workflow/${workflowId}/resume`)
   return data
 }

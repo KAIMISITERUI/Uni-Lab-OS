@@ -8,6 +8,7 @@ import {
   Document,
   EditPen,
   Files,
+  Operation,
   Printer,
 } from '@element-plus/icons-vue'
 import { setApiToken } from './api/chemicals'
@@ -167,6 +168,10 @@ function saveToken() {
         <RouterLink class="nav-link" to="/synthesis-task-editor">
           <el-icon><EditPen /></el-icon>
           <span>任务编辑</span>
+        </RouterLink>
+        <RouterLink class="nav-link" to="/synthesis-workflow">
+          <el-icon><Operation /></el-icon>
+          <span>工作流</span>
         </RouterLink>
         <RouterLink class="nav-link" to="/label-printer">
           <el-icon><Printer /></el-icon>

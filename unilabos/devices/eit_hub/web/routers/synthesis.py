@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from unilabos.devices.eit_synthesis_station.manager.station_manager import (
     SynthesisStationManager,
@@ -39,6 +41,33 @@ W1_SHELF_POSITIONS = {"W-1-1", "W-1-3", "W-1-5", "W-1-7"}
 W1_SHELF_ACTIONS = {"outside", "home"}
 OUTER_DOOR_ACTIONS = {"open", "close"}
 DEFAULT_HISTORY_TASKS_DIR = DEFAULT_REACTION_TEMPLATE.parent.parent / "data" / "tasks"
+WORKFLOW_STEP_ORDER = (
+    "batch_in",
+    "resource_check",
+    "start_task",
+    "wait_task",
+    "batch_out",
+    "auto_unload",
+    "submit_analysis",
+    "poll_analysis",
+    "calculate_yields",
+)
+WORKFLOW_STEP_LABELS = {
+    "batch_in": "AGV上料",
+    "resource_check": "物料检查",
+    "start_task": "开始合成任务",
+    "wait_task": "任务监控",
+    "batch_out": "下料(任务物料+空托盘)",
+    "auto_unload": "AGV转运",
+    "submit_analysis": "运行分析任务",
+    "poll_analysis": "谱图数据处理",
+    "calculate_yields": "产率计算",
+}
+WORKFLOW_BATCH_IN_MODES = {"manual", "agv"}
+WORKFLOW_PAUSABLE_TASK_STEPS = {"start_task", "wait_task"}
+
+_workflow_lock = threading.RLock()
+_workflow_runs: Dict[str, "WorkflowRunState"] = {}
 
 
 class OuterDoorRequest(BaseModel):
@@ -76,6 +105,320 @@ class ResourceCheckRequest(BaseModel):
 
     template: Optional[JsonDict] = None
     auto_generate_batch_file: bool = True
+
+
+class WorkflowBatchInRequest(BaseModel):
+    """
+    功能:
+        承载工作流上料步骤参数.
+    参数:
+        mode: str, 上料方式, manual 表示手动上料, agv 表示 AGV 上料.
+        chamber_capacity: int, AGV 上料时过渡舱单轮最大托盘数.
+    """
+
+    mode: str = "agv"
+    chamber_capacity: int = Field(default=8, ge=1)
+
+
+class WorkflowWaitTaskRequest(BaseModel):
+    """
+    功能:
+        承载工作流任务监控参数.
+    参数:
+        poll_interval_s: float, 合成任务状态轮询间隔秒数.
+    """
+
+    poll_interval_s: float = Field(default=2.0, gt=0)
+
+
+class WorkflowStartTaskRequest(BaseModel):
+    """
+    功能:
+        承载工作流启动任务步骤参数.
+    参数:
+        check_glovebox_env: bool, 启动前是否检查手套箱水氧.
+        water_limit_ppm: float, 手套箱水含量上限.
+        oxygen_limit_ppm: float, 手套箱氧含量上限.
+    """
+
+    check_glovebox_env: bool = True
+    water_limit_ppm: float = Field(default=10.0, gt=0)
+    oxygen_limit_ppm: float = Field(default=10.0, gt=0)
+
+
+class WorkflowSubmitAnalysisRequest(BaseModel):
+    """
+    功能:
+        承载工作流提交分析任务步骤参数.
+    参数:
+        auto_submit_after_agv: bool, 是否在 AGV 转运分析物料完成后立即提交分析任务.
+    """
+
+    auto_submit_after_agv: bool = True
+
+
+class WorkflowPollAnalysisRequest(BaseModel):
+    """
+    功能:
+        承载工作流谱图处理参数.
+    参数:
+        poll_interval: float, 分析任务状态轮询间隔秒数.
+    """
+
+    poll_interval: float = Field(default=30.0, gt=0)
+
+
+class WorkflowStartRequest(BaseModel):
+    """
+    功能:
+        承载合成工作流启动请求.
+    参数:
+        experiment_id: int, 已上传任务的实验 ID.
+        experiment_name: str, 已上传任务的实验名称.
+        start_step: str, 工作流开始步骤 ID.
+        batch_in: WorkflowBatchInRequest, 上料步骤参数.
+        start_task: WorkflowStartTaskRequest, 启动任务步骤参数.
+        wait_task: WorkflowWaitTaskRequest, 任务监控参数.
+        has_analysis_task: bool, 当前任务是否设置了分析任务.
+        submit_analysis: WorkflowSubmitAnalysisRequest, 提交分析任务步骤参数.
+        poll_analysis: WorkflowPollAnalysisRequest, 谱图处理参数.
+    """
+
+    experiment_id: int
+    experiment_name: str
+    start_step: str
+    batch_in: WorkflowBatchInRequest = Field(default_factory=WorkflowBatchInRequest)
+    start_task: WorkflowStartTaskRequest = Field(default_factory=WorkflowStartTaskRequest)
+    wait_task: WorkflowWaitTaskRequest = Field(default_factory=WorkflowWaitTaskRequest)
+    has_analysis_task: bool = True
+    submit_analysis: WorkflowSubmitAnalysisRequest = Field(default_factory=WorkflowSubmitAnalysisRequest)
+    poll_analysis: WorkflowPollAnalysisRequest = Field(default_factory=WorkflowPollAnalysisRequest)
+
+
+@dataclass
+class WorkflowStepState:
+    """
+    功能:
+        保存单个工作流步骤的运行状态.
+    参数:
+        step_id: str, 步骤 ID.
+        name: str, 步骤中文名称.
+        status: str, pending/running/succeeded/failed/skipped.
+        result: Any, 步骤结果.
+        error: Optional[str], 步骤失败信息.
+    """
+
+    step_id: str
+    name: str
+    status: str = "pending"
+    result: Any = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> JsonDict:
+        """
+        功能:
+            转换为可 JSON 序列化的字典.
+        返回:
+            Dict[str, Any], 步骤状态快照.
+        """
+        return {
+            "id": self.step_id,
+            "name": self.name,
+            "status": self.status,
+            "result": _workflow_to_jsonable(self.result),
+            "error": self.error,
+        }
+
+
+@dataclass
+class WorkflowRunState:
+    """
+    功能:
+        保存工作流运行状态, 支持步骤间暂停与恢复.
+    参数:
+        workflow_id: str, 工作流 ID, 与后台 job_id 相同.
+        experiment_id: int, 实验 ID.
+        experiment_name: str, 实验名称.
+        start_step: str, 开始步骤 ID.
+        steps: List[WorkflowStepState], 全部步骤状态.
+        logs: List[str], 工作流日志.
+    """
+
+    workflow_id: str
+    experiment_id: int
+    experiment_name: str
+    start_step: str
+    steps: List[WorkflowStepState]
+    logs: List[str] = field(default_factory=list)
+    current_step: Optional[str] = None
+    pause_requested: bool = False
+    paused: bool = False
+    task_pause_sent: bool = False
+    _condition: threading.Condition = field(default_factory=lambda: threading.Condition(threading.RLock()))
+
+    def add_log(self, message: str) -> None:
+        """
+        功能:
+            追加工作流日志.
+        参数:
+            message: str, 日志文本.
+        返回:
+            None.
+        """
+        with self._condition:
+            self.logs.append(message)
+
+    def set_current_step(self, step_id: str) -> None:
+        """
+        功能:
+            设置当前执行步骤.
+        参数:
+            step_id: str, 步骤 ID.
+        返回:
+            None.
+        """
+        with self._condition:
+            self.current_step = step_id
+
+    def clear_current_step(self) -> None:
+        """
+        功能:
+            清空当前执行步骤.
+        返回:
+            None.
+        """
+        with self._condition:
+            self.current_step = None
+
+    def update_step(self, step_id: str, status_text: str, result: Any = None, error: Optional[str] = None) -> None:
+        """
+        功能:
+            更新指定步骤状态.
+        参数:
+            step_id: str, 步骤 ID.
+            status_text: str, 新状态文本.
+            result: Any, 步骤结果.
+            error: Optional[str], 失败信息.
+        返回:
+            None.
+        """
+        with self._condition:
+            for step in self.steps:
+                if step.step_id == step_id:
+                    step.status = status_text
+                    step.result = result
+                    step.error = error
+                    break
+
+    def request_pause(self) -> None:
+        """
+        功能:
+            标记工作流需要暂停.
+        返回:
+            None.
+        """
+        with self._condition:
+            self.pause_requested = True
+
+    def mark_paused_immediately(self) -> None:
+        """
+        功能:
+            当前步骤支持立即暂停时, 直接标记为暂停态.
+        返回:
+            None.
+        """
+        with self._condition:
+            self.paused = True
+
+    def wait_if_pause_requested(self, log_fn: Callable[[str], None]) -> None:
+        """
+        功能:
+            在步骤边界等待恢复信号.
+        参数:
+            log_fn: Callable, 工作流日志函数.
+        返回:
+            None.
+        """
+        with self._condition:
+            if self.pause_requested is False:
+                return
+            self.paused = True
+            log_fn("工作流已暂停, 等待恢复.")
+            while self.pause_requested is True:
+                self._condition.wait(timeout=1.0)
+            self.paused = False
+            log_fn("工作流已恢复, 继续执行后续步骤.")
+
+    def resume(self) -> None:
+        """
+        功能:
+            清除暂停标记并唤醒工作流线程.
+        返回:
+            None.
+        """
+        with self._condition:
+            self.pause_requested = False
+            self.paused = False
+            self._condition.notify_all()
+
+    def to_dict(self, job_status: Optional[str] = None, job_error: Optional[str] = None, result: Any = None) -> JsonDict:
+        """
+        功能:
+            转换为前端工作流状态结构.
+        参数:
+            job_status: Optional[str], 后台任务状态.
+            job_error: Optional[str], 后台任务错误.
+            result: Any, 后台任务结果.
+        返回:
+            Dict[str, Any], 工作流状态.
+        """
+        with self._condition:
+            status_text = job_status or "queued"
+            if status_text in ("queued", "running"):
+                if self.paused is True:
+                    status_text = "paused"
+                elif self.pause_requested is True:
+                    status_text = "pausing"
+            return {
+                "workflow_id": self.workflow_id,
+                "job_id": self.workflow_id,
+                "status": status_text,
+                "current_step": self.current_step,
+                "experiment_id": self.experiment_id,
+                "experiment_name": self.experiment_name,
+                "start_step": self.start_step,
+                "steps": [step.to_dict() for step in self.steps],
+                "logs": list(self.logs),
+                "result": _workflow_to_jsonable(result),
+                "error": job_error,
+            }
+
+
+class _WorkflowLogBridge(logging.Handler):
+    """
+    功能:
+        将底层控制器日志转发到工作流日志.
+    参数:
+        log_fn: Callable, 工作流日志函数.
+    """
+
+    def __init__(self, log_fn: Callable[[str], None]) -> None:
+        super().__init__(level=logging.INFO)
+        self._log_fn = log_fn
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """
+        功能:
+            处理一条日志记录并写入工作流日志.
+        参数:
+            record: logging.LogRecord, 日志记录.
+        返回:
+            None.
+        """
+        try:
+            self._log_fn(record.getMessage())
+        except Exception:
+            self.handleError(record)
 
 
 def _job_response(job_id: str) -> JsonDict:
@@ -322,6 +665,9 @@ def submit_reaction_template(
         if payload is not None:
             log("正在保存 Web 表格到本地 Excel 模板.")
             write_reaction_template(payload, DEFAULT_REACTION_TEMPLATE)
+        log("正在同步化学品库到工站.")
+        manager.sync_chemicals_to_station()
+        log("化学品库同步完成.")
         log("正在调用合成工站任务上传逻辑.")
         task_id = manager.create_task_by_file(str(DEFAULT_REACTION_TEMPLATE))
         log(f"合成任务上传完成, task_id={task_id}.")
@@ -360,6 +706,119 @@ def check_resource(
         return result
 
     return _start_job("物料核算", _target)
+
+
+@router.post("/workflow/start")
+def start_workflow(
+    request: WorkflowStartRequest = Body(...),
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        启动上传任务后的合成工作流后台任务.
+    参数:
+        request: WorkflowStartRequest, 工作流启动参数.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 工作流 ID 和排队状态.
+    """
+    _validate_workflow_request(request)
+    state = _create_workflow_state(request)
+    ready_event = threading.Event()
+
+    def _target(log: Callable[[str], None]) -> JsonDict:
+        ready_event.wait()
+        return _run_workflow_steps(state, request, manager, log)
+
+    try:
+        job = job_manager.start_exclusive("合成工作流", _target)
+    except JobBusyError as exc:
+        raise _json_error(str(exc), status.HTTP_409_CONFLICT) from exc
+
+    state.workflow_id = job.job_id
+    with _workflow_lock:
+        _workflow_runs[job.job_id] = state
+    ready_event.set()
+    return {
+        "workflow_id": job.job_id,
+        "job_id": job.job_id,
+        "status": "queued",
+    }
+
+
+@router.get("/workflow/{workflow_id}")
+def get_workflow(workflow_id: str) -> JsonDict:
+    """
+    功能:
+        查询合成工作流运行状态.
+    参数:
+        workflow_id: str, 工作流 ID.
+    返回:
+        Dict[str, Any], 工作流状态.
+    """
+    state = _get_workflow_state(workflow_id)
+    job = job_manager.get(workflow_id)
+    if job is None:
+        raise _json_error(f"未找到工作流后台任务: {workflow_id}", status.HTTP_404_NOT_FOUND)
+    return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
+
+
+@router.post("/workflow/{workflow_id}/pause")
+def pause_workflow(
+    workflow_id: str,
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        请求暂停合成工作流. 对任务运行阶段尽量立即下发工站暂停.
+    参数:
+        workflow_id: str, 工作流 ID.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 工作流状态.
+    """
+    state = _get_workflow_state(workflow_id)
+    job = job_manager.get(workflow_id)
+    if job is None:
+        raise _json_error(f"未找到工作流后台任务: {workflow_id}", status.HTTP_404_NOT_FOUND)
+    if job.status not in ("queued", "running"):
+        return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
+
+    state.request_pause()
+    state.add_log("已收到暂停请求.")
+    if state.current_step in WORKFLOW_PAUSABLE_TASK_STEPS:
+        _pause_running_station_task(state, manager)
+    return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
+
+
+@router.post("/workflow/{workflow_id}/resume")
+def resume_workflow(
+    workflow_id: str,
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        恢复已暂停的合成工作流.
+    参数:
+        workflow_id: str, 工作流 ID.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 工作流状态.
+    """
+    state = _get_workflow_state(workflow_id)
+    job = job_manager.get(workflow_id)
+    if job is None:
+        raise _json_error(f"未找到工作流后台任务: {workflow_id}", status.HTTP_404_NOT_FOUND)
+    if job.status not in ("queued", "running"):
+        return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
+
+    if state.task_pause_sent is True:
+        state.add_log("正在恢复合成工站任务.")
+        manager.fault_recovery(resume_task=1)
+        state.task_pause_sent = False
+    state.resume()
+    state.add_log("已收到恢复请求.")
+    return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
 
 
 @router.post("/device-init")
@@ -486,6 +945,320 @@ def _start_job(name: str, target: Callable[[Callable[[str], None]], Any]) -> Jso
     except JobBusyError as exc:
         raise _json_error(str(exc), status.HTTP_409_CONFLICT) from exc
     return _job_response(job.job_id)
+
+
+def _validate_workflow_request(request: WorkflowStartRequest) -> None:
+    """
+    功能:
+        校验工作流启动参数.
+    参数:
+        request: WorkflowStartRequest, 工作流启动请求.
+    返回:
+        None.
+    """
+    if request.experiment_id <= 0:
+        raise _json_error("实验ID必须大于0.")
+    if str(request.experiment_name).strip() == "":
+        raise _json_error("实验名称不能为空.")
+    if request.start_step not in WORKFLOW_STEP_ORDER:
+        allowed_text = ", ".join(WORKFLOW_STEP_ORDER)
+        raise _json_error(f"工作流开始步骤无效: {request.start_step}. 可选值: {allowed_text}.")
+    if request.batch_in.mode not in WORKFLOW_BATCH_IN_MODES:
+        allowed_text = ", ".join(sorted(WORKFLOW_BATCH_IN_MODES))
+        raise _json_error(f"上料方式无效: {request.batch_in.mode}. 可选值: {allowed_text}.")
+    if request.has_analysis_task is False and request.start_step in ("submit_analysis", "poll_analysis", "calculate_yields"):
+        raise _json_error("当前任务未设置分析任务, 不能从分析步骤开始.")
+
+
+def _create_workflow_state(request: WorkflowStartRequest) -> WorkflowRunState:
+    """
+    功能:
+        根据启动请求创建工作流状态对象.
+    参数:
+        request: WorkflowStartRequest, 工作流启动请求.
+    返回:
+        WorkflowRunState, 初始化后的工作流状态.
+    """
+    start_index = WORKFLOW_STEP_ORDER.index(request.start_step)
+    steps: List[WorkflowStepState] = []
+    for index, step_id in enumerate(WORKFLOW_STEP_ORDER):
+        status_text = "pending"
+        if index < start_index:
+            status_text = "skipped"
+        steps.append(
+            WorkflowStepState(
+                step_id=step_id,
+                name=_workflow_step_label(step_id, request),
+                status=status_text,
+            )
+        )
+    return WorkflowRunState(
+        workflow_id="",
+        experiment_id=request.experiment_id,
+        experiment_name=str(request.experiment_name).strip(),
+        start_step=request.start_step,
+        steps=steps,
+    )
+
+
+def _get_workflow_state(workflow_id: str) -> WorkflowRunState:
+    """
+    功能:
+        读取已登记的工作流状态.
+    参数:
+        workflow_id: str, 工作流 ID.
+    返回:
+        WorkflowRunState, 工作流状态对象.
+    """
+    with _workflow_lock:
+        state = _workflow_runs.get(workflow_id)
+    if state is None:
+        raise _json_error(f"未找到工作流: {workflow_id}", status.HTTP_404_NOT_FOUND)
+    return state
+
+
+def _run_workflow_steps(
+    state: WorkflowRunState,
+    request: WorkflowStartRequest,
+    manager: SynthesisStationManager,
+    job_log: Callable[[str], None],
+) -> JsonDict:
+    """
+    功能:
+        按工作流步骤顺序执行合成任务后流程.
+    参数:
+        state: WorkflowRunState, 工作流状态对象.
+        request: WorkflowStartRequest, 启动参数.
+        manager: SynthesisStationManager, 合成工站管理器.
+        job_log: Callable, 后台任务日志函数.
+    返回:
+        Dict[str, Any], 工作流执行结果.
+    """
+
+    def workflow_log(message: str) -> None:
+        state.add_log(message)
+        job_log(message)
+
+    start_index = WORKFLOW_STEP_ORDER.index(request.start_step)
+    completed_steps: List[str] = []
+    workflow_log(f"工作流开始, 实验ID={request.experiment_id}, 实验名称={request.experiment_name}.")
+    bridges = _attach_workflow_loggers(workflow_log)
+    try:
+        for step_id in WORKFLOW_STEP_ORDER[start_index:]:
+            state.wait_if_pause_requested(workflow_log)
+            if _workflow_step_enabled(step_id, request) is False:
+                state.update_step(step_id, "skipped")
+                workflow_log(f"跳过步骤: {_workflow_step_label(step_id, request)}.")
+                continue
+            state.set_current_step(step_id)
+            state.update_step(step_id, "running")
+            workflow_log(f"开始步骤: {_workflow_step_label(step_id, request)}.")
+            try:
+                step_result = _execute_workflow_step(step_id, request, manager)
+            except Exception as exc:
+                state.update_step(step_id, "failed", error=str(exc))
+                workflow_log(f"步骤失败: {_workflow_step_label(step_id, request)}, 错误: {exc}.")
+                raise
+            state.update_step(step_id, "succeeded", result=step_result)
+            completed_steps.append(step_id)
+            workflow_log(f"步骤完成: {_workflow_step_label(step_id, request)}.")
+            state.wait_if_pause_requested(workflow_log)
+        state.clear_current_step()
+        workflow_log("工作流执行完成.")
+        return {
+            "workflow_id": state.workflow_id,
+            "experiment_id": state.experiment_id,
+            "experiment_name": state.experiment_name,
+            "completed_steps": completed_steps,
+        }
+    finally:
+        _detach_workflow_loggers(bridges)
+
+
+def _execute_workflow_step(
+    step_id: str,
+    request: WorkflowStartRequest,
+    manager: SynthesisStationManager,
+) -> Any:
+    """
+    功能:
+        执行单个工作流步骤.
+    参数:
+        step_id: str, 步骤 ID.
+        request: WorkflowStartRequest, 工作流参数.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Any, 底层步骤执行结果.
+    """
+    if step_id == "batch_in":
+        if request.batch_in.mode == "manual":
+            return manager.batch_in_tray_by_file(str(DEFAULT_BATCH_IN_TEMPLATE))
+        return manager.batch_in_tray_with_agv_transfer(
+            str(DEFAULT_BATCH_IN_TEMPLATE),
+            chamber_capacity=request.batch_in.chamber_capacity,
+        )
+    if step_id == "resource_check":
+        return manager.check_resource_for_task(
+            str(DEFAULT_REACTION_TEMPLATE),
+            auto_generate_batch_file=False,
+        )
+    if step_id == "start_task":
+        return manager.start_task(
+            request.experiment_id,
+            check_glovebox_env=request.start_task.check_glovebox_env,
+            water_limit_ppm=request.start_task.water_limit_ppm,
+            oxygen_limit_ppm=request.start_task.oxygen_limit_ppm,
+        )
+    if step_id == "wait_task":
+        return manager.wait_task_with_ops(
+            request.experiment_id,
+            poll_interval_s=request.wait_task.poll_interval_s,
+        )
+    if step_id == "batch_out":
+        return manager.batch_out_task_and_empty_trays(request.experiment_id)
+    if step_id == "auto_unload":
+        return manager.auto_unload_trays_to_agv(
+            auto_run_analysis=(
+                request.has_analysis_task is True
+                and request.submit_analysis.auto_submit_after_agv is True
+            ),
+        )
+    if step_id == "submit_analysis":
+        if (
+            request.submit_analysis.auto_submit_after_agv is True
+            and WORKFLOW_STEP_ORDER.index(request.start_step) <= WORKFLOW_STEP_ORDER.index("auto_unload")
+        ):
+            return {
+                "success": True,
+                "submitted_in_auto_unload": True,
+            }
+        return manager.run_analysis(str(request.experiment_id))
+    if step_id == "poll_analysis":
+        return manager.poll_analysis_run(
+            str(request.experiment_id),
+            poll_interval=request.poll_analysis.poll_interval,
+        )
+    if step_id == "calculate_yields":
+        return manager.calculate_yields(str(request.experiment_id))
+    raise ValueError(f"未知工作流步骤: {step_id}")
+
+
+def _workflow_step_enabled(step_id: str, request: WorkflowStartRequest) -> bool:
+    """
+    功能:
+        判断工作流步骤是否需要执行.
+    参数:
+        step_id: str, 步骤 ID.
+        request: WorkflowStartRequest, 工作流启动参数.
+    返回:
+        bool, True 表示执行, False 表示跳过.
+    """
+    if request.has_analysis_task is False and step_id in ("submit_analysis", "poll_analysis", "calculate_yields"):
+        return False
+    return True
+
+
+def _workflow_step_label(step_id: str, request: WorkflowStartRequest) -> str:
+    """
+    功能:
+        根据工作流参数返回步骤显示名称.
+    参数:
+        step_id: str, 步骤 ID.
+        request: WorkflowStartRequest, 工作流启动参数.
+    返回:
+        str, 步骤中文名称.
+    """
+    if step_id == "batch_in":
+        if request.batch_in.mode == "manual":
+            return "手动上料"
+        return "AGV上料"
+    return WORKFLOW_STEP_LABELS[step_id]
+
+
+def _pause_running_station_task(state: WorkflowRunState, manager: SynthesisStationManager) -> None:
+    """
+    功能:
+        对合成任务运行或监控阶段下发工站暂停.
+    参数:
+        state: WorkflowRunState, 工作流状态.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        None.
+    """
+    try:
+        state.add_log(f"正在暂停合成工站任务, 实验ID={state.experiment_id}.")
+        manager.stop_task(state.experiment_id)
+        state.task_pause_sent = True
+        state.mark_paused_immediately()
+        state.add_log("合成工站暂停请求已下发.")
+    except Exception as exc:
+        logger.exception("暂停合成工站任务失败, workflow_id=%s", state.workflow_id)
+        state.add_log(f"暂停合成工站任务失败: {exc}.")
+
+
+def _attach_workflow_loggers(log_fn: Callable[[str], None]) -> List[tuple[logging.Logger, _WorkflowLogBridge]]:
+    """
+    功能:
+        将底层关键 logger 桥接到工作流日志.
+    参数:
+        log_fn: Callable, 工作流日志函数.
+    返回:
+        List[tuple[logging.Logger, _WorkflowLogBridge]], 已挂载的 logger 与 handler.
+    """
+    logger_names = [
+        "SynthesisStationManager",
+        "StationManager",
+        "unilabos.devices.eit_synthesis_station.controller.station_controller",
+        "eit_synthesis_station.controller.station_controller",
+        "unilabos.devices.eit_agv.controller.agv_controller",
+        "eit_agv.controller.agv_controller",
+        "unilabos.devices.eit_analysis_station.controller.analysis_controller",
+        "eit_analysis_station.controller.analysis_controller",
+    ]
+    bridges: List[tuple[logging.Logger, _WorkflowLogBridge]] = []
+    for logger_name in logger_names:
+        target_logger = logging.getLogger(logger_name)
+        bridge = _WorkflowLogBridge(log_fn)
+        target_logger.addHandler(bridge)
+        bridges.append((target_logger, bridge))
+    return bridges
+
+
+def _detach_workflow_loggers(bridges: List[tuple[logging.Logger, _WorkflowLogBridge]]) -> None:
+    """
+    功能:
+        移除工作流日志桥接 handler.
+    参数:
+        bridges: List[tuple[logging.Logger, _WorkflowLogBridge]], 已挂载桥接列表.
+    返回:
+        None.
+    """
+    for target_logger, bridge in bridges:
+        target_logger.removeHandler(bridge)
+
+
+def _workflow_to_jsonable(value: Any) -> Any:
+    """
+    功能:
+        将工作流结果转换为 JSON 兼容结构.
+    参数:
+        value: Any, 原始结果.
+    返回:
+        Any, JSON 兼容值.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return f"<bytes length={len(value)}>"
+    if isinstance(value, dict):
+        return {str(key): _workflow_to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_workflow_to_jsonable(item) for item in value]
+    return str(value)
 
 
 def _fill_dashboard_section(

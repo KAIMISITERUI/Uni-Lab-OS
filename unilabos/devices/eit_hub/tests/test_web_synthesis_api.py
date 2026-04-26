@@ -45,6 +45,11 @@ class FakeSynthesisManager:
         self.door_ops: list[str] = []
         self.w1_calls: list[tuple[str, str]] = []
         self.reagent_label_print_calls = 0
+        self.chemical_sync_calls = 0
+        self.call_order: list[str] = []
+        self.workflow_calls: list[tuple[str, Any]] = []
+        self.stop_task_calls: list[int] = []
+        self.fault_recovery_calls: list[Dict[str, Any]] = []
 
     def station_state(self) -> int:
         """功能: 返回测试工站状态."""
@@ -66,12 +71,24 @@ class FakeSynthesisManager:
         """功能: 返回测试任务列表."""
         return {"task_list": [{"task_id": 7, "task_name": "最近任务", "status": 0}]}
 
+    def sync_chemicals_to_station(self) -> Dict[str, Any]:
+        """
+        功能:
+            记录化学品库同步调用并返回测试结果.
+        返回:
+            Dict[str, Any], 同步结果.
+        """
+        self.chemical_sync_calls += 1
+        self.call_order.append("sync_chemicals_to_station")
+        return {"success": True}
+
     def create_task_by_file(self, template_path: str) -> int:
         """
         功能:
             记录任务模板路径并返回测试任务 ID.
         """
         self.submitted_path = template_path
+        self.call_order.append("create_task_by_file")
         if self.entered_event is not None:
             self.entered_event.set()
         if self.release_event is not None:
@@ -139,6 +156,204 @@ class FakeSynthesisManager:
         """
         self.reagent_label_print_calls += 1
 
+    def batch_in_tray_by_file(self, file_path: str) -> Dict[str, Any]:
+        """
+        功能:
+            记录手动上料调用.
+        参数:
+            file_path: str, 上料文件路径.
+        返回:
+            Dict[str, Any], 上料结果.
+        """
+        self.workflow_calls.append(("batch_in_manual", file_path))
+        return {"success": True, "mode": "manual", "file_path": file_path}
+
+    def batch_in_tray_with_agv_transfer(
+        self,
+        file_path: str,
+        *,
+        chamber_capacity: int = 8,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            记录 AGV 上料调用.
+        参数:
+            file_path: str, 上料文件路径.
+            chamber_capacity: int, 单轮最大托盘数.
+        返回:
+            Dict[str, Any], 上料结果.
+        """
+        self.workflow_calls.append(
+            (
+                "batch_in_agv",
+                {
+                    "file_path": file_path,
+                    "chamber_capacity": chamber_capacity,
+                },
+            )
+        )
+        return {"success": True, "mode": "agv", "chamber_capacity": chamber_capacity}
+
+    def start_task(
+        self,
+        task_id: int,
+        *,
+        check_glovebox_env: bool = True,
+        water_limit_ppm: float = 10.0,
+        oxygen_limit_ppm: float = 10.0,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            记录启动任务调用.
+        参数:
+            task_id: int, 任务 ID.
+            check_glovebox_env: bool, 是否检查手套箱水氧.
+            water_limit_ppm: float, 手套箱水含量上限.
+            oxygen_limit_ppm: float, 手套箱氧含量上限.
+        返回:
+            Dict[str, Any], 启动结果.
+        """
+        self.workflow_calls.append(
+            (
+                "start_task",
+                {
+                    "task_id": task_id,
+                    "check_glovebox_env": check_glovebox_env,
+                    "water_limit_ppm": water_limit_ppm,
+                    "oxygen_limit_ppm": oxygen_limit_ppm,
+                },
+            )
+        )
+        return {"success": True, "task_id": task_id}
+
+    def wait_task_with_ops(self, task_id: int, *, poll_interval_s: float = 2.0) -> int:
+        """
+        功能:
+            记录任务监控调用, 并按测试事件阻塞.
+        参数:
+            task_id: int, 任务 ID.
+            poll_interval_s: float, 轮询间隔.
+        返回:
+            int, 完成状态码.
+        """
+        self.workflow_calls.append(
+            (
+                "wait_task",
+                {
+                    "task_id": task_id,
+                    "poll_interval_s": poll_interval_s,
+                },
+            )
+        )
+        if self.entered_event is not None:
+            self.entered_event.set()
+        if self.release_event is not None:
+            self.release_event.wait(timeout=5)
+        return 2
+
+    def batch_out_task_and_empty_trays(self, task_id: int) -> Dict[str, Any]:
+        """
+        功能:
+            记录下料调用.
+        参数:
+            task_id: int, 任务 ID.
+        返回:
+            Dict[str, Any], 下料结果.
+        """
+        self.workflow_calls.append(("batch_out", task_id))
+        return {"success": True, "task_id": task_id}
+
+    def auto_unload_trays_to_agv(self, *, auto_run_analysis: bool = True) -> Dict[str, Any]:
+        """
+        功能:
+            记录 AGV 自动下料调用.
+        参数:
+            auto_run_analysis: bool, 是否提交分析任务.
+        返回:
+            Dict[str, Any], 自动下料结果.
+        """
+        self.workflow_calls.append(("auto_unload", auto_run_analysis))
+        return {"success": True, "auto_run_analysis": auto_run_analysis}
+
+    def run_analysis(self, task_id: str) -> Dict[str, Any]:
+        """
+        功能:
+            记录提交分析任务调用.
+        参数:
+            task_id: str, 任务 ID.
+        返回:
+            Dict[str, Any], 提交分析任务结果.
+        """
+        self.workflow_calls.append(("submit_analysis", task_id))
+        return {"success": True, "task_id": task_id}
+
+    def poll_analysis_run(self, task_id: str, *, poll_interval: float = 30.0) -> Dict[str, Any]:
+        """
+        功能:
+            记录谱图数据处理调用.
+        参数:
+            task_id: str, 任务 ID.
+            poll_interval: float, 轮询间隔.
+        返回:
+            Dict[str, Any], 谱图处理结果.
+        """
+        self.workflow_calls.append(
+            (
+                "poll_analysis",
+                {
+                    "task_id": task_id,
+                    "poll_interval": poll_interval,
+                },
+            )
+        )
+        return {"success": True, "task_id": task_id}
+
+    def calculate_yields(self, task_id: str) -> Dict[str, Any]:
+        """
+        功能:
+            记录产率计算调用.
+        参数:
+            task_id: str, 任务 ID.
+        返回:
+            Dict[str, Any], 产率计算结果.
+        """
+        self.workflow_calls.append(("calculate_yields", task_id))
+        return {"success": True, "task_id": task_id}
+
+    def stop_task(self, task_id: int) -> Dict[str, Any]:
+        """
+        功能:
+            记录暂停任务调用.
+        参数:
+            task_id: int, 任务 ID.
+        返回:
+            Dict[str, Any], 暂停结果.
+        """
+        self.stop_task_calls.append(task_id)
+        return {"success": True, "task_id": task_id}
+
+    def fault_recovery(
+        self,
+        *,
+        resume_task: int = 1,
+        recovery_type: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            记录故障恢复调用.
+        参数:
+            resume_task: int, 是否恢复任务.
+            recovery_type: int, 恢复类型.
+        返回:
+            Dict[str, Any], 恢复结果.
+        """
+        call = {
+            "resume_task": resume_task,
+            "recovery_type": recovery_type,
+        }
+        self.fault_recovery_calls.append(call)
+        return {"success": True, **call}
+
 
 @pytest.fixture()
 def api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakeSynthesisManager, Path]:
@@ -158,6 +373,7 @@ def api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestCli
     monkeypatch.setattr(synthesis, "DEFAULT_BATCH_IN_TEMPLATE", batch_in_path)
     monkeypatch.setattr(synthesis, "DEFAULT_HISTORY_TASKS_DIR", history_tasks_dir)
     monkeypatch.setattr(synthesis, "job_manager", JobManager())
+    synthesis._workflow_runs.clear()
 
     app = create_app()
     app.dependency_overrides[get_synthesis_manager] = lambda: fake_manager
@@ -186,6 +402,43 @@ def _wait_job(client: TestClient, job_id: str, expected_status: str = "succeeded
             return last_body
         time.sleep(0.05)
     raise AssertionError(f"后台任务未按时结束: {last_body}")
+
+
+def _workflow_payload(**updates: Any) -> Dict[str, Any]:
+    """
+    功能:
+        构造合成工作流测试 payload.
+    参数:
+        **updates: Any, 需要覆盖的字段.
+    返回:
+        Dict[str, Any], 工作流启动请求.
+    """
+    payload: Dict[str, Any] = {
+        "experiment_id": 321,
+        "experiment_name": "Web任务",
+        "start_step": "batch_in",
+        "batch_in": {
+            "mode": "agv",
+            "chamber_capacity": 8,
+        },
+        "start_task": {
+            "check_glovebox_env": True,
+            "water_limit_ppm": 10,
+            "oxygen_limit_ppm": 10,
+        },
+        "wait_task": {
+            "poll_interval_s": 2,
+        },
+        "has_analysis_task": True,
+        "submit_analysis": {
+            "auto_submit_after_agv": True,
+        },
+        "poll_analysis": {
+            "poll_interval": 30,
+        },
+    }
+    payload.update(updates)
+    return payload
 
 
 def test_dashboard_returns_station_snapshot(api_client: tuple[TestClient, FakeSynthesisManager, Path]) -> None:
@@ -305,7 +558,7 @@ def test_submit_saves_template_and_uses_default_path(
 ) -> None:
     """
     功能:
-        验证上传任务会先保存 Web 表格, 再把默认模板路径交给 create_task_by_file.
+        验证上传任务会先保存 Web 表格, 同步化学品库, 再把默认模板路径交给 create_task_by_file.
     """
     client, fake_manager, template_path = api_client
     response = client.post("/api/synthesis/reaction-template/submit", json=_updated_payload())
@@ -316,6 +569,8 @@ def test_submit_saves_template_and_uses_default_path(
     assert job["name"] == "上传任务"
     assert job["result"]["task_id"] == 321
     assert fake_manager.submitted_path == str(template_path)
+    assert fake_manager.chemical_sync_calls == 1
+    assert fake_manager.call_order == ["sync_chemicals_to_station", "create_task_by_file"]
 
     saved = client.get("/api/synthesis/reaction-template").json()
     assert saved["params"]["实验名称"] == "Web任务"
@@ -549,6 +804,237 @@ def test_synthesis_actions_api_is_removed(
     client, _fake_manager, _template_path = api_client
     response = client.post("/api/synthesis/actions/open_outer_door", json={"params": {}})
     assert response.status_code == 404
+
+
+def test_workflow_runs_from_selected_start_step(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证工作流可以从指定起点开始, 并按实验 ID 继续执行后续步骤.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(start_step="start_task"),
+    )
+    assert response.status_code == 200
+
+    workflow_id = response.json()["workflow_id"]
+    job = _wait_job(client, workflow_id)
+    assert job["name"] == "合成工作流"
+
+    status_response = client.get(f"/api/synthesis/workflow/{workflow_id}")
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["status"] == "succeeded"
+    assert body["experiment_id"] == 321
+    assert [step["status"] for step in body["steps"][:2]] == ["skipped", "skipped"]
+    assert fake_manager.workflow_calls == [
+        (
+            "start_task",
+            {
+                "task_id": 321,
+                "check_glovebox_env": True,
+                "water_limit_ppm": 10.0,
+                "oxygen_limit_ppm": 10.0,
+            },
+        ),
+        ("wait_task", {"task_id": 321, "poll_interval_s": 2.0}),
+        ("batch_out", 321),
+        ("auto_unload", True),
+        ("poll_analysis", {"task_id": "321", "poll_interval": 30.0}),
+        ("calculate_yields", "321"),
+    ]
+
+
+def test_workflow_manual_batch_in_uses_batch_file(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证工作流手动上料模式调用 batch_in_tray_by_file.
+    """
+    client, fake_manager, batch_template_path = api_client
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(batch_in={"mode": "manual", "chamber_capacity": 8}),
+    )
+    assert response.status_code == 200
+
+    _wait_job(client, response.json()["workflow_id"])
+    assert fake_manager.workflow_calls[0] == ("batch_in_manual", str(synthesis.DEFAULT_BATCH_IN_TEMPLATE))
+    assert synthesis.DEFAULT_BATCH_IN_TEMPLATE == batch_template_path.parent / "batch_in_tray.xlsx"
+
+
+def test_workflow_agv_batch_in_passes_capacity(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证工作流 AGV 上料模式透传过渡舱容量参数.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(batch_in={"mode": "agv", "chamber_capacity": 4}),
+    )
+    assert response.status_code == 200
+
+    _wait_job(client, response.json()["workflow_id"])
+    assert fake_manager.workflow_calls[0] == (
+        "batch_in_agv",
+        {
+            "file_path": str(synthesis.DEFAULT_BATCH_IN_TEMPLATE),
+            "chamber_capacity": 4,
+        },
+    )
+
+
+def test_workflow_resource_check_uses_secondary_check_without_batch_generation(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证工作流物料检查固定使用二次物料核算且不自动改写上料文件.
+    """
+    client, fake_manager, template_path = api_client
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(start_step="resource_check"),
+    )
+    assert response.status_code == 200
+
+    _wait_job(client, response.json()["workflow_id"])
+    assert fake_manager.resource_check_path == str(template_path)
+    assert fake_manager.resource_check_auto_generate_batch_file is False
+
+
+def test_workflow_submit_analysis_can_run_after_agv_step(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证关闭 AGV 转运后立即提交时, 工作流会在提交分析任务步骤单独提交.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(
+            start_step="auto_unload",
+            submit_analysis={"auto_submit_after_agv": False},
+        ),
+    )
+    assert response.status_code == 200
+
+    _wait_job(client, response.json()["workflow_id"])
+    assert fake_manager.workflow_calls == [
+        ("auto_unload", False),
+        ("submit_analysis", "321"),
+        ("poll_analysis", {"task_id": "321", "poll_interval": 30.0}),
+        ("calculate_yields", "321"),
+    ]
+
+
+def test_workflow_skips_analysis_steps_when_task_has_no_analysis(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证任务未设置分析方法时, 工作流不会提交分析任务或执行谱图处理.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(start_step="auto_unload", has_analysis_task=False),
+    )
+    assert response.status_code == 200
+
+    workflow_id = response.json()["workflow_id"]
+    _wait_job(client, workflow_id)
+    status_response = client.get(f"/api/synthesis/workflow/{workflow_id}")
+    assert status_response.status_code == 200
+    body = status_response.json()
+    statuses = {step["id"]: step["status"] for step in body["steps"]}
+    assert statuses["submit_analysis"] == "skipped"
+    assert statuses["poll_analysis"] == "skipped"
+    assert statuses["calculate_yields"] == "skipped"
+    assert fake_manager.workflow_calls == [("auto_unload", False)]
+
+
+def test_workflow_submit_analysis_start_step_submits_directly(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证从提交分析任务步骤开始时不会误认为已在 AGV 转运阶段提交.
+    """
+    client, fake_manager, _template_path = api_client
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(start_step="submit_analysis"),
+    )
+    assert response.status_code == 200
+
+    _wait_job(client, response.json()["workflow_id"])
+    assert fake_manager.workflow_calls == [
+        ("submit_analysis", "321"),
+        ("poll_analysis", {"task_id": "321", "poll_interval": 30.0}),
+        ("calculate_yields", "321"),
+    ]
+
+
+def test_workflow_pause_and_resume_calls_station_controls(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证任务监控阶段暂停会调用 stop_task, 恢复会调用 fault_recovery.
+    """
+    client, fake_manager, _template_path = api_client
+    fake_manager.entered_event = threading.Event()
+    fake_manager.release_event = threading.Event()
+
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(start_step="wait_task"),
+    )
+    assert response.status_code == 200
+    workflow_id = response.json()["workflow_id"]
+    assert fake_manager.entered_event.wait(timeout=2) is True
+
+    pause_response = client.post(f"/api/synthesis/workflow/{workflow_id}/pause")
+    assert pause_response.status_code == 200
+    assert fake_manager.stop_task_calls == [321]
+
+    resume_response = client.post(f"/api/synthesis/workflow/{workflow_id}/resume")
+    assert resume_response.status_code == 200
+    assert fake_manager.fault_recovery_calls == [{"resume_task": 1, "recovery_type": 0}]
+
+    fake_manager.release_event.set()
+    _wait_job(client, workflow_id)
+
+
+def test_workflow_start_returns_409_when_job_busy(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证已有后台任务运行时工作流启动返回 409.
+    """
+    client, fake_manager, _template_path = api_client
+    fake_manager.entered_event = threading.Event()
+    fake_manager.release_event = threading.Event()
+
+    first = client.post("/api/synthesis/reaction-template/submit", json=_updated_payload())
+    assert first.status_code == 200
+    assert fake_manager.entered_event.wait(timeout=2) is True
+
+    second = client.post("/api/synthesis/workflow/start", json=_workflow_payload())
+    assert second.status_code == 409
+
+    fake_manager.release_event.set()
+    _wait_job(client, first.json()["job_id"])
 
 
 def test_second_exclusive_job_returns_409(

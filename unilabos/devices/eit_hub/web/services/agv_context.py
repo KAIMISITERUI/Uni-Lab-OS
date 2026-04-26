@@ -88,18 +88,17 @@ class AgvContext:
     def connect_arm(self) -> bool:
         """
         功能:
-            连接机械臂. 已连接时直接返回成功, 避免底层 Thrift open 抛 "already open".
+            建立或重建机械臂连接. 用户每次显式调用都视为强制重连请求,
+            通过 ArmDriver.reconnect() 关闭旧 Thrift socket 并重建底层 DucoCobot,
+            以便机械臂断电重启后无需重启 Web 服务即可恢复.
         返回:
-            bool, True 表示连接成功或已处于连接状态.
+            bool, True 表示连接已就绪.
         """
         controller = self.get_or_create()
         with self.arm_lock:
-            # 幂等: 底层已打开 socket 时直接刷新标记并返回
-            if self._arm_connected is True or getattr(controller.arm, "is_connected", False) is True:
-                with self._lock:
-                    self._arm_connected = True
-                return True
-            result = controller.arm.connect()
+            # 显式连接请求即视为重建连接, 不做 "已连接则跳过" 的短路
+            # ArmDriver.reconnect 内部完成: close 旧 socket -> 重建 DucoCobot -> open 新 socket
+            result = controller.arm.reconnect()
             with self._lock:
                 self._arm_connected = bool(result)
             if result is False:

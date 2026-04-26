@@ -513,3 +513,16 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info("虚假执行 poll_analysis_run, task_id=%s, poll_interval=%s", task_id, poll_interval)
         time.sleep(5)
         return {"success": True, "return_info": "虚假分析轮询完成", "report_path": ""}
+
+    def calculate_yields(self, task_id: Optional[str] = None) -> Dict:
+        """
+        功能:
+            虚假执行产率计算流程.
+        参数:
+            task_id: 合成任务 ID 字符串.
+        返回:
+            Dict, 虚假产率计算结果.
+        """
+        logger.info("虚假执行 calculate_yields, task_id=%s", task_id)
+        time.sleep(5)
+        return {"success": True, "return_info": "虚假产率计算完成", "report_path": ""}

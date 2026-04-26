@@ -2396,3 +2396,18 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         logger.info("启动 GC-MS 轮询流程, task_id=%s, poll_interval=%.0fs", task_id, poll_interval)
         result = analysis_ctrl.poll_analysis_run(task_id=task_id, poll_interval=poll_interval)
         return result
+
+    def calculate_yields(self, task_id: Optional[str] = None) -> Dict:
+        """
+        功能:
+            调用分析站产率计算流程, 根据实验方案和积分报告生成产率报告.
+        参数:
+            task_id: 合成任务 ID 字符串, None 时由分析站自动选择最新任务.
+        返回:
+            Dict, AnalysisStationController.calculate_yields 的返回结果.
+        """
+        from unilabos.devices.eit_analysis_station.controller.analysis_controller import AnalysisStationController
+
+        analysis_ctrl = AnalysisStationController()
+        logger.info("启动产率计算流程, task_id=%s", task_id)
+        return analysis_ctrl.calculate_yields(task_id=task_id)

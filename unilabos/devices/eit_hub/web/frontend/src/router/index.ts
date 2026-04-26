@@ -54,9 +54,15 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '任务编辑' },
   },
   {
+    path: '/synthesis-workflow',
+    name: 'synthesis-workflow',
+    component: () => import('../views/SynthesisWorkflowView.vue'),
+    meta: { title: '工作流' },
+  },
+  {
     path: '/label-printer',
     name: 'label-printer',
-    component: () => import('../views/PlaceholderView.vue'),
+    component: () => import('../views/LabelPrinterView.vue'),
     meta: { title: '标签打印机' },
   },
 ]

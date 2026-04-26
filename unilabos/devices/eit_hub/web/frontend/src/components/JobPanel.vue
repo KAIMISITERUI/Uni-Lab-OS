@@ -4,13 +4,14 @@ import { CircleCheck, CircleClose, Loading, Refresh } from '@element-plus/icons-
 import { ElMessage } from 'element-plus'
 import { fetchJob, type JobState } from '../api/synthesis'
 import { fetchAgvJob } from '../api/agv'
+import { fetchLabelPrinterJob } from '../api/labelPrinter'
 import { getErrorMessage } from '../api/http'
 
 const props = withDefaults(
   defineProps<{
     jobId: string
     title?: string
-    source?: 'synthesis' | 'agv'
+    source?: 'synthesis' | 'agv' | 'label-printer'
   }>(),
   {
     title: '运行结果',
@@ -22,6 +23,9 @@ async function dispatchFetchJob(jobId: string): Promise<JobState> {
   if (props.source === 'agv') {
     const data = await fetchAgvJob(jobId)
     return data as JobState
+  }
+  if (props.source === 'label-printer') {
+    return fetchLabelPrinterJob(jobId)
   }
   return fetchJob(jobId)
 }
