@@ -60,6 +60,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '工作流' },
   },
   {
+    path: '/task-history',
+    name: 'task-history',
+    component: () => import('../views/TaskHistoryView.vue'),
+    meta: { title: '任务历史' },
+  },
+  {
     path: '/label-printer',
     name: 'label-printer',
     component: () => import('../views/LabelPrinterView.vue'),

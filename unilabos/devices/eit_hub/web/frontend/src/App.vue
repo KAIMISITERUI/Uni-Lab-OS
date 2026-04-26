@@ -173,6 +173,10 @@ function saveToken() {
           <el-icon><Operation /></el-icon>
           <span>工作流</span>
         </RouterLink>
+        <RouterLink class="nav-link" to="/task-history">
+          <el-icon><Document /></el-icon>
+          <span>任务历史</span>
+        </RouterLink>
         <RouterLink class="nav-link" to="/label-printer">
           <el-icon><Printer /></el-icon>
           <span>标签打印机</span>
