@@ -7,6 +7,10 @@ import 'element-plus/dist/index.css'
 import App from './App.vue'
 import router from './router'
 import './styles.css'
+import { setupWebbShim } from './lib/dynamic-graph/runtime/webb-shim'
+
+// dynamic-graph 期望在 createApp 之前注入 window.webb / window.Vue / window.i18n
+setupWebbShim()
 
 const app = createApp(App)
 

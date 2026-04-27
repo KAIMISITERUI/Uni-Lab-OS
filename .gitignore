@@ -283,3 +283,10 @@ unilabos/devices/eit_chemical_manager/web/frontend/public/indigo-ketcher/
 
 
 unilabos/devices/AGENTS.md
+
+# eit_synthesis_station 参考源码 (dynamic-service), 本地参考用, 不入库
+unilabos/devices/eit_synthesis_station/web_code/
+
+# eit_hub 前端移植自 dynamic-graph 的源码副本, 强制纳入版本控制(覆盖上方 lib/ 通配规则)
+!unilabos/devices/eit_hub/web/frontend/src/lib/
+!unilabos/devices/eit_hub/web/frontend/src/lib/**

@@ -1,0 +1,765 @@
+{
+  "SynArt": {
+    "model": {
+      "tray": {
+        "MW96H": {
+          "create": false,
+          "update": true
+        },
+        "FH022UMT": {
+          "updateChildCount": {
+            "create": false,
+            "update": true
+          }
+        },
+        "SY1T": {
+          "updateChildCount": {
+            "create": false,
+            "update": true
+          }
+        },
+        "TIP5T": {
+          "updateChildCount": {
+            "create": false,
+            "update": true
+          }
+        },
+        "TT2TC": {
+          "updateChildCount": {
+            "create": false,
+            "update": true
+          }
+        },
+        "TTS2TC": {
+          "updateChildCount": {
+            "create": false,
+            "update": true
+          }
+        }
+      }
+    }
+  },
+  "BIT": {
+    "model": {
+      "tray": {
+        "DHP30_V2": {
+          "row": 1,
+          "col": 2,
+          "likeFull": true,
+          "task": {
+            "roles": [
+              "add-powder"
+            ],
+            "compName": "TraySlotMatrix"
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"left",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "C40T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "MN12T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "TIP5T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "TT8TC": {
+          "slotInMultipleRows": true,
+          "checkSubstanceRequired": false,
+          "with_cap": {
+            "BIT": true
+          },
+          "task": {
+            "roles": [
+              "create-task"
+            ],
+            "compName": "TraySlotMatrix"
+          },
+          "editSubstance": {
+            "create": true,
+            "update": true
+          },
+          "editCaps": {
+            "create": true
+          },
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "C8T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "MN12T_V2": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "SB125TC": {
+          "editCaps": {
+            "create": false
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "C125T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "NY22T_V2": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "VP02T_V2": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        },
+        "TT40TC": {
+          "model": "TT40TC",
+          "name": "40mL试管托盘",
+          "capType": 1,
+          "quick_fill": true,
+          "substanceState": "unset",
+          "with_cap": {
+            "BIT": true
+          },
+          "checkSubstanceRequired": {
+            "BIT": false
+          },
+          "max_amount": {
+            "mL": 40,
+            "L": 0.04
+          },
+          "updateChildCount": {
+            "create": true,
+            "update": true
+          },
+          "editSubstance": {
+            "create": true,
+            "update": true
+          },
+          "editMagneton": {
+            "create": true,
+            "update": true
+          },
+          "editCaps": {
+            "create": true,
+            "update": false
+          },
+          "slotInMultipleRows": true,
+          "task": {
+            "roles": [
+              "create-task"
+            ],
+            "compName": "TraySlotMatrix"
+          },
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "reserve": true,
+            "charPosition": "top",
+            "grouped": false
+          },
+          "substanceUnit": ["mL", "L"]
+        }
+      }
+    }
+  },
+  "LiangZhu": {
+    "model": {
+      "tray": {
+        "TT8TC": {
+          "checkSubstanceRequired": true,
+          "substanceState": "ml",
+          "editSubstance": {
+            "create": true,
+            "update": true
+          },
+          "editVesselBarcode": {
+            "create": true,
+            "update": true
+          },
+          "task": {
+            "roles": [],
+            "compName": ""
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "TT8TC_HYD": {
+          "checkSubstanceRequired": true,
+          "substanceState": "ml",
+          "editSubstance": {
+            "create": true,
+            "update": true
+          },
+          "editVesselBarcode": {
+            "create": true,
+            "update": true
+          },
+          "task": {
+            "roles": [],
+            "compName": ""
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "TT40TC": {
+          "checkSubstanceRequired": true,
+          "substanceState": "ml",
+          "editSubstance": {
+            "create": true,
+            "update": true
+          },
+          "editVesselBarcode": {
+            "create": true,
+            "update": true
+          },
+          "task": {
+            "roles": [],
+            "compName": ""
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "TT8TC_V2": {
+          "checkSubstanceRequired": false,
+          "editCaps": {
+            "create": true,
+            "update": true
+          },
+          "editSubstance": {
+            "create": true,
+            "update": true
+          },
+          "editVesselBarcode": {
+            "create": true,
+            "update": true
+          },
+          "task": {
+            "roles": [
+              "create-task"
+            ],
+            "compName": ""
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "TT40TC_V2": {
+          "checkSubstanceRequired": false,
+          "editSubstance": {
+            "create": true,
+            "update": true
+          },
+          "editVesselBarcode": {
+            "create": true,
+            "update": true
+          },
+          "task": {
+            "roles": [
+              "create-task"
+            ],
+            "compName": ""
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "SB125TC": {
+          "editCaps": {
+            "create": false,
+            "update": false
+          },
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "DHP30_V2": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "MN6T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "FF40T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "BK500": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "FF500T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "TKBr": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "SGST": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "CKBr_V2": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "SAT": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "AGST": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "C125T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "TIP1T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "EP1T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "TT2TC_V3": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "C2T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "C40T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "C8T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "MN18T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "SB90TC": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "C90T": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        },
+        "WP96": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition": "top",
+            "groupedOriginChar": "A"
+          }
+        }
+      }
+    }
+  },
+  "DD": {
+    "model": {
+      "tray": {
+        "201000506": {
+          "likeFull": true
+        },
+        "201000505": {
+          "likeFull": true
+        },
+        "201000503": {
+          "vessel_info": 2,
+          "vessel_models": ["220000012", "220000092"],
+          "with_cap": {
+            "DD": false
+          },
+          "checkSubstanceRequired": false
+        },
+        "220000023": {
+          "editCaps": {
+            "create": false,
+            "update": false
+          }
+        },
+        "201000730": {
+          "likeFull": true,
+          "with_cap": {
+            "DD": false
+          },
+          "checkSubstanceRequired": false,
+          "task": {
+            "roles": ["create-task"],
+            "compName": "TraySlotMatrix"
+          }
+        },
+        "201000726": {
+          "checkSubstanceRequired": false
+        },
+        "201000502": {
+          "with_cap": {
+            "DD": false
+          },
+          "checkSubstanceRequired": false
+        },
+        "201000728": {
+          "task": {
+            "roles": ["create-task"],
+            "compName": "TraySlotMatrix"
+          }
+        }
+      }
+    }
+  },
+  "WUTEle": {
+    "model": {
+      "tray": {
+        "TT20TC": {
+          "likeFull": true,
+          "editVesselBarcode": {
+            "create": false,
+            "update": false
+          },
+          "editCaps": {
+            "update": true,
+            "create": true
+          },
+          "editSubstance": {
+            "create": true,
+            "update": true
+          }
+        },
+        "201000502": {
+          "likeFull": true,
+          "editVesselBarcode": {
+            "create": false,
+            "update": false
+          },
+          "editCaps": {
+            "update": true,
+            "create": true
+          },
+          "editSubstance": {
+            "create": true,
+            "update": true
+          }
+        }
+      },
+      "vessel": {
+        "220000012": {
+          "default_cap_resource_type": "",
+          "suppot_cap_resource_type":  [ "", "220000016", "220000302" ]
+        },
+        "220000005": {
+          "default_cap_resource_type": "",
+          "suppot_cap_resource_type":  [ "", "220000006", "220000087"]
+        }
+      }
+    }
+  },
+  "WGS": {
+    "model": {
+      "tray": {
+        "201000503": {
+          "vessel_info": 1,
+          "vessel_models": ["220000012"],
+          "editCaps": {
+            "create": false,
+            "update": false
+          },
+          "task": {
+            "roles": ["create-task"],
+            "compName": "TraySlotMatrix"
+          }
+        }
+      },
+      "vessel": {
+        "220000012": {
+          "default_cap_resource_type": "",
+          "suppot_cap_resource_type":  [ "", "220000016"]
+        },
+        "220000005": {
+          "default_cap_resource_type": "",
+          "suppot_cap_resource_type":  [ "", "220000006" ]
+        }
+      }
+    }
+  },
+  "BLZ": {
+    "model": {
+      "tray": {
+        "220000023":{
+          "with_cap": {
+            "BLZ": false
+          },
+          "editCaps": {
+            "create": false,
+            "update": false
+          }
+        },
+        "201000503": {
+          "vessel_info": 1,
+          "vessel_models": ["220000012"],
+          "editCaps": {
+            "update": true,
+            "create": false
+          },
+          "task": {
+            "roles": ["create-task"],
+            "compName": "TraySlotMatrix"
+          }
+        },
+        "201000502": {
+          "likeFull": true,
+          "editCaps": {
+            "update": true,
+            "create": false
+          },
+          "editSubstance": {
+            "create": true,
+            "update": true
+          }
+        },
+        "201000505": {
+          "likeFull": true
+        },
+        "201000839": {
+          "vessel_info": 1,
+          "vessel_models": ["220000012"]
+        },
+        "201000837": {
+          "vessel_info": 1,
+          "vessel_models": ["220000005"]
+        }
+      },
+      "vessel": {
+        "220000012": {
+          "default_cap_resource_type": "",
+          "suppot_cap_resource_type":  [ "", "220000016"]
+        },
+        "220000005": {
+          "default_cap_resource_type": "",
+          "suppot_cap_resource_type":  [ "", "220000006"]
+        }
+      }
+    }
+  },
+  "GloveboxSH": {
+    "model": {
+      "tray": {
+        "TT40TC_V2": {
+          "slotInMultipleRows": true,
+          "layout": {
+            "start": "lb",
+            "direction": "y",
+            "charPosition":"top",
+            "groupedOriginChar": "A",
+            "grouped": false
+          }
+        }
+      }
+    }
+  }
+}
