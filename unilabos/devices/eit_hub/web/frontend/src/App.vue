@@ -10,6 +10,7 @@ import {
   Files,
   Operation,
   Printer,
+  Tools,
 } from '@element-plus/icons-vue'
 import { setApiToken } from './api/chemicals'
 
@@ -176,6 +177,10 @@ function saveToken() {
         <RouterLink class="nav-link" to="/task-history">
           <el-icon><Document /></el-icon>
           <span>任务历史</span>
+        </RouterLink>
+        <RouterLink class="nav-link" to="/maintenance">
+          <el-icon><Tools /></el-icon>
+          <span>运维管理</span>
         </RouterLink>
         <RouterLink class="nav-link" to="/label-printer">
           <el-icon><Printer /></el-icon>

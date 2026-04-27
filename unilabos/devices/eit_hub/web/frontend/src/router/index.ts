@@ -66,6 +66,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '任务历史' },
   },
   {
+    path: '/maintenance',
+    name: 'maintenance',
+    component: () => import('../views/MaintenanceView.vue'),
+    meta: { title: '运维管理' },
+  },
+  {
     path: '/label-printer',
     name: 'label-printer',
     component: () => import('../views/LabelPrinterView.vue'),

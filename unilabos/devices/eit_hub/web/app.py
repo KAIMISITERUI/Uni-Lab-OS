@@ -22,7 +22,7 @@ from unilabos.devices.eit_chemical_manager.web.routers import (
 )
 
 from .deps import get_battery_sampler_service, get_charge_loop_service
-from .routers import agv, analysis, devices, label_printer, synthesis, task_history
+from .routers import agv, analysis, devices, label_printer, maintenance, synthesis, task_history
 
 logger = logging.getLogger("EITHubWeb")
 
@@ -60,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(devices.router)
     app.include_router(agv.router)
     app.include_router(label_printer.router)
+    app.include_router(maintenance.router)
     app.include_router(task_history.router)
     app.include_router(chemical_chemicals.router)
     app.include_router(chemical_lookup.router)
