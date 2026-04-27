@@ -19,12 +19,14 @@ from ..config.agv_config import (
     AGV_HOST,
     AGV_PORT,
     AGV_PORT_NAVIGATION,
+    AGV_PORT_OTHER,
     AGV_TIMEOUT,
     TASK_STATUS_MAP,
     AGV_QUERY_MAX_RETRIES,
     AGV_QUERY_RETRY_DELAY,
     AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
     AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
+    AGV_CHARGE_CONTROL_DO_ID,
 )
 from ..config.arm_config import ENABLE_GRIP_DETECTION
 from ..data.shelf_manager import ShelfManager
@@ -463,6 +465,218 @@ class AGVController:
             query_name="查询导航任务状态",
             error_stage=error_stage,
             success_message="导航任务状态查询成功",
+        )
+
+    def _set_charge_control_do_detailed(self, stop_charging: bool, error_stage: str) -> Dict[str, Any]:
+        """
+        功能:
+            设置底盘 DO7 充电控制状态并返回诊断结果.
+
+        参数:
+            stop_charging: bool, True 表示打开 DO7 停止充电, False 表示关闭 DO7 允许充电.
+            error_stage: str, 失败时写入诊断信息的阶段标识.
+
+        返回:
+            Dict[str, Any], 包含 ok, data, failure 的详细结果.
+        """
+        do_status = bool(stop_charging)
+        agv_driver = AGVDriver(AGVDriverConfig(
+            host=AGV_HOST,
+            port=AGV_PORT,
+            port_navigation=AGV_PORT_NAVIGATION,
+            port_other=AGV_PORT_OTHER,
+            timeout_s=AGV_TIMEOUT,
+            debug_hex=False
+        ))
+
+        try:
+            response = agv_driver.set_digital_output(AGV_CHARGE_CONTROL_DO_ID, do_status)
+            if do_status is True:
+                message = "已打开 DO7, 停止充电"
+            else:
+                message = "已关闭 DO7, 允许充电"
+            data = {
+                "do_id": AGV_CHARGE_CONTROL_DO_ID,
+                "do_status": do_status,
+                "stop_charging": do_status,
+                "charging_enabled": do_status is False,
+                "source": "agv_other_port",
+                "valid": True,
+                "response": response,
+                "message": message,
+            }
+            logger.info("%s", message)
+            return {
+                "ok": True,
+                "data": data,
+                "failure": None,
+            }
+        except Exception as exc:
+            if do_status is True:
+                action_text = "打开 DO7 停止充电"
+            else:
+                action_text = "关闭 DO7 允许充电"
+            failure = self._build_charge_failure(
+                error_category="agv_charge_control",
+                error_stage=error_stage,
+                error_source="agv_other_port",
+                message=f"{action_text}失败: {exc}",
+                exc=exc,
+                extra={
+                    "host": AGV_HOST,
+                    "port": AGV_PORT_OTHER,
+                    "do_id": AGV_CHARGE_CONTROL_DO_ID,
+                    "do_status": do_status,
+                },
+            )
+            logger.error("%s", failure["message"])
+            return {
+                "ok": False,
+                "data": None,
+                "failure": failure,
+            }
+        finally:
+            agv_driver.close()
+
+    def _build_charge_control_status_unknown(self, message: str, **extra: Any) -> Dict[str, Any]:
+        """
+        功能:
+            构建 DO7 充电控制状态未知时的统一展示数据.
+
+        参数:
+            message: str, 状态未知原因.
+            **extra: Any, 额外诊断字段.
+
+        返回:
+            Dict[str, Any], Hub 可直接展示的 DO7 状态.
+        """
+        result = {
+            "do_id": AGV_CHARGE_CONTROL_DO_ID,
+            "do_status": None,
+            "stop_charging": None,
+            "charging_enabled": None,
+            "source": None,
+            "valid": None,
+            "message": message,
+        }
+        result.update(extra)
+        return result
+
+    def query_charge_control_status(self) -> Dict[str, Any]:
+        """
+        功能:
+            查询底盘 DO7 充电控制状态, 用于 Hub 展示充电控制开关状态.
+
+        参数:
+            无.
+
+        返回:
+            Dict[str, Any], 包含 do_status, stop_charging, charging_enabled 等字段.
+        """
+        agv_driver = AGVDriver(AGVDriverConfig(
+            host=AGV_HOST,
+            port=AGV_PORT,
+            port_navigation=AGV_PORT_NAVIGATION,
+            port_other=AGV_PORT_OTHER,
+            timeout_s=AGV_TIMEOUT,
+            debug_hex=False
+        ))
+
+        try:
+            agv_driver.connect()
+            io_status = agv_driver.query_io_status()
+        except Exception as exc:
+            logger.warning("查询底盘 DO7 状态失败: %s", exc)
+            return self._build_charge_control_status_unknown(
+                message=f"查询底盘 DO7 状态失败: {exc}",
+                error_reason=self._classify_error_reason(exc, "查询底盘 DO7 状态失败"),
+            )
+        finally:
+            agv_driver.close()
+
+        do_items = io_status.get("DO")
+        if isinstance(do_items, list) is False:
+            return self._build_charge_control_status_unknown(
+                message="底盘 I/O 响应缺少 DO 列表",
+                raw=io_status,
+            )
+
+        for item in do_items:
+            if isinstance(item, dict) is False:
+                continue
+            if item.get("id") != AGV_CHARGE_CONTROL_DO_ID:
+                continue
+            do_status = item.get("status")
+            if isinstance(do_status, bool) is False:
+                return self._build_charge_control_status_unknown(
+                    message="底盘 DO7 状态不是布尔值",
+                    source=item.get("source"),
+                    valid=item.get("valid"),
+                    raw=item,
+                )
+            if do_status is True:
+                message = "DO7 打开, 停止充电"
+            else:
+                message = "DO7 关闭, 允许充电"
+            return {
+                "do_id": AGV_CHARGE_CONTROL_DO_ID,
+                "do_status": do_status,
+                "stop_charging": do_status,
+                "charging_enabled": do_status is False,
+                "source": item.get("source"),
+                "valid": item.get("valid"),
+                "message": message,
+            }
+
+        return self._build_charge_control_status_unknown(
+            message="底盘 I/O 响应中未找到 DO7",
+            raw=io_status,
+        )
+
+    def _prepare_charge_control_before_navigation(self, station_id: str, stage_prefix: str) -> Dict[str, Any]:
+        """
+        功能:
+            导航前检查是否从 CP6 离站, 若是则打开 DO7 停止充电.
+
+        参数:
+            station_id: str, 目标工站 ID.
+            stage_prefix: str, 诊断阶段前缀.
+
+        返回:
+            Dict[str, Any], 包含 ok, data, failure 的详细结果.
+        """
+        if station_id == "CP6":
+            return {
+                "ok": True,
+                "data": {"skipped": True, "message": "目标为 CP6, 导航前不切换 DO7"},
+                "failure": None,
+            }
+
+        current_station_result = self._query_current_station_detailed()
+        if current_station_result["ok"] is False:
+            failure = dict(current_station_result["failure"] or {})
+            failure["error_stage"] = f"{stage_prefix}.query_station_before_leave"
+            return {
+                "ok": False,
+                "data": None,
+                "failure": failure,
+            }
+
+        current_station_id = current_station_result["data"].get("station_id")
+        if current_station_id != "CP6":
+            return {
+                "ok": True,
+                "data": {
+                    "skipped": True,
+                    "current_station": current_station_id,
+                    "message": "当前不在 CP6, 导航前不切换 DO7",
+                },
+                "failure": None,
+            }
+
+        return self._set_charge_control_do_detailed(
+            stop_charging=True,
+            error_stage=f"{stage_prefix}.open_do7_before_leave_cp6",
         )
 
     def _clear_arm_home_failure(self) -> None:
@@ -1856,6 +2070,14 @@ class AGVController:
         """
         logger.info(f"开始安全发送导航命令到工站: {station_id}")
 
+        charge_prepare = self._prepare_charge_control_before_navigation(
+            station_id=station_id,
+            stage_prefix="safe_send_navigate",
+        )
+        if charge_prepare["ok"] is False:
+            logger.error("导航前切换 DO7 失败: %s", charge_prepare["failure"].get("message"))
+            return None
+
         # 步骤1: 机械臂回零到home_1
         logger.info("步骤1: 执行机械臂回零操作(home_1)")
         home_result = self.arm_go_home(block=True, home_name="home_1")
@@ -1921,6 +2143,14 @@ class AGVController:
         """
         logger.info(f"开始安全移动到工站: {station_id}")
 
+        charge_prepare = self._prepare_charge_control_before_navigation(
+            station_id=station_id,
+            stage_prefix="safe_navigate",
+        )
+        if charge_prepare["ok"] is False:
+            logger.error("导航前切换 DO7 失败: %s", charge_prepare["failure"].get("message"))
+            return None
+
         # 步骤1: 机械臂回零到home_1
         logger.debug("步骤1: 执行机械臂回零操作(home_1)")
         home_result = self.arm_go_home(block=True, home_name="home_1")
@@ -1932,6 +2162,15 @@ class AGVController:
         # 步骤2: AGV移动到目标工站
         logger.debug("步骤2: AGV移动到目标工站")
         result = self.navigate_to_station(station_id)
+
+        if result is not None and station_id == "CP6":
+            charge_enable = self._set_charge_control_do_detailed(
+                stop_charging=False,
+                error_stage="safe_navigate.close_do7_after_arrive_cp6",
+            )
+            if charge_enable["ok"] is False:
+                logger.error("到达 CP6 后关闭 DO7 失败: %s", charge_enable["failure"].get("message"))
+                return None
 
         return result
 
@@ -2073,6 +2312,14 @@ class AGVController:
         """
         logger.info("开始详细安全移动到工站: %s", station_id)
 
+        charge_prepare = self._prepare_charge_control_before_navigation(
+            station_id=station_id,
+            stage_prefix=stage_prefix,
+        )
+        if charge_prepare["ok"] is False:
+            logger.error("导航前切换 DO7 失败: %s", charge_prepare["failure"].get("message"))
+            return charge_prepare
+
         home_result = self.arm_go_home(block=True, home_name="home_1")
         if home_result is None:
             failure = dict(self._last_arm_home_failure or {})
@@ -2102,11 +2349,24 @@ class AGVController:
         if navigate_result["ok"] is False:
             return navigate_result
 
+        charge_after_arrival = None
+        if station_id == "CP6":
+            charge_enable = self._set_charge_control_do_detailed(
+                stop_charging=False,
+                error_stage=f"{stage_prefix}.close_do7_after_arrive_cp6",
+            )
+            if charge_enable["ok"] is False:
+                logger.error("到达 CP6 后关闭 DO7 失败: %s", charge_enable["failure"].get("message"))
+                return charge_enable
+            charge_after_arrival = charge_enable["data"]
+
         return {
             "ok": True,
             "data": {
+                "charge_control_before_navigation": charge_prepare["data"],
                 "home_result": home_result,
                 "navigation_result": navigate_result["data"],
+                "charge_control_after_arrival": charge_after_arrival,
             },
             "failure": None,
         }
@@ -2114,7 +2374,7 @@ class AGVController:
     def go_to_charging_station(self, block=False):
         """
         功能:
-            让AGV移动到充电站CP6进行充电, 移动前先执行机械臂回零操作
+            让AGV移动到充电站CP6. 阻塞到达后关闭 DO7 允许充电, 非阻塞模式只发送导航命令.
         参数:
             block: 是否阻塞等待AGV到达, 默认False
                   - False: 发送导航命令后立即返回
@@ -2132,8 +2392,10 @@ class AGVController:
             # 非阻塞模式: 使用safe_send_navigate_command立即返回
             result = self.safe_send_navigate_command("CP6")
 
-        if result is not None:
-            logger.info("成功到达充电站CP6")
+        if result is not None and block is True:
+            logger.info("成功到达充电站CP6, 已关闭 DO7 允许充电")
+        elif result is not None:
+            logger.info("已发送返回充电站CP6的导航命令, 非阻塞模式不切换 DO7")
         else:
             logger.error("移动到充电站失败")
 
@@ -2393,9 +2655,7 @@ class AGVController:
                 - 在PP5且电量<low_battery_pct时, 进入CP6充电.
                 - 在PP5且电量>=low_battery_pct时, 继续在PP5待命.
                 - 在CP6且电量>85%时, 返回PP5待命.
-                - 在CP6且电量<low_battery_pct且未在充电时, 执行CP6->PP5->CP6充电循环.
-                - 在CP6且电量<low_battery_pct且已在充电时, 跳过进出站.
-                - 在CP6且电量在low_battery_pct~85%之间时, 继续在CP6待命.
+                - 在CP6且电量<=85%时, 关闭 DO7 允许充电并继续在CP6待命.
                 - 既不在PP5也不在CP6时, 视为工作途中并跳过本次检查.
         参数:
             low_battery_pct: 低电量阈值(百分比), 默认80, 即电量低于80%触发充电.
@@ -2569,6 +2829,15 @@ class AGVController:
                         status="success",
                         message="AGV已从PP5移动到CP6充电站",
                     )
+                    charge_after_arrival = move_result["data"].get("charge_control_after_arrival")
+                    if charge_after_arrival is not None:
+                        self._append_charge_step_trace(
+                            step_trace,
+                            stage="pp5_to_cp6.close_do7_after_arrive_cp6",
+                            status="success",
+                            message="到达CP6后已关闭 DO7 允许充电",
+                            charge_control=charge_after_arrival,
+                        )
                     logger.info("AGV已从PP5移动到CP6充电站")
                     return self._build_pp5_cp6_result(
                         status="success",
@@ -2577,6 +2846,7 @@ class AGVController:
                         step_trace=step_trace,
                         battery_level=battery_level,
                         current_station=current_station_id,
+                        charge_control=charge_after_arrival,
                     )
 
                 self._append_charge_step_trace(
@@ -2614,7 +2884,6 @@ class AGVController:
 
             return self._auto_charge_pp5_cp6_check_at_cp6(
                 low_battery_pct=low_battery_pct,
-                low_threshold=low_threshold,
                 battery_level=battery_level,
                 current_station_id=current_station_id,
                 step_trace=step_trace,
@@ -2647,7 +2916,6 @@ class AGVController:
     def _auto_charge_pp5_cp6_check_at_cp6(
         self,
         low_battery_pct: int,
-        low_threshold: float,
         battery_level: float,
         current_station_id: str,
         step_trace: List[Dict[str, Any]],
@@ -2658,7 +2926,6 @@ class AGVController:
 
         参数:
             low_battery_pct: 低电量阈值, 单位百分比.
-            low_threshold: 低电量阈值小数形式.
             battery_level: 当前电池电量.
             current_station_id: 当前站点ID.
             step_trace: 已累计的步骤轨迹.
@@ -2711,310 +2978,50 @@ class AGVController:
                 step_trace=step_trace,
                 battery_level=battery_level,
                 current_station=current_station_id,
+                charge_control=move_result["data"].get("charge_control_before_navigation"),
             )
 
-        if battery_level < low_threshold:
-            logger.info(f"步骤3: AGV在CP6且电量低于{low_battery_pct}%, 检查是否正在充电")
-            battery_full_result = self._query_battery_status_detailed(
-                simple=False,
-                error_stage="query_battery_full_before_redock",
-            )
-            if battery_full_result["ok"] is False:
-                failure = battery_full_result["failure"]
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage="query_battery_full_before_redock",
-                    status="skipped",
-                    message="无法确认AGV当前是否正在充电, 本次不执行进出站",
-                    error_reason=failure.get("error_reason"),
-                )
-                return self._build_pp5_cp6_result(
-                    status="skipped",
-                    action="charging_state_unknown",
-                    message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 但无法确认是否正在充电, 本次不执行进出站",
-                    step_trace=step_trace,
-                    failure=failure,
-                    battery_level=battery_level,
-                    current_station=current_station_id,
-                )
-
-            battery_full_info = battery_full_result["data"]
-            charging_flag = battery_full_info.get("charging")
-            if charging_flag is None:
-                failure = self._build_charge_failure(
-                    error_category="agv_query",
-                    error_stage="query_battery_full_before_redock",
-                    error_source="agv_query_port",
-                    message="完整电池状态缺少charging字段, 无法确认是否正在充电",
-                    error_reason="empty_response",
-                    extra={
-                        "host": AGV_HOST,
-                        "port": AGV_PORT,
-                        "battery_info": battery_full_info,
-                    },
-                )
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage="query_battery_full_before_redock",
-                    status="skipped",
-                    message="完整电池状态缺少charging字段, 保守跳过进出站",
-                    error_reason="empty_response",
-                )
-                logger.warning("无法确认AGV当前是否正在充电, 本次不执行进出站")
-                return self._build_pp5_cp6_result(
-                    status="skipped",
-                    action="charging_state_unknown",
-                    message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 但无法确认是否正在充电, 本次不执行进出站",
-                    step_trace=step_trace,
-                    failure=failure,
-                    battery_level=battery_level,
-                    current_station=current_station_id,
-                )
-
-            if charging_flag is True:
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage="query_battery_full_before_redock",
-                    status="success",
-                    message="已确认AGV正在充电",
-                    charging=True,
-                )
-                logger.info("检测到AGV当前已在充电, 跳过CP6->PP5->CP6充电循环")
-                return self._build_pp5_cp6_result(
-                    status="success",
-                    action="already_charging",
-                    message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 但当前已在充电, 跳过CP6->PP5->CP6",
-                    step_trace=step_trace,
-                    battery_level=battery_level,
-                    current_station=current_station_id,
-                    charging=True,
-                )
-
-            logger.info(f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%且未在充电, 开始CP6->PP5->CP6充电循环")
-
-            move_to_pp5_result = self._safe_navigate_to_station_detailed(
-                station_id="PP5",
-                stage_prefix="cp6_redock.leave_cp6",
-            )
-            if move_to_pp5_result["ok"] is False:
-                failure = move_to_pp5_result["failure"]
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage=failure.get("error_stage", "cp6_redock.leave_cp6"),
-                    status="error",
-                    message=failure.get("message", "从CP6移动到PP5失败"),
-                    error_reason=failure.get("error_reason"),
-                )
-                return self._build_pp5_cp6_result(
-                    status="error",
-                    action="charge_cycle_move_to_pp5",
-                    message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%且未在充电, 但从CP6移动到PP5失败",
-                    step_trace=step_trace,
-                    failure=failure,
-                    battery_level=battery_level,
-                    current_station=current_station_id,
-                )
-
+        charge_enable = self._set_charge_control_do_detailed(
+            stop_charging=False,
+            error_stage="cp6_charge_control.close_do7_for_charge",
+        )
+        if charge_enable["ok"] is False:
+            failure = charge_enable["failure"]
             self._append_charge_step_trace(
                 step_trace,
-                stage="cp6_redock.leave_cp6.arm_home",
-                status="success",
-                message="离开CP6前机械臂回零成功",
+                stage=failure.get("error_stage", "cp6_charge_control.close_do7_for_charge"),
+                status="error",
+                message=failure.get("message", "关闭 DO7 允许充电失败"),
+                error_reason=failure.get("error_reason"),
             )
-            self._append_charge_step_trace(
-                step_trace,
-                stage="cp6_redock.leave_cp6.navigate",
-                status="success",
-                message="已从CP6移动到PP5",
-            )
-            logger.info("成功到达PP5")
-
-            nav_after_pp5_result = self._query_nav_task_status_detailed(
-                error_stage="cp6_redock.query_nav_after_pp5",
-            )
-            if nav_after_pp5_result["ok"] is False:
-                failure = nav_after_pp5_result["failure"]
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage="cp6_redock.query_nav_after_pp5",
-                    status="skipped",
-                    message="到达PP5后无法查询导航状态, 保守停止后续返回CP6动作",
-                    error_reason=failure.get("error_reason"),
-                )
-                return self._build_pp5_cp6_result(
-                    status="skipped",
-                    action="skipped_nav_status_unavailable",
-                    message="到达PP5后无法查询AGV导航状态, 本次保守停止后续返回CP6动作",
-                    step_trace=step_trace,
-                    failure=failure,
-                    battery_level=battery_level,
-                    current_station="PP5",
-                )
-
-            nav_status_after_pp5 = nav_after_pp5_result["data"]
-            task_status_pp5 = nav_status_after_pp5.get("task_status")
-            status_name_pp5 = nav_status_after_pp5.get("task_status_name", "UNKNOWN")
-            self._append_charge_step_trace(
-                step_trace,
-                stage="cp6_redock.query_nav_after_pp5",
-                status="success",
-                message=f"到达PP5后导航状态={status_name_pp5}",
-                nav_task_status=task_status_pp5,
-                nav_task_status_name=status_name_pp5,
-            )
-            if task_status_pp5 not in {0, 4}:
-                logger.info(f"到达PP5后设备非空闲(状态={status_name_pp5}), 认为途中被接管, 跳过后续步骤")
-                return self._build_pp5_cp6_result(
-                    status="skipped",
-                    action="intercepted_after_pp5",
-                    message=f"到达PP5后设备非空闲(状态={status_name_pp5}), 认为途中被接管, 跳过后续步骤",
-                    step_trace=step_trace,
-                    battery_level=battery_level,
-                    current_station="PP5",
-                    nav_task_status=task_status_pp5,
-                    nav_task_status_name=status_name_pp5,
-                )
-
-            return_to_cp6_result = self._safe_navigate_to_station_detailed(
-                station_id="CP6",
-                stage_prefix="cp6_redock.return_to_cp6",
-            )
-            if return_to_cp6_result["ok"] is False:
-                failure = return_to_cp6_result["failure"]
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage=failure.get("error_stage", "cp6_redock.return_to_cp6"),
-                    status="error",
-                    message=failure.get("message", "从PP5返回CP6失败"),
-                    error_reason=failure.get("error_reason"),
-                )
-                return self._build_pp5_cp6_result(
-                    status="error",
-                    action="charge_cycle_return_to_cp6",
-                    message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已到达PP5但返回CP6失败",
-                    step_trace=step_trace,
-                    failure=failure,
-                    battery_level=battery_level,
-                    current_station="PP5",
-                )
-
-            self._append_charge_step_trace(
-                step_trace,
-                stage="cp6_redock.return_to_cp6.arm_home",
-                status="success",
-                message="返回CP6前机械臂回零成功",
-            )
-            self._append_charge_step_trace(
-                step_trace,
-                stage="cp6_redock.return_to_cp6.navigate",
-                status="success",
-                message="AGV已从PP5返回CP6",
-            )
-            logger.info("已返回CP6, 检查充电状态")
-
-            battery_after_redock_result = self._query_battery_status_detailed(
-                simple=False,
-                error_stage="query_battery_full_after_redock",
-            )
-            if battery_after_redock_result["ok"] is False:
-                failure = battery_after_redock_result["failure"]
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage="query_battery_full_after_redock",
-                    status="warning",
-                    message="已完成充电循环, 但确认充电状态的查询失败",
-                    error_reason=failure.get("error_reason"),
-                )
-                return self._build_pp5_cp6_result(
-                    status="success",
-                    action="charge_cycle_completed_no_charging",
-                    message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已完成充电循环(CP6->PP5->CP6), 但确认充电状态失败",
-                    step_trace=step_trace,
-                    failure=failure,
-                    battery_level=battery_level,
-                    current_station="CP6",
-                    charging=False,
-                )
-
-            battery_after_redock = battery_after_redock_result["data"]
-            charging_after_redock = battery_after_redock.get("charging")
-            if charging_after_redock:
-                self._append_charge_step_trace(
-                    step_trace,
-                    stage="query_battery_full_after_redock",
-                    status="success",
-                    message="已确认AGV正在充电",
-                    charging=True,
-                )
-                logger.info("确认AGV正在充电, 充电循环成功")
-                return self._build_pp5_cp6_result(
-                    status="success",
-                    action="charge_cycle_completed",
-                    message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已完成充电循环(CP6->PP5->CP6), 确认正在充电",
-                    step_trace=step_trace,
-                    battery_level=battery_level,
-                    current_station="CP6",
-                    charging=True,
-                )
-
-            failure = None
-            if charging_after_redock is None:
-                failure = self._build_charge_failure(
-                    error_category="agv_query",
-                    error_stage="query_battery_full_after_redock",
-                    error_source="agv_query_port",
-                    message="已返回CP6, 但完整电池状态缺少charging字段",
-                    error_reason="empty_response",
-                    extra={
-                        "host": AGV_HOST,
-                        "port": AGV_PORT,
-                        "battery_info": battery_after_redock,
-                    },
-                )
-
-            self._append_charge_step_trace(
-                step_trace,
-                stage="query_battery_full_after_redock",
-                status="warning",
-                message=f"已返回CP6但未检测到充电状态(charging={charging_after_redock})",
-            )
-            logger.warning(f"已返回CP6但未检测到充电状态(charging={charging_after_redock})")
             return self._build_pp5_cp6_result(
-                status="success",
-                action="charge_cycle_completed_no_charging",
-                message=f"电量{battery_level * 100:.1f}%低于{low_battery_pct}%, 已完成充电循环(CP6->PP5->CP6), 但未检测到正在充电",
+                status="error",
+                action="set_do7_enable_charge_failed",
+                message=f"AGV 位于 CP6, 但关闭 DO7 允许充电失败: {failure.get('message')}",
                 step_trace=step_trace,
                 failure=failure,
                 battery_level=battery_level,
-                current_station="CP6",
-                charging=False,
+                current_station=current_station_id,
+                charge_control=None,
             )
-
-        # 电量在low_threshold~85%之间, 查询是否正在充电
-        charging_at_standby = False
-        battery_standby_result = self._query_battery_status_detailed(
-            simple=False,
-            error_stage="query_battery_full_standby_cp6",
-        )
-        if battery_standby_result["ok"] is True:
-            charging_at_standby = battery_standby_result["data"].get("charging", False)
 
         self._append_charge_step_trace(
             step_trace,
-            stage="standby_at_cp6",
+            stage="cp6_charge_control.close_do7_for_charge",
             status="success",
-            message=f"AGV继续在CP6待命, 充电状态={charging_at_standby}",
-            charging=charging_at_standby,
+            message="已关闭 DO7, 允许 AGV 在 CP6 充电",
+            charge_control=charge_enable["data"],
         )
-        logger.info(f"AGV在CP6待命, 充电状态={charging_at_standby}, 当前电量尚未达到离站阈值")
+        logger.info("AGV 位于 CP6, 已关闭 DO7 允许充电")
         return self._build_pp5_cp6_result(
             status="success",
-            action="standby_at_cp6",
-            message=f"电量{battery_level * 100:.1f}%未高于85%, 继续在CP6待命",
+            action="enable_charging_at_cp6",
+            message=f"电量{battery_level * 100:.1f}%未高于85%, 已关闭 DO7 允许在 CP6 充电",
             step_trace=step_trace,
             battery_level=battery_level,
             current_station=current_station_id,
-            charging=charging_at_standby,
+            charging_enabled=True,
+            charge_control=charge_enable["data"],
         )
 
     def _log_auto_charge_pp5_cp6_result_summary(self, result: Dict[str, Any]) -> None:
@@ -3078,6 +3085,7 @@ class AGVController:
         charging_actions = {
             "pp5_to_cp6_for_charge",
             "already_charging",
+            "enable_charging_at_cp6",
             "charge_cycle_completed",
             "charge_cycle_completed_no_charging",
         }

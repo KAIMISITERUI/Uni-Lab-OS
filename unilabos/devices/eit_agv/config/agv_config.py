@@ -8,6 +8,7 @@ AGV驱动配置文件
 AGV_HOST = "192.168.1.5"
 AGV_PORT = 19204  # 查询命令端口
 AGV_PORT_NAVIGATION = 19206  # 路径导航命令端口
+AGV_PORT_OTHER = 19210  # 其他命令端口
 AGV_TIMEOUT = 3.0
 
 # 协议常量
@@ -29,6 +30,14 @@ RSP_CMD_ROBOT_STATUS_LOC = 0x2AFC  # 机器人位置查询响应 (11004)
 # 机器人电池状态查询命令
 REQ_CMD_ROBOT_STATUS_BATTERY = 0x03EF  # 电池状态查询请求 (1007)
 RSP_CMD_ROBOT_STATUS_BATTERY = 0x2AFF  # 电池状态查询响应 (11007)
+
+# 机器人 IO 查询命令
+REQ_CMD_ROBOT_STATUS_IO = 0x03F5  # 机器人 I/O 数据查询请求 (1013)
+RSP_CMD_ROBOT_STATUS_IO = 0x2B05  # 机器人 I/O 数据查询响应 (11013)
+
+# 机器人其他控制命令
+REQ_CMD_ROBOT_OTHER_SET_DO = 0x1771  # 设置 DO 请求 (6001)
+RSP_CMD_ROBOT_OTHER_SET_DO = 0x3E81  # 设置 DO 响应 (16001)
 
 # 任务状态映射
 TASK_STATUS_MAP = {
@@ -64,6 +73,7 @@ AGV_QUERY_RETRY_DELAY = 1.0    # 首次重试等待时间, 单位秒, 后续翻�
 # PP5/CP6自动充电配置
 AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES = 30  # 正常检查间隔, 单位分钟
 AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT = 50  # 低电量阈值, 低于该值触发充电
+AGV_CHARGE_CONTROL_DO_ID = 7  # 充电控制 DO, True 停止充电, False 允许充电
 
 # 工站位置配置
 STATION_POSITIONS = {

@@ -27,7 +27,7 @@ DEFAULT_STATION_LAYOUT: Dict[str, Dict[str, Any]] = {
     "LM3": {"x": 90, "y": 20, "label": "浓缩工站"},
     "LM4": {"x": 50, "y": 50, "label": "货架"},
     "CP6": {"x": 90, "y": 85, "label": "充电站"},
-    "PP5": {"x": 75, "y": 85, "label": "待充点"},
+    "PP5": {"x": 75, "y": 85, "label": "待命点"},
 }
 
 

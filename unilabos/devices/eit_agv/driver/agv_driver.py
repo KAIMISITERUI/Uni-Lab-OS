@@ -28,11 +28,16 @@ from ..config.agv_config import (
     RSP_CMD_ROBOT_STATUS_LOC,
     REQ_CMD_ROBOT_STATUS_BATTERY,
     RSP_CMD_ROBOT_STATUS_BATTERY,
+    REQ_CMD_ROBOT_STATUS_IO,
+    RSP_CMD_ROBOT_STATUS_IO,
+    REQ_CMD_ROBOT_OTHER_SET_DO,
+    RSP_CMD_ROBOT_OTHER_SET_DO,
     TASK_STATUS_MAP,
     TASK_TYPE_MAP,
     AGV_HOST,
     AGV_PORT,
     AGV_PORT_NAVIGATION,
+    AGV_PORT_OTHER,
     AGV_TIMEOUT,
     AGV_MAX_SPEED,
     AGV_MAX_WSPEED,
@@ -179,6 +184,7 @@ class AGVDriverConfig:
     host: str
     port: int
     port_navigation: int  # 路径导航专用端口
+    port_other: int = 19210  # 其他 API 专用端口
     timeout_s: float = 3.0
     debug_hex: bool = False
 
@@ -195,6 +201,7 @@ class AGVDriver:
         self.cfg = cfg
         self._sock: Optional[socket.socket] = None
         self._sock_nav: Optional[socket.socket] = None  # 导航专用socket
+        self._sock_other: Optional[socket.socket] = None  # 其他 API 专用 socket
         self._req_id: int = 1  # 请求序列号, 每次请求递增
 
     def connect(self) -> None:
@@ -223,6 +230,25 @@ class AGVDriver:
         self._sock_nav = s
         logger.debug("已连接到导航端口 %s:%s", self.cfg.host, self.cfg.port_navigation)
 
+    def connect_other(self) -> None:
+        """
+        功能:
+            连接到 AGV 其他 API 控制端口, 用于设置 DO 等非导航命令.
+
+        参数:
+            无.
+
+        返回:
+            None.
+        """
+        if self._sock_other is not None:
+            return
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(self.cfg.timeout_s)
+        s.connect((self.cfg.host, self.cfg.port_other))
+        self._sock_other = s
+        logger.debug("已连接到其他 API 端口 %s:%s", self.cfg.host, self.cfg.port_other)
+
     def close(self) -> None:
         """
         功能:
@@ -238,6 +264,11 @@ class AGVDriver:
                 self._sock_nav.close()
             finally:
                 self._sock_nav = None
+        if self._sock_other:
+            try:
+                self._sock_other.close()
+            finally:
+                self._sock_other = None
 
     def reconnect(self, max_attempts: int = 3) -> None:
         """
@@ -299,6 +330,7 @@ class AGVDriver:
         payload_obj: Optional[Dict[str, Any]] = None,
         expect_cmd_id: Optional[int] = None,
         use_navigation_port: bool = False,
+        use_other_port: bool = False,
     ) -> Dict[str, Any]:
         """
         功能:
@@ -307,19 +339,30 @@ class AGVDriver:
             cmd_id: 命令ID (消息类型)
             payload_obj: 可选的请求负载对象
             expect_cmd_id: 期望的响应命令ID
-            use_navigation_port: 是否使用导航专用端口
+            use_navigation_port: 是否使用导航专用端口.
+            use_other_port: 是否使用其他 API 专用端口.
         返回:
             Dict[str, Any], 响应数据字典
         """
-        # 根据命令类型选择socket
-        if use_navigation_port:
+        if use_navigation_port is True and use_other_port is True:
+            raise ValueError("导航端口和其他 API 端口不能同时使用")
+
+        # 根据命令类型选择 socket
+        if use_navigation_port is True:
             if self._sock_nav is None:
                 raise RuntimeError("未连接到导航端口, 请先调用connect_navigation()")
             sock = self._sock_nav
+            port_name = "导航"
+        elif use_other_port is True:
+            if self._sock_other is None:
+                raise RuntimeError("未连接到其他 API 端口, 请先调用connect_other()")
+            sock = self._sock_other
+            port_name = "其他"
         else:
             if self._sock is None:
                 raise RuntimeError("未连接, 请先调用connect()")
             sock = self._sock
+            port_name = "查询"
 
         # 构造JSON负载
         payload_bytes = b""
@@ -334,7 +377,7 @@ class AGVDriver:
         if self.cfg.debug_hex:
             logger.info("发送请求 [序列号=%d 命令=0x%04X 负载长度=%d 端口=%s]",
                        current_req_id, cmd_id, len(payload_bytes),
-                       "导航" if use_navigation_port else "查询")
+                       port_name)
             logger.info("发送帧: %s", _hexdump(frame, 256))
             if payload_obj:
                 logger.info("发送负载: %s", json.dumps(payload_obj, ensure_ascii=False))
@@ -435,6 +478,55 @@ class AGVDriver:
             payload_obj=payload,
             expect_cmd_id=RSP_CMD_ROBOT_STATUS_BATTERY,
         )
+
+    def query_io_status(self) -> Dict[str, Any]:
+        """
+        功能:
+            查询机器人 I/O 数据, 包含 DI/DO 列表及每路状态.
+
+        参数:
+            无.
+
+        返回:
+            Dict[str, Any], 机器人 I/O 响应数据.
+        """
+        return self._send_and_recv_json(
+            cmd_id=REQ_CMD_ROBOT_STATUS_IO,
+            payload_obj=None,
+            expect_cmd_id=RSP_CMD_ROBOT_STATUS_IO,
+        )
+
+    def set_digital_output(self, do_id: int, status: bool) -> Dict[str, Any]:
+        """
+        功能:
+            设置机器人控制器指定 DO 的电平状态.
+
+        参数:
+            do_id: int, DO 编号.
+            status: bool, True 表示高电平, False 表示低电平.
+
+        返回:
+            Dict[str, Any], 设置 DO 的响应数据.
+        """
+        self.connect_other()
+
+        response = self._send_and_recv_json(
+            cmd_id=REQ_CMD_ROBOT_OTHER_SET_DO,
+            payload_obj={"id": int(do_id), "status": bool(status)},
+            expect_cmd_id=RSP_CMD_ROBOT_OTHER_SET_DO,
+            use_other_port=True,
+        )
+        ret_code = response.get("ret_code", 0)
+        if ret_code not in (None, 0):
+            error_message = response.get("err_msg", "未知错误")
+            raise RuntimeError(f"设置底盘 DO{do_id} 失败: {error_message}")
+
+        if status is True:
+            status_text = "高电平"
+        else:
+            status_text = "低电平"
+        logger.info("已设置底盘 DO%d 为%s", do_id, status_text)
+        return response
 
     def send_navigate_command(
         self,
@@ -822,6 +914,7 @@ def main() -> None:
         host=AGV_HOST,
         port=AGV_PORT,
         port_navigation=AGV_PORT_NAVIGATION,
+        port_other=AGV_PORT_OTHER,
         timeout_s=AGV_TIMEOUT,
         debug_hex=False,
     ))
