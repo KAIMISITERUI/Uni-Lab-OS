@@ -1,0 +1,66 @@
+# 耗材货架盘位资源配置
+# 物理坐标:
+#   layer    1 ~ 5  (与 RackSettings.layers 对应, 与 Modbus SLAVE_ADDRS 顺序一致)
+#   position 0 ~ 5  (与 RackClient.query_layer 返回 list 的下标一致, 0-based)
+# 占用判定:
+#   通过光电信号实时读取, 1=有物 / 0=空, 由 RackController 自动合并
+# 缺省语义:
+#   未在 slots 中声明的盘位视为空槽 (resource_type=None), 仍会上报实时光电状态
+#   但不会被 find_by_type / list_available(resource_type=...) 命中
+# 字段说明:
+#   layer/position 必填, 整数
+#   resource_type  必填, 资源类型字符串, 用于按种类查询
+#   description    可选, 资源描述, 仅用于日志和人读
+
+slots:
+  # 第 1 层: 15mL 离心管
+  - layer: 1
+    position: 0
+    resource_type: tube_15ml
+    description: "15mL 离心管"
+  - layer: 1
+    position: 1
+    resource_type: tube_15ml
+    description: "15mL 离心管"
+  - layer: 1
+    position: 2
+    resource_type: tube_15ml
+    description: "15mL 离心管"
+  - layer: 1
+    position: 3
+    resource_type: tube_15ml
+    description: "15mL 离心管"
+  - layer: 1
+    position: 4
+    resource_type: tube_15ml
+    description: "15mL 离心管"
+  - layer: 1
+    position: 5
+    resource_type: tube_15ml
+    description: "15mL 离心管"
+
+  # 第 2 层: 4mL 进样小瓶
+  - layer: 2
+    position: 0
+    resource_type: vial_4ml
+    description: "4mL 进样小瓶"
+  - layer: 2
+    position: 1
+    resource_type: vial_4ml
+    description: "4mL 进样小瓶"
+  - layer: 2
+    position: 2
+    resource_type: vial_4ml
+    description: "4mL 进样小瓶"
+  - layer: 2
+    position: 3
+    resource_type: vial_4ml
+    description: "4mL 进样小瓶"
+  - layer: 2
+    position: 4
+    resource_type: vial_4ml
+    description: "4mL 进样小瓶"
+  - layer: 2
+    position: 5
+    resource_type: vial_4ml
+    description: "4mL 进样小瓶"

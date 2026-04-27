@@ -7,13 +7,17 @@
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
 
 
 _ENV_PREFIX = "RACK_"
+
+# 资源配置 yaml 默认路径, 与 settings.py 同级目录下的 rack_resources.yaml
+_DEFAULT_RESOURCE_CONFIG_PATH = Path(__file__).resolve().parent / "rack_resources.yaml"
 
 
 @dataclass
@@ -30,6 +34,7 @@ class RackSettings:
         connect_retries: 断线重连最大次数, 0 表示不重连.
         layers: 货架层数, 与 SLAVE_ADDRS 长度一致.
         positions_per_layer: 每层盘位数量, 与 Modbus 寄存器数量一致.
+        resource_config_path: 盘位资源声明 yaml 文件路径, 由 RackController 加载.
 
     返回:
         无.
@@ -41,6 +46,7 @@ class RackSettings:
     connect_retries: int = 2
     layers: int = 5
     positions_per_layer: int = 6
+    resource_config_path: Path = field(default_factory=lambda: _DEFAULT_RESOURCE_CONFIG_PATH)
 
     @classmethod
     def from_env(cls) -> "RackSettings":
@@ -55,6 +61,12 @@ class RackSettings:
             RackSettings 实例.
         """
         default = cls()
+        resource_config_env = os.environ.get(f"{_ENV_PREFIX}RESOURCE_CONFIG")
+        resource_config_path = (
+            Path(resource_config_env)
+            if resource_config_env
+            else default.resource_config_path
+        )
         return cls(
             host=os.environ.get(f"{_ENV_PREFIX}HOST", default.host),
             port=int(os.environ.get(f"{_ENV_PREFIX}PORT", default.port)),
@@ -70,6 +82,7 @@ class RackSettings:
                     f"{_ENV_PREFIX}POSITIONS", default.positions_per_layer
                 )
             ),
+            resource_config_path=resource_config_path,
         )
 
 
