@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 import {
   fetchYieldReport,
   type YieldReportResponse,
@@ -9,22 +10,47 @@ import {
 import { getErrorMessage } from '../../api/http'
 import StructurePreview from '../StructurePreview.vue'
 
-const props = defineProps<{ taskId: number }>()
+const props = defineProps<{ taskId: number; reloadToken?: number }>()
 
 const data = ref<YieldReportResponse | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
 const selectedDetail = ref<{ sample: string; product: string; entry: YieldResultEntry } | null>(null)
+const refreshKey = ref(0)
 
-async function load(taskId: number): Promise<void> {
+function nextRefreshKey(): number {
+  const now = Date.now()
+  if (now <= refreshKey.value) {
+    return refreshKey.value + 1
+  }
+  return now
+}
+
+async function load(taskId: number, preserveDetail: boolean): Promise<void> {
   if (taskId <= 0) {
     return
   }
+  const previousDetail = preserveDetail && selectedDetail.value !== null
+    ? { sample: selectedDetail.value.sample, product: selectedDetail.value.product }
+    : null
+  const currentRefreshKey = nextRefreshKey()
   loading.value = true
   errorMessage.value = ''
   selectedDetail.value = null
   try {
-    data.value = await fetchYieldReport(taskId)
+    data.value = await fetchYieldReport(taskId, currentRefreshKey)
+    refreshKey.value = currentRefreshKey
+    if (previousDetail !== null) {
+      const sampleEntry = data.value.samples.find((entry) => entry.sample === previousDetail.sample)
+      const entry = sampleEntry === undefined ? null : findEntry(sampleEntry, previousDetail.product)
+      if (entry !== null) {
+        selectedDetail.value = {
+          sample: previousDetail.sample,
+          product: previousDetail.product,
+          entry,
+        }
+      }
+    }
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
     data.value = null
@@ -36,10 +62,24 @@ async function load(taskId: number): Promise<void> {
   }
 }
 
+function reload(): void {
+  void load(props.taskId, true)
+}
+
 watch(
   () => props.taskId,
-  (taskId) => { void load(taskId) },
+  (taskId) => { void load(taskId, false) },
   { immediate: true },
+)
+
+watch(
+  () => props.reloadToken,
+  (token, oldToken) => {
+    if (token === undefined || token === oldToken) {
+      return
+    }
+    void load(props.taskId, true)
+  },
 )
 
 const products = computed(() => data.value?.products ?? [])
@@ -84,6 +124,9 @@ function formatYield(value: number | null): string {
 
 <template>
   <div v-loading="loading" class="yield-tab">
+    <header class="report-toolbar">
+      <el-button :icon="Refresh" :loading="loading" size="small" @click="reload">重新加载</el-button>
+    </header>
     <el-empty v-if="errorMessage !== '' && data === null" :description="errorMessage" />
     <template v-else-if="data !== null && config !== null">
       <section class="config-area">
@@ -221,6 +264,11 @@ function formatYield(value: number | null): string {
   flex-direction: column;
   gap: 16px;
   min-height: 200px;
+}
+
+.report-toolbar {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .config-area {

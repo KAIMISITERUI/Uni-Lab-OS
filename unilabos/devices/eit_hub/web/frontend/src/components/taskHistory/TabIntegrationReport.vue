@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Picture, Right, ZoomIn } from '@element-plus/icons-vue'
+import { Picture, Refresh, Right, ZoomIn } from '@element-plus/icons-vue'
 import {
   fetchIntegrationReport,
   imageUrl,
@@ -14,7 +14,7 @@ import {
 } from '../../api/taskHistory'
 import { getErrorMessage } from '../../api/http'
 
-const props = defineProps<{ taskId: number }>()
+const props = defineProps<{ taskId: number; reloadToken?: number }>()
 
 const data = ref<IntegrationReportResponse | null>(null)
 const loading = ref(false)
@@ -24,21 +24,46 @@ const innerTab = ref<'tic' | 'fid' | 'align'>('tic')
 const selectedTicPeak = ref<TicPeak | null>(null)
 const selectedFidPeak = ref<FidPeak | null>(null)
 const selectedAlignment = ref<AlignmentEntry | null>(null)
+const imageVersion = ref(0)
 
-async function load(taskId: number): Promise<void> {
-  if (taskId <= 0) {
-    return
+function nextRefreshKey(): number {
+  const now = Date.now()
+  if (now <= imageVersion.value) {
+    return imageVersion.value + 1
   }
-  loading.value = true
-  errorMessage.value = ''
-  selectedSampleName.value = null
+  return now
+}
+
+function clearPeakSelection(): void {
   selectedTicPeak.value = null
   selectedFidPeak.value = null
   selectedAlignment.value = null
+}
+
+async function load(taskId: number, preserveSample: boolean): Promise<void> {
+  if (taskId <= 0) {
+    return
+  }
+  const previousSampleName = preserveSample ? selectedSampleName.value : null
+  const refreshKey = nextRefreshKey()
+  loading.value = true
+  errorMessage.value = ''
+  if (preserveSample === false) {
+    selectedSampleName.value = null
+  }
+  clearPeakSelection()
   try {
-    data.value = await fetchIntegrationReport(taskId)
-    if (data.value.samples.length > 0) {
+    data.value = await fetchIntegrationReport(taskId, refreshKey)
+    imageVersion.value = refreshKey
+    if (
+      previousSampleName !== null &&
+      data.value.samples.some((entry) => entry.name === previousSampleName)
+    ) {
+      selectedSampleName.value = previousSampleName
+    } else if (data.value.samples.length > 0) {
       selectedSampleName.value = data.value.samples[0].name
+    } else {
+      selectedSampleName.value = null
     }
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
@@ -51,10 +76,24 @@ async function load(taskId: number): Promise<void> {
   }
 }
 
+function reload(): void {
+  void load(props.taskId, true)
+}
+
 watch(
   () => props.taskId,
-  (taskId) => { void load(taskId) },
+  (taskId) => { void load(taskId, false) },
   { immediate: true },
+)
+
+watch(
+  () => props.reloadToken,
+  (token, oldToken) => {
+    if (token === undefined || token === oldToken) {
+      return
+    }
+    void load(props.taskId, true)
+  },
 )
 
 const samples = computed(() => data.value?.samples ?? [])
@@ -67,9 +106,7 @@ const selectedSample = computed<IntegrationSample | null>(() => {
 })
 
 watch(selectedSample, () => {
-  selectedTicPeak.value = null
-  selectedFidPeak.value = null
-  selectedAlignment.value = null
+  clearPeakSelection()
 })
 
 function selectSample(name: string): void {
@@ -104,26 +141,29 @@ function plotsImageUrl(filename: string | null): string | null {
   if (filename === null) {
     return null
   }
-  return imageUrl(props.taskId, 'plots', filename)
+  return imageUrl(props.taskId, 'plots', filename, imageVersion.value)
 }
 
 function msImageUrl(filename: string | null): string | null {
   if (filename === null) {
     return null
   }
-  return imageUrl(props.taskId, 'ms_plots', filename)
+  return imageUrl(props.taskId, 'ms_plots', filename, imageVersion.value)
 }
 
 function structureImageUrl(filename: string | null): string | null {
   if (filename === null) {
     return null
   }
-  return imageUrl(props.taskId, 'structures', filename)
+  return imageUrl(props.taskId, 'structures', filename, imageVersion.value)
 }
 </script>
 
 <template>
   <div v-loading="loading" class="integration-tab">
+    <header class="report-toolbar">
+      <el-button :icon="Refresh" :loading="loading" size="small" @click="reload">重新加载</el-button>
+    </header>
     <el-empty v-if="errorMessage !== '' && data === null" :description="errorMessage" />
     <template v-else-if="data !== null">
       <section class="sample-grid">
@@ -518,6 +558,11 @@ function structureImageUrl(filename: string | null): string | null {
   min-height: 200px;
 }
 
+.report-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .sample-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -618,19 +663,28 @@ function structureImageUrl(filename: string | null): string | null {
 }
 
 .chrom-image {
+  display: block;
   width: 100%;
-  height: 240px;
+  height: auto;
   background: var(--el-fill-color-blank);
   border-radius: 4px;
   cursor: zoom-in;
 }
 
 .chrom-image-small {
+  display: block;
   width: 100%;
-  height: 180px;
+  height: auto;
   background: var(--el-fill-color-blank);
   border-radius: 4px;
   cursor: zoom-in;
+}
+
+.chrom-image :deep(.el-image__inner),
+.chrom-image-small :deep(.el-image__inner) {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .dual-chrom {

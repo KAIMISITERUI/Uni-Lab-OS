@@ -94,8 +94,12 @@ export async function fetchImageList(taskId: number, group: string): Promise<Ima
   return data
 }
 
-export function imageUrl(taskId: number, group: string, filename: string): string {
-  return `/api/task-history/${taskId}/images/${encodeURIComponent(group)}/${encodeURIComponent(filename)}`
+export function imageUrl(taskId: number, group: string, filename: string, version?: number | string): string {
+  const url = `/api/task-history/${taskId}/images/${encodeURIComponent(group)}/${encodeURIComponent(filename)}`
+  if (version === undefined || version === '') {
+    return url
+  }
+  return `${url}?v=${encodeURIComponent(String(version))}`
 }
 
 
@@ -308,12 +312,26 @@ export async function fetchTaskReport(taskId: number): Promise<TaskReportRespons
   return data
 }
 
-export async function fetchIntegrationReport(taskId: number): Promise<IntegrationReportResponse> {
-  const { data } = await http.get<IntegrationReportResponse>(`/api/task-history/${taskId}/integration-report`)
+export async function fetchIntegrationReport(
+  taskId: number,
+  refreshKey?: number | string,
+): Promise<IntegrationReportResponse> {
+  const params = refreshKey === undefined || refreshKey === '' ? undefined : { refresh_key: refreshKey }
+  const { data } = await http.get<IntegrationReportResponse>(
+    `/api/task-history/${taskId}/integration-report`,
+    { params },
+  )
   return data
 }
 
-export async function fetchYieldReport(taskId: number): Promise<YieldReportResponse> {
-  const { data } = await http.get<YieldReportResponse>(`/api/task-history/${taskId}/yield-report`)
+export async function fetchYieldReport(
+  taskId: number,
+  refreshKey?: number | string,
+): Promise<YieldReportResponse> {
+  const params = refreshKey === undefined || refreshKey === '' ? undefined : { refresh_key: refreshKey }
+  const { data } = await http.get<YieldReportResponse>(
+    `/api/task-history/${taskId}/yield-report`,
+    { params },
+  )
   return data
 }

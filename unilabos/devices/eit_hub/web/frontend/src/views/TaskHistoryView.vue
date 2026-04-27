@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Check, Close, Refresh, Search } from '@element-plus/icons-vue'
 import { getErrorMessage } from '../api/http'
@@ -31,6 +31,9 @@ const queryText = ref('')
 const listLoading = ref(false)
 const selectedTaskId = ref<number | null>(null)
 const activeTab = ref<'experiment_plan' | 'task_report' | 'methods' | 'integration' | 'yield'>('experiment_plan')
+const integrationReloadToken = ref(0)
+const yieldReloadToken = ref(0)
+const activatedOnce = ref(false)
 
 async function loadList(): Promise<void> {
   listLoading.value = true
@@ -94,8 +97,38 @@ function formatTime(value: string | null): string {
   return value.replace('T', ' ').slice(0, 19)
 }
 
+function triggerActiveReportReload(): void {
+  if (selectedTask.value === null) {
+    return
+  }
+  if (activeTab.value === 'integration') {
+    integrationReloadToken.value += 1
+  }
+  if (activeTab.value === 'yield') {
+    yieldReloadToken.value += 1
+  }
+}
+
 onMounted(() => {
   void loadList()
+})
+
+onActivated(() => {
+  if (activatedOnce.value === false) {
+    activatedOnce.value = true
+    return
+  }
+  void loadList()
+  triggerActiveReportReload()
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'integration') {
+    integrationReloadToken.value += 1
+  }
+  if (tab === 'yield') {
+    yieldReloadToken.value += 1
+  }
 })
 </script>
 
@@ -199,12 +232,20 @@ onMounted(() => {
             </el-tab-pane>
             <el-tab-pane label="积分报告" name="integration">
               <KeepAlive>
-                <TabIntegrationReport v-if="activeTab === 'integration'" :task-id="selectedTask.task_id" />
+                <TabIntegrationReport
+                  v-if="activeTab === 'integration'"
+                  :task-id="selectedTask.task_id"
+                  :reload-token="integrationReloadToken"
+                />
               </KeepAlive>
             </el-tab-pane>
             <el-tab-pane label="产率报告" name="yield">
               <KeepAlive>
-                <TabYieldReport v-if="activeTab === 'yield'" :task-id="selectedTask.task_id" />
+                <TabYieldReport
+                  v-if="activeTab === 'yield'"
+                  :task-id="selectedTask.task_id"
+                  :reload-token="yieldReloadToken"
+                />
               </KeepAlive>
             </el-tab-pane>
           </el-tabs>
