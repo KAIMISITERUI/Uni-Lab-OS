@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   type AgvMapStation,
   type AgvMapResponse,
   type AgvStatusResponse,
   type BatteryHistoryRecord,
-  type ChargingStandby,
+  type ChargeLoopConfig,
   type MaterialOption,
   type TrayPointOption,
   type TrayPositionRecord,
@@ -16,7 +16,6 @@ import {
   armPowerOn,
   armQuickChange,
   armStop,
-  chargingCheckOnce,
   connectArm,
   connectChassis,
   disconnectArm,
@@ -29,6 +28,7 @@ import {
   fetchTrayPositions,
   navigateToStation,
   saveAgvMapLayout,
+  saveChargingConfig,
   startCharging,
   stopCharging,
   batchTransferMaterials,
@@ -96,17 +96,18 @@ const stationTransferForm = ref<TransferTaskForm>(createTransferTaskForm())
 const interstationTaskCount = ref(1)
 const interstationTransferTasks = ref<TransferTaskForm[]>([createTransferTaskForm()])
 const chargingForm = ref({
-  standby: 'PP5' as ChargingStandby,
   interval_minutes: 30,
   retry_wait_minutes: 5,
   low_battery_pct: 50,
 })
+const chargingConfigDirty = ref(false)
 const jogRefCoord = ref<'base' | 'tcp' | 'user'>('base')
 const armJogPanelRef = ref<InstanceType<typeof ArmJogPanel> | null>(null)
 
 let statusTimer: number | undefined
 let historyTimer: number | undefined
 let lastTrayStationId: string | null | undefined
+let syncingChargingConfig = false
 
 const connections = computed(() => status.value?.connections ?? { chassis_connected: false, arm_connected: false })
 const isChassisConnected = computed(() => connections.value.chassis_connected === true)
@@ -177,6 +178,27 @@ const slotItems = computed<SlotDisplayItem[]>(() => {
 })
 
 const isCharging = computed(() => status.value?.charge_loop?.running === true)
+const chargeControl = computed(() => status.value?.charge_control ?? null)
+const chargeControlTagType = computed<'success' | 'warning' | 'info'>(() => {
+  const doStatus = chargeControl.value?.do_status
+  if (doStatus === false) {
+    return 'success'
+  }
+  if (doStatus === true) {
+    return 'warning'
+  }
+  return 'info'
+})
+const chargeControlText = computed(() => {
+  const doStatus = chargeControl.value?.do_status
+  if (doStatus === false) {
+    return 'DO7 关闭, 允许充电'
+  }
+  if (doStatus === true) {
+    return 'DO7 打开, 停止充电'
+  }
+  return 'DO7 状态未知'
+})
 const currentStationId = computed(() => status.value?.station?.station_id ?? mapData.value?.current_station_id ?? null)
 const displayStations = computed(() => {
   if (mapEditing.value === true) {
@@ -184,6 +206,20 @@ const displayStations = computed(() => {
   }
   return mapData.value?.stations ?? []
 })
+
+watch(
+  () => [
+    chargingForm.value.interval_minutes,
+    chargingForm.value.retry_wait_minutes,
+    chargingForm.value.low_battery_pct,
+  ],
+  () => {
+    if (syncingChargingConfig === false) {
+      chargingConfigDirty.value = true
+    }
+  },
+  { flush: 'sync' },
+)
 
 const interstationTrayOptions = computed<TrayPointOption[]>(() =>
   trayPositionRecords.value
@@ -385,10 +421,40 @@ function buildTransferPayload(task: TransferTaskForm) {
   }
 }
 
+function buildChargingConfig(): ChargeLoopConfig {
+  return {
+    interval_minutes: Number(chargingForm.value.interval_minutes),
+    retry_wait_minutes: Number(chargingForm.value.retry_wait_minutes),
+    low_battery_pct: Number(chargingForm.value.low_battery_pct),
+  }
+}
+
+function syncChargingFormFromStatus(data: AgvStatusResponse) {
+  const config = data.charge_loop?.config
+  if (config === null || config === undefined) {
+    return
+  }
+  if (chargingConfigDirty.value === true) {
+    return
+  }
+
+  syncingChargingConfig = true
+  try {
+    chargingForm.value = {
+      interval_minutes: config.interval_minutes,
+      retry_wait_minutes: config.retry_wait_minutes,
+      low_battery_pct: config.low_battery_pct,
+    }
+  } finally {
+    syncingChargingConfig = false
+  }
+}
+
 async function loadStatus() {
   try {
     const data = await fetchAgvStatus()
     status.value = data
+    syncChargingFormFromStatus(data)
     if (data.connections.arm_connected === true) {
       resolvePendingHardwareAction()
     } else {
@@ -763,25 +829,27 @@ function handleInterstationTransfer() {
 function handleStartCharging() {
   runSimpleAction(
     'charging-start',
-    () =>
-      startCharging({
-        standby: chargingForm.value.standby,
-        interval_minutes: chargingForm.value.interval_minutes,
-        retry_wait_minutes: chargingForm.value.retry_wait_minutes,
-        low_battery_pct: chargingForm.value.low_battery_pct,
-      }),
+    async () => {
+      await startCharging(buildChargingConfig())
+      chargingConfigDirty.value = false
+    },
     '充电循环已启动',
+  )
+}
+
+function handleSaveChargingConfig() {
+  runSimpleAction(
+    'charging-config-save',
+    async () => {
+      await saveChargingConfig(buildChargingConfig())
+      chargingConfigDirty.value = false
+    },
+    '充电参数已保存',
   )
 }
 
 function handleStopCharging() {
   runSimpleAction('charging-stop', stopCharging, '充电循环已停止')
-}
-
-function handleChargingCheckOnce() {
-  runJobAction('charging-check-once', () =>
-    chargingCheckOnce({ low_battery_pct: chargingForm.value.low_battery_pct }),
-  )
 }
 
 function handleArmJogEmergencyStop() {
@@ -1049,15 +1117,14 @@ onBeforeUnmount(() => {
             {{ isCharging ? '循环运行中' : '未运行' }}
           </el-tag>
         </div>
+        <div class="charge-control-status">
+          <el-tag :type="chargeControlTagType" effect="plain">
+            {{ chargeControlText }}
+          </el-tag>
+        </div>
 
         <el-form class="charge-form" size="default" label-width="94px">
           <div class="charge-form-grid">
-            <el-form-item class="charge-form-wide" label="待命点">
-              <el-radio-group v-model="chargingForm.standby">
-                <el-radio-button label="CP6">CP6 充电点</el-radio-button>
-                <el-radio-button label="PP5">PP5 待充点</el-radio-button>
-              </el-radio-group>
-            </el-form-item>
             <el-form-item label="检查间隔">
               <el-input-number v-model="chargingForm.interval_minutes" :min="1" :max="180" />
               <span class="unit">分钟</span>
@@ -1070,7 +1137,15 @@ onBeforeUnmount(() => {
               <el-input-number v-model="chargingForm.low_battery_pct" :min="10" :max="90" />
               <span class="unit">%</span>
             </el-form-item>
-            <el-form-item class="charge-action-row">
+            <div class="charge-action-row">
+              <el-button
+                class="charge-action-button charge-save-button"
+                size="large"
+                type="primary"
+                plain
+                :loading="isActionLoading('charging-config-save')"
+                @click="handleSaveChargingConfig"
+              >保存设置</el-button>
               <el-button
                 v-if="isCharging === false"
                 class="charge-action-button"
@@ -1088,14 +1163,7 @@ onBeforeUnmount(() => {
                 :loading="isActionLoading('charging-stop')"
                 @click="handleStopCharging"
               >停止循环</el-button>
-              <el-button
-                class="charge-action-button"
-                size="large"
-                :loading="isActionLoading('charging-check-once')"
-                @click="handleChargingCheckOnce"
-                :disabled="isChassisConnected === false"
-              >执行单次检查</el-button>
-            </el-form-item>
+            </div>
           </div>
         </el-form>
 
@@ -1468,6 +1536,17 @@ onBeforeUnmount(() => {
 .agv-charge-panel {
   display: flex;
   flex-direction: column;
+  align-self: stretch;
+}
+
+.charge-control-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 14px;
+  color: #66758a;
+  font-size: 12px;
 }
 
 .charge-form {
@@ -1480,7 +1559,7 @@ onBeforeUnmount(() => {
 .charge-form-grid {
   display: grid;
   grid-template-columns: 1fr;
-  row-gap: 16px;
+  row-gap: 18px;
   align-items: start;
   width: 100%;
   max-width: 760px;
@@ -1518,23 +1597,6 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-.charge-form-wide :deep(.el-radio-group) {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  width: 100%;
-}
-
-.charge-form-wide :deep(.el-radio-button__inner) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-height: 38px;
-  padding: 0 14px;
-  font-size: 15px;
-  font-weight: 700;
-}
-
 .charge-form :deep(.el-input-number) {
   width: 100%;
 }
@@ -1560,10 +1622,12 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
-.charge-action-row :deep(.el-form-item__content) {
+.charge-action-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  width: min(640px, calc(100% - 36px));
+  margin: 12px 0 0 36px;
 }
 
 .charge-action-row :deep(.el-button + .el-button) {
@@ -1572,7 +1636,7 @@ onBeforeUnmount(() => {
 
 .charge-action-button {
   width: 100%;
-  min-height: 44px;
+  min-height: 46px;
   font-size: 16px;
   font-weight: 700;
 }
@@ -1591,8 +1655,9 @@ onBeforeUnmount(() => {
 @media (max-width: 760px) {
   .charge-form-grid,
   .control-actions,
-  .charge-action-row :deep(.el-form-item__content) {
+  .charge-action-row {
     grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .interstation-task-row,

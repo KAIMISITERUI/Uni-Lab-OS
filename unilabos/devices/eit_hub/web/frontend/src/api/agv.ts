@@ -3,7 +3,6 @@ import type { LogEntry } from './log'
 
 export type { LogEntry } from './log'
 
-export type ChargingStandby = 'CP6' | 'PP5'
 export type QuickChangeAction = 'lock' | 'release'
 export type GripperAction = 'open' | 'close'
 
@@ -54,13 +53,25 @@ export interface AgvCollisionInfo {
 
 export interface ChargeLoopStatus {
   running: boolean
-  standby: string
-  config: {
-    interval_minutes: number
-    retry_wait_minutes: number
-    low_battery_pct: number
-  }
+  config: ChargeLoopConfig
   last_action: Record<string, unknown> | null
+}
+
+export interface ChargeLoopConfig {
+  interval_minutes: number
+  retry_wait_minutes: number
+  low_battery_pct: number
+}
+
+export interface AgvChargeControlInfo {
+  do_id: number
+  do_status: boolean | null
+  stop_charging: boolean | null
+  charging_enabled: boolean | null
+  source?: string | null
+  valid?: boolean | null
+  message?: string | null
+  [key: string]: unknown
 }
 
 export interface AgvStatusResponse {
@@ -68,6 +79,7 @@ export interface AgvStatusResponse {
   station: AgvStationInfo | null
   battery: AgvBatteryInfo | null
   battery_latest: { timestamp: string; battery_level: number; charging: boolean } | null
+  charge_control: AgvChargeControlInfo | null
   nav_task: AgvNavTaskInfo | null
   slots: AgvSlotsStatus | null
   gripper_state: string | null
@@ -266,12 +278,16 @@ export async function fetchChargingStatus(): Promise<ChargeLoopStatus> {
 }
 
 export async function startCharging(payload: {
-  standby: ChargingStandby
   interval_minutes: number
   retry_wait_minutes: number
   low_battery_pct: number
 }): Promise<ChargeLoopStatus> {
   const { data } = await http.post<ChargeLoopStatus>('/api/agv/charging/start', payload)
+  return data
+}
+
+export async function saveChargingConfig(payload: ChargeLoopConfig): Promise<ChargeLoopStatus> {
+  const { data } = await http.put<ChargeLoopStatus>('/api/agv/charging/config', payload)
   return data
 }
 

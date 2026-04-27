@@ -6,13 +6,20 @@
 
 from __future__ import annotations
 
+import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
 from fastapi.testclient import TestClient
 
+from unilabos.devices.eit_hub.web import deps
 from unilabos.devices.eit_hub.web.app import create_app
+from unilabos.devices.eit_hub.web.services.charge_loop import (
+    DEFAULT_CHARGE_LOOP_CONFIG,
+    ChargeLoopService,
+)
 from unilabos.devices.eit_hub.web.services import station_map
 
 
@@ -29,6 +36,159 @@ def api_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     """
     monkeypatch.setattr(station_map, "MAP_LAYOUT_PATH", tmp_path / "agv_station_layout.json")
     return TestClient(create_app())
+
+
+class FakeChargeController:
+    """
+    功能:
+        提供充电循环服务测试所需的最小控制器.
+    """
+
+    def auto_charge_pp5_cp6_check(self, low_battery_pct: int = 50) -> Dict[str, Any]:
+        """
+        功能:
+            返回一次成功的充电检查结果.
+        参数:
+            low_battery_pct: int, 低电量阈值.
+        返回:
+            Dict[str, Any], 充电检查结果.
+        """
+        return {"status": "success", "low_battery_pct": low_battery_pct}
+
+
+class FakeChargeContext:
+    """
+    功能:
+        提供充电循环服务测试所需的最小上下文.
+    """
+
+    def __init__(self, chassis_connected: bool = True) -> None:
+        self.chassis_connected = chassis_connected
+        self.arm_lock = threading.Lock()
+        self.controller = FakeChargeController()
+
+    def is_chassis_connected(self) -> bool:
+        """
+        功能:
+            返回底盘连接状态.
+        返回:
+            bool, True 表示已连接.
+        """
+        return self.chassis_connected
+
+    def get_or_create(self) -> FakeChargeController:
+        """
+        功能:
+            返回测试控制器.
+        返回:
+            FakeChargeController, 测试控制器.
+        """
+        return self.controller
+
+
+class FakeChargeLoopApiService:
+    """
+    功能:
+        提供充电管理 API 测试所需的最小服务.
+    """
+
+    def __init__(self) -> None:
+        self.running = False
+        self.config = dict(DEFAULT_CHARGE_LOOP_CONFIG)
+        self.last_action = None
+
+    def status(self) -> Dict[str, Any]:
+        """
+        功能:
+            返回充电循环状态.
+        返回:
+            Dict[str, Any], 服务状态.
+        """
+        return {"running": self.running, "config": dict(self.config), "last_action": self.last_action}
+
+    def save_config(self, interval_minutes: int, retry_wait_minutes: int, low_battery_pct: int) -> Dict[str, Any]:
+        """
+        功能:
+            保存测试充电配置.
+        参数:
+            interval_minutes: int, 检查间隔.
+            retry_wait_minutes: int, 重试等待.
+            low_battery_pct: int, 电量阈值.
+        返回:
+            Dict[str, Any], 保存后的服务状态.
+        """
+        self.config = {
+            "interval_minutes": interval_minutes,
+            "retry_wait_minutes": retry_wait_minutes,
+            "low_battery_pct": low_battery_pct,
+        }
+        return self.status()
+
+    def start(self, interval_minutes: int, retry_wait_minutes: int, low_battery_pct: int) -> Dict[str, Any]:
+        """
+        功能:
+            启动测试充电循环并保存配置.
+        参数:
+            interval_minutes: int, 检查间隔.
+            retry_wait_minutes: int, 重试等待.
+            low_battery_pct: int, 电量阈值.
+        返回:
+            Dict[str, Any], 启动后的服务状态.
+        """
+        self.save_config(interval_minutes, retry_wait_minutes, low_battery_pct)
+        self.running = True
+        return self.status()
+
+    def stop(self) -> Dict[str, Any]:
+        """
+        功能:
+            停止测试充电循环.
+        返回:
+            Dict[str, Any], 停止后的服务状态.
+        """
+        self.running = False
+        return self.status()
+
+
+class FakeConnectedAgvContext:
+    """
+    功能:
+        提供充电启动 API 测试所需的已连接底盘上下文.
+    """
+
+    def is_chassis_connected(self) -> bool:
+        """
+        功能:
+            返回底盘连接状态.
+        返回:
+            bool, True 表示已连接.
+        """
+        return True
+
+
+def _charging_api_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    charger: FakeChargeLoopApiService,
+    context: Any = None,
+) -> TestClient:
+    """
+    功能:
+        创建隔离的充电管理 API 测试客户端.
+    参数:
+        monkeypatch: pytest.MonkeyPatch, 测试猴子补丁工具.
+        tmp_path: Path, pytest 临时目录.
+        charger: FakeChargeLoopApiService, 测试充电服务.
+        context: Any, 可选 AGV 上下文.
+    返回:
+        TestClient, 测试客户端.
+    """
+    monkeypatch.setattr(station_map, "MAP_LAYOUT_PATH", tmp_path / "agv_station_layout.json")
+    app = create_app()
+    app.dependency_overrides[deps.get_charge_loop_service] = lambda: charger
+    if context is not None:
+        app.dependency_overrides[deps.get_agv_context] = lambda: context
+    return TestClient(app)
 
 
 def _station_by_id(stations: List[Dict[str, Any]], station_id: str) -> Dict[str, Any]:
@@ -61,6 +221,211 @@ def test_agv_map_returns_default_layout_without_saved_file(api_client: TestClien
     assert lm1["y"] == 20.0
     assert lm1["label"] == "合成工站"
     assert body["current_station_id"] is None
+
+
+def test_charge_loop_service_returns_default_config_without_saved_file(tmp_path: Path) -> None:
+    """
+    功能:
+        验证充电循环服务在无配置文件时返回默认配置.
+    """
+    config_path = tmp_path / "charge_loop_config.json"
+    service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
+
+    body = service.status()
+
+    assert body["config"] == DEFAULT_CHARGE_LOOP_CONFIG
+    assert config_path.is_file() is False
+
+
+def test_charge_loop_service_save_config_persists_file(tmp_path: Path) -> None:
+    """
+    功能:
+        验证充电循环服务保存配置后写入文件.
+    """
+    config_path = tmp_path / "charge_loop_config.json"
+    service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
+
+    body = service.save_config(interval_minutes=12, retry_wait_minutes=6, low_battery_pct=55)
+
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert body["config"] == {"interval_minutes": 12, "retry_wait_minutes": 6, "low_battery_pct": 55}
+    assert saved_config == body["config"]
+
+
+def test_charge_loop_service_loads_saved_config_after_restart(tmp_path: Path) -> None:
+    """
+    功能:
+        验证重新创建充电循环服务后读取已保存配置.
+    """
+    config_path = tmp_path / "charge_loop_config.json"
+    service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
+    service.save_config(interval_minutes=18, retry_wait_minutes=8, low_battery_pct=60)
+
+    restarted_service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
+
+    assert restarted_service.status()["config"] == {
+        "interval_minutes": 18,
+        "retry_wait_minutes": 8,
+        "low_battery_pct": 60,
+    }
+
+
+def test_charge_loop_service_start_persists_submitted_config(tmp_path: Path) -> None:
+    """
+    功能:
+        验证启动充电循环时保存提交的配置.
+    """
+    config_path = tmp_path / "charge_loop_config.json"
+    service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
+
+    try:
+        body = service.start(interval_minutes=9, retry_wait_minutes=4, low_battery_pct=65)
+        saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    finally:
+        service.stop()
+
+    assert body["running"] is True
+    assert body["config"] == {"interval_minutes": 9, "retry_wait_minutes": 4, "low_battery_pct": 65}
+    assert saved_config == body["config"]
+
+
+def test_charging_config_api_save_updates_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    功能:
+        验证 /api/agv/charging/config 保存后状态接口返回新配置.
+    """
+    charger = FakeChargeLoopApiService()
+    client = _charging_api_client(monkeypatch, tmp_path, charger)
+
+    save_response = client.put(
+        "/api/agv/charging/config",
+        json={"interval_minutes": 15, "retry_wait_minutes": 7, "low_battery_pct": 58},
+    )
+    status_response = client.get("/api/agv/charging/status")
+
+    assert save_response.status_code == 200
+    assert save_response.json()["config"] == {"interval_minutes": 15, "retry_wait_minutes": 7, "low_battery_pct": 58}
+    assert status_response.status_code == 200
+    assert status_response.json()["config"] == save_response.json()["config"]
+
+
+def test_charging_config_api_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    功能:
+        验证 /api/agv/charging/config 拒绝超出范围的参数.
+    """
+    charger = FakeChargeLoopApiService()
+    client = _charging_api_client(monkeypatch, tmp_path, charger)
+
+    response = client.put(
+        "/api/agv/charging/config",
+        json={"interval_minutes": 0, "retry_wait_minutes": 7, "low_battery_pct": 58},
+    )
+
+    assert response.status_code == 422
+    assert charger.config == DEFAULT_CHARGE_LOOP_CONFIG
+
+
+def test_charging_start_api_uses_submitted_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    功能:
+        验证 /api/agv/charging/start 使用并保存提交的配置.
+    """
+    charger = FakeChargeLoopApiService()
+    client = _charging_api_client(monkeypatch, tmp_path, charger, context=FakeConnectedAgvContext())
+
+    response = client.post(
+        "/api/agv/charging/start",
+        json={"interval_minutes": 20, "retry_wait_minutes": 9, "low_battery_pct": 70},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["running"] is True
+    assert body["config"] == {"interval_minutes": 20, "retry_wait_minutes": 9, "low_battery_pct": 70}
+    assert charger.config == body["config"]
+
+
+def test_agv_status_returns_charge_control(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    功能:
+        验证 /api/agv/status 返回 DO7 充电控制状态字段.
+    """
+
+    class FakeController:
+        """
+        功能:
+            提供 AGV 状态接口测试所需的最小控制器.
+        """
+
+        def query_current_station(self) -> Dict[str, Any]:
+            return {"station_id": "CP6", "station_name": "charging_station", "description": "充电站位置"}
+
+        def query_battery_status(self, simple: bool = False) -> Dict[str, Any]:
+            return {"battery_level": 0.6, "charging": True, "ret_code": 0}
+
+        def query_charge_control_status(self) -> Dict[str, Any]:
+            return {
+                "do_id": 7,
+                "do_status": False,
+                "stop_charging": False,
+                "charging_enabled": True,
+                "source": "robot",
+                "valid": True,
+                "message": "DO7 关闭, 允许充电",
+            }
+
+        def query_nav_task_status(self) -> Dict[str, Any]:
+            return {"task_status": 0, "task_status_name": "NONE"}
+
+    class FakeContext:
+        """
+        功能:
+            提供 AGV 状态接口测试所需的最小上下文.
+        """
+
+        def __init__(self) -> None:
+            self.controller = FakeController()
+
+        def status_snapshot(self) -> Dict[str, bool]:
+            return {"chassis_connected": True, "arm_connected": False}
+
+        def get_or_create(self) -> FakeController:
+            return self.controller
+
+    class FakeSampler:
+        """
+        功能:
+            提供最近电量采样测试数据.
+        """
+
+        def get_latest(self) -> Dict[str, Any]:
+            return {"timestamp": "2026-04-27T00:00:00", "battery_level": 0.6, "charging": True}
+
+    class FakeCharger:
+        """
+        功能:
+            提供充电循环服务测试状态.
+        """
+
+        def status(self) -> Dict[str, Any]:
+            return {"running": False, "config": {}, "last_action": None}
+
+    monkeypatch.setattr(station_map, "MAP_LAYOUT_PATH", tmp_path / "agv_station_layout.json")
+    app = create_app()
+    app.dependency_overrides[deps.get_agv_context] = lambda: FakeContext()
+    app.dependency_overrides[deps.get_battery_sampler_service] = lambda: FakeSampler()
+    app.dependency_overrides[deps.get_charge_loop_service] = lambda: FakeCharger()
+    client = TestClient(app)
+
+    response = client.get("/api/agv/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["battery"]["charging"] is True
+    assert body["charge_control"]["do_id"] == 7
+    assert body["charge_control"]["do_status"] is False
+    assert body["charge_control"]["charging_enabled"] is True
 
 
 def test_agv_map_layout_save_persists_coordinates(api_client: TestClient) -> None:

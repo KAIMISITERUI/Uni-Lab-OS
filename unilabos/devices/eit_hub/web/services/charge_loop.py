@@ -7,14 +7,66 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .agv_context import AgvContext
 
 logger = logging.getLogger("EITHubChargeLoop")
+
+CHARGE_LOOP_CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "charge_loop_config.json"
+
+DEFAULT_CHARGE_LOOP_CONFIG: Dict[str, int] = {
+    "interval_minutes": 30,
+    "retry_wait_minutes": 5,
+    "low_battery_pct": 50,
+}
+
+
+def _default_config() -> Dict[str, int]:
+    """
+    功能:
+        返回充电循环默认配置副本, 避免调用方修改模块级默认值.
+    返回:
+        Dict[str, int], 默认充电循环配置.
+    """
+    return dict(DEFAULT_CHARGE_LOOP_CONFIG)
+
+
+def _normalize_config(config: Dict[str, Any]) -> Dict[str, int]:
+    """
+    功能:
+        将外部配置转换为整数配置并校验业务范围.
+    参数:
+        config: Dict[str, Any], 外部传入或文件读取的配置.
+    返回:
+        Dict[str, int], 已校验的充电循环配置.
+    """
+    try:
+        interval_minutes = int(config["interval_minutes"])
+        retry_wait_minutes = int(config["retry_wait_minutes"])
+        low_battery_pct = int(config["low_battery_pct"])
+    except KeyError as exc:
+        raise ValueError(f"充电循环配置缺少字段: {exc.args[0]}.") from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError("充电循环配置必须是整数.") from exc
+
+    if (1 <= interval_minutes <= 180) is False:
+        raise ValueError("检查间隔必须在 1 到 180 分钟之间.")
+    if (1 <= retry_wait_minutes <= 60) is False:
+        raise ValueError("重试等待必须在 1 到 60 分钟之间.")
+    if (10 <= low_battery_pct <= 90) is False:
+        raise ValueError("电量阈值必须在 10 到 90 之间.")
+
+    return {
+        "interval_minutes": interval_minutes,
+        "retry_wait_minutes": retry_wait_minutes,
+        "low_battery_pct": low_battery_pct,
+    }
 
 
 class ChargeLoopService:
@@ -23,23 +75,18 @@ class ChargeLoopService:
         充电循环服务, 运行时以独立线程周期执行一次充电检查.
     """
 
-    def __init__(self, context: AgvContext) -> None:
+    def __init__(self, context: AgvContext, config_path: Optional[Path] = None) -> None:
         self._context = context
+        self._config_path = config_path if config_path is not None else CHARGE_LOOP_CONFIG_PATH
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._running = False
-        self._standby: str = "PP5"
-        self._config: Dict[str, Any] = {
-            "interval_minutes": 30,
-            "retry_wait_minutes": 5,
-            "low_battery_pct": 50,
-        }
+        self._config: Dict[str, Any] = self._load_config()
         self._last_action: Optional[Dict[str, Any]] = None
 
     def start(
         self,
-        standby: str,
         interval_minutes: int,
         retry_wait_minutes: int,
         low_battery_pct: int,
@@ -48,7 +95,6 @@ class ChargeLoopService:
         功能:
             启动充电循环.
         参数:
-            standby: str, 待命点类型, "CP6" 或 "PP5". 仅用于日志和前端展示.
             interval_minutes: int, 正常检查间隔.
             retry_wait_minutes: int, 异常/跳过时的重试等待.
             low_battery_pct: int, 低电量阈值 (0-100).
@@ -58,32 +104,69 @@ class ChargeLoopService:
         if self._context.is_chassis_connected() is False:
             raise RuntimeError("AGV 底盘未连接, 无法启动充电循环")
 
+        config = _normalize_config(
+            {
+                "interval_minutes": interval_minutes,
+                "retry_wait_minutes": retry_wait_minutes,
+                "low_battery_pct": low_battery_pct,
+            }
+        )
+
         with self._lock:
             if self._running is True:
                 raise RuntimeError("充电循环已在运行")
-            self._standby = standby.upper() if isinstance(standby, str) else "PP5"
-            self._config = {
-                "interval_minutes": int(interval_minutes),
-                "retry_wait_minutes": int(retry_wait_minutes),
-                "low_battery_pct": int(low_battery_pct),
-            }
+            self._write_config(config)
+            self._config = config
             self._stop_event.clear()
             self._running = True
             self._last_action = {
                 "at": datetime.now().isoformat(timespec="seconds"),
                 "status": "started",
-                "message": f"充电循环已启动, 待命点={self._standby}",
+                "message": "充电循环已启动, 固定策略=PP5待命/CP6充电",
             }
             thread = threading.Thread(target=self._loop, name="agv-charge-loop", daemon=True)
             self._thread = thread
             thread.start()
 
         logger.info(
-            "充电循环已启动, standby=%s, interval=%d min, retry=%d min, threshold=%d%%",
-            self._standby,
+            "充电循环已启动, strategy=PP5待命/CP6充电, interval=%d min, retry=%d min, threshold=%d%%",
             self._config["interval_minutes"],
             self._config["retry_wait_minutes"],
             self._config["low_battery_pct"],
+        )
+        return self.status()
+
+    def save_config(
+        self,
+        interval_minutes: int,
+        retry_wait_minutes: int,
+        low_battery_pct: int,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            保存充电循环配置, 并更新当前服务内存配置.
+        参数:
+            interval_minutes: int, 正常检查间隔.
+            retry_wait_minutes: int, 异常/跳过时的重试等待.
+            low_battery_pct: int, 低电量阈值.
+        返回:
+            Dict[str, Any], 保存后的服务状态.
+        """
+        config = _normalize_config(
+            {
+                "interval_minutes": interval_minutes,
+                "retry_wait_minutes": retry_wait_minutes,
+                "low_battery_pct": low_battery_pct,
+            }
+        )
+        with self._lock:
+            self._write_config(config)
+            self._config = config
+        logger.info(
+            "充电循环配置已保存, interval=%d min, retry=%d min, threshold=%d%%",
+            config["interval_minutes"],
+            config["retry_wait_minutes"],
+            config["low_battery_pct"],
         )
         return self.status()
 
@@ -115,12 +198,11 @@ class ChargeLoopService:
         功能:
             返回当前服务状态.
         返回:
-            Dict, 包含 running/standby/config/last_action.
+            Dict, 包含 running/config/last_action.
         """
         with self._lock:
             return {
                 "running": self._running,
-                "standby": self._standby,
                 "config": dict(self._config),
                 "last_action": self._last_action,
             }
@@ -163,3 +245,36 @@ class ChargeLoopService:
 
             if self._stop_event.wait(wait_seconds) is True:
                 break
+
+    def _load_config(self) -> Dict[str, int]:
+        """
+        功能:
+            从持久化文件读取充电循环配置, 文件不存在时使用默认配置.
+        返回:
+            Dict[str, int], 当前充电循环配置.
+        """
+        if self._config_path.is_file() is False:
+            return _default_config()
+
+        with self._config_path.open("r", encoding="utf-8") as file_obj:
+            payload = json.load(file_obj)
+        if isinstance(payload, dict) is False:
+            raise ValueError("充电循环配置文件格式错误, 必须是对象.")
+        return _normalize_config(payload)
+
+    def _write_config(self, config: Dict[str, int]) -> None:
+        """
+        功能:
+            将充电循环配置写入持久化文件.
+        参数:
+            config: Dict[str, int], 已校验的充电循环配置.
+        返回:
+            None.
+        """
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self._config_path.with_suffix(f"{self._config_path.suffix}.tmp")
+        temp_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temp_path.replace(self._config_path)

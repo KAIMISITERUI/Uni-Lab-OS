@@ -390,16 +390,14 @@ class ChargingStartRequest(BaseModel):
     功能:
         启动充电循环请求.
     参数:
-        standby: str, 待命点, "CP6" 或 "PP5".
         interval_minutes: int, 正常检查间隔分钟.
         retry_wait_minutes: int, 异常重试等待分钟.
         low_battery_pct: int, 低电量阈值 0-100.
     """
 
-    standby: str = "PP5"
-    interval_minutes: int = 30
-    retry_wait_minutes: int = 5
-    low_battery_pct: int = 50
+    interval_minutes: int = Field(default=30, ge=1, le=180)
+    retry_wait_minutes: int = Field(default=5, ge=1, le=60)
+    low_battery_pct: int = Field(default=50, ge=10, le=90)
 
 
 class TrayNameRequest(BaseModel):
@@ -625,6 +623,7 @@ def get_status(
         "station": None,
         "battery": None,
         "battery_latest": sampler.get_latest(),
+        "charge_control": None,
         "nav_task": None,
         "slots": None,
         "gripper_state": None,
@@ -641,6 +640,7 @@ def get_status(
         controller = context.get_or_create()
         result["station"] = _safe_call(controller.query_current_station)
         result["battery"] = _safe_call(lambda: controller.query_battery_status(simple=False))
+        result["charge_control"] = _safe_call(controller.query_charge_control_status)
         result["nav_task"] = _safe_call(controller.query_nav_task_status)
 
     if connections.get("arm_connected") is True:
@@ -1066,6 +1066,31 @@ def charging_status(
     return charger.status()
 
 
+@router.put("/charging/config")
+def charging_config_save(
+    request: ChargingStartRequest,
+    charger: ChargeLoopService = Depends(get_charge_loop_service),
+) -> JsonDict:
+    """
+    功能:
+        保存充电循环配置, 不要求 AGV 底盘已连接.
+    参数:
+        request: ChargingStartRequest, 配置请求.
+    返回:
+        Dict[str, Any], 保存后的服务状态.
+    """
+    try:
+        return charger.save_config(
+            interval_minutes=request.interval_minutes,
+            retry_wait_minutes=request.retry_wait_minutes,
+            low_battery_pct=request.low_battery_pct,
+        )
+    except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY) from exc
+    except OSError as exc:
+        raise _json_error(f"保存充电参数失败: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+
+
 @router.post("/charging/start")
 def charging_start(
     request: ChargingStartRequest,
@@ -1083,11 +1108,14 @@ def charging_start(
     _require_chassis(context)
     try:
         return charger.start(
-            standby=request.standby,
             interval_minutes=request.interval_minutes,
             retry_wait_minutes=request.retry_wait_minutes,
             low_battery_pct=request.low_battery_pct,
         )
+    except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY) from exc
+    except OSError as exc:
+        raise _json_error(f"保存充电参数失败: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
     except RuntimeError as exc:
         raise _json_error(str(exc), status.HTTP_409_CONFLICT) from exc
 
