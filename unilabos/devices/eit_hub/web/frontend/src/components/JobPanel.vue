@@ -49,6 +49,7 @@ const statusText = computed(() => {
     running: '运行中',
     succeeded: '已完成',
     failed: '失败',
+    stopped: '已停止',
   }
   return map[job.value.status] || job.value.status
 })
@@ -61,6 +62,9 @@ const statusType = computed(() => {
     return 'success'
   }
   if (job.value.status === 'failed') {
+    return 'danger'
+  }
+  if (job.value.status === 'stopped') {
     return 'danger'
   }
   return 'warning'
@@ -110,7 +114,7 @@ async function loadJob() {
     const data = await dispatchFetchJob(props.jobId)
     job.value = data
     emit('updated', data)
-    if (data.status === 'succeeded' || data.status === 'failed') {
+    if (data.status === 'succeeded' || data.status === 'failed' || data.status === 'stopped') {
       stopPolling()
       emit('finished', data)
     }
@@ -208,6 +212,10 @@ onBeforeUnmount(stopPolling)
         <el-tag v-if="job.status === 'failed'" type="danger">
           <el-icon><CircleClose /></el-icon>
           失败
+        </el-tag>
+        <el-tag v-if="job.status === 'stopped'" type="danger">
+          <el-icon><CircleClose /></el-icon>
+          已停止
         </el-tag>
       </div>
 

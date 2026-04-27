@@ -29,7 +29,7 @@ from ..excel_codec import (
     write_reaction_template,
 )
 from ..excel_printing import DEFAULT_BATCH_IN_TABLE_PRINTER, print_batch_in_table
-from ..jobs import JobBusyError, job_manager
+from ..jobs import JobBusyError, JobStoppedError, job_manager
 
 logger = logging.getLogger("EITHubSynthesisRouter")
 
@@ -65,6 +65,8 @@ WORKFLOW_STEP_LABELS = {
 }
 WORKFLOW_BATCH_IN_MODES = {"manual", "agv"}
 WORKFLOW_PAUSABLE_TASK_STEPS = {"start_task", "wait_task"}
+WORKFLOW_CANCELABLE_TASK_STEPS = {"start_task", "wait_task"}
+WORKFLOW_ANALYSIS_STOP_STEPS = {"submit_analysis", "poll_analysis"}
 
 _workflow_lock = threading.RLock()
 _workflow_runs: Dict[str, "WorkflowRunState"] = {}
@@ -254,6 +256,8 @@ class WorkflowRunState:
     pause_requested: bool = False
     paused: bool = False
     task_pause_sent: bool = False
+    stop_requested: bool = False
+    stopped: bool = False
     _condition: threading.Condition = field(default_factory=lambda: threading.Condition(threading.RLock()))
 
     def add_log(self, message: str) -> None:
@@ -318,7 +322,22 @@ class WorkflowRunState:
             None.
         """
         with self._condition:
+            if self.stop_requested is True:
+                return
             self.pause_requested = True
+
+    def request_stop(self) -> None:
+        """
+        功能:
+            标记工作流需要停止, 并唤醒可能处于暂停等待的工作流线程.
+        返回:
+            None.
+        """
+        with self._condition:
+            self.stop_requested = True
+            self.pause_requested = False
+            self.paused = False
+            self._condition.notify_all()
 
     def mark_paused_immediately(self) -> None:
         """
@@ -330,6 +349,18 @@ class WorkflowRunState:
         with self._condition:
             self.paused = True
 
+    def raise_if_stop_requested(self) -> None:
+        """
+        功能:
+            检查停止请求, 已请求停止时更新步骤状态并抛出停止异常.
+        返回:
+            None.
+        """
+        with self._condition:
+            if self.stop_requested is False:
+                return
+            self._raise_stopped_locked()
+
     def wait_if_pause_requested(self, log_fn: Callable[[str], None]) -> None:
         """
         功能:
@@ -340,11 +371,15 @@ class WorkflowRunState:
             None.
         """
         with self._condition:
+            if self.stop_requested is True:
+                self._raise_stopped_locked()
             if self.pause_requested is False:
                 return
             self.paused = True
             log_fn("工作流已暂停, 等待恢复.")
             while self.pause_requested is True:
+                if self.stop_requested is True:
+                    self._raise_stopped_locked()
                 self._condition.wait(timeout=1.0)
             self.paused = False
             log_fn("工作流已恢复, 继续执行后续步骤.")
@@ -357,9 +392,45 @@ class WorkflowRunState:
             None.
         """
         with self._condition:
+            if self.stop_requested is True:
+                return
             self.pause_requested = False
             self.paused = False
             self._condition.notify_all()
+
+    def _raise_stopped_locked(self) -> None:
+        """
+        功能:
+            在已持有条件锁时构造停止结果, 标记工作流停止并抛出停止异常.
+        返回:
+            None.
+        """
+        result = {
+            "workflow_id": self.workflow_id,
+            "experiment_id": self.experiment_id,
+            "experiment_name": self.experiment_name,
+            "current_step": self.current_step,
+        }
+        self._mark_stopped_locked()
+        raise JobStoppedError("工作流已停止.", result=result)
+
+    def _mark_stopped_locked(self) -> None:
+        """
+        功能:
+            在已持有条件锁时标记工作流停止, 当前运行步骤置为 stopped, 后续 pending 步骤置为 skipped.
+        返回:
+            None.
+        """
+        self.stopped = True
+        self.stop_requested = True
+        self.pause_requested = False
+        self.paused = False
+        for step in self.steps:
+            if self.current_step is not None and step.step_id == self.current_step and step.status == "running":
+                step.status = "stopped"
+            elif step.status == "pending":
+                step.status = "skipped"
+        self.current_step = None
 
     def to_dict(self, job_status: Optional[str] = None, job_error: Optional[str] = None, result: Any = None) -> JsonDict:
         """
@@ -374,8 +445,12 @@ class WorkflowRunState:
         """
         with self._condition:
             status_text = job_status or "queued"
-            if status_text in ("queued", "running"):
-                if self.paused is True:
+            if self.stopped is True or status_text == "stopped":
+                status_text = "stopped"
+            elif status_text in ("queued", "running"):
+                if self.stop_requested is True:
+                    status_text = "stopping"
+                elif self.paused is True:
                     status_text = "paused"
                 elif self.pause_requested is True:
                     status_text = "pausing"
@@ -821,6 +896,33 @@ def resume_workflow(
     return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
 
 
+@router.post("/workflow/{workflow_id}/stop")
+def stop_workflow(
+    workflow_id: str,
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        停止合成工作流, 终止当前可取消操作并阻止后续步骤继续执行.
+    参数:
+        workflow_id: str, 工作流 ID.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 工作流状态.
+    """
+    state = _get_workflow_state(workflow_id)
+    job = job_manager.get(workflow_id)
+    if job is None:
+        raise _json_error(f"未找到工作流后台任务: {workflow_id}", status.HTTP_404_NOT_FOUND)
+    if job.status not in ("queued", "running"):
+        return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
+
+    state.request_stop()
+    state.add_log("已收到停止请求, 正在终止当前操作.")
+    _terminate_current_workflow_operation(state, manager)
+    return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
+
+
 @router.post("/device-init")
 def device_init(
     manager: SynthesisStationManager = Depends(get_synthesis_manager),
@@ -1045,7 +1147,9 @@ def _run_workflow_steps(
     bridges = _attach_workflow_loggers(workflow_log)
     try:
         for step_id in WORKFLOW_STEP_ORDER[start_index:]:
+            state.raise_if_stop_requested()
             state.wait_if_pause_requested(workflow_log)
+            state.raise_if_stop_requested()
             if _workflow_step_enabled(step_id, request) is False:
                 state.update_step(step_id, "skipped")
                 workflow_log(f"跳过步骤: {_workflow_step_label(step_id, request)}.")
@@ -1055,14 +1159,20 @@ def _run_workflow_steps(
             workflow_log(f"开始步骤: {_workflow_step_label(step_id, request)}.")
             try:
                 step_result = _execute_workflow_step(step_id, request, manager)
+            except JobStoppedError:
+                state.update_step(step_id, "stopped")
+                workflow_log(f"步骤已停止: {_workflow_step_label(step_id, request)}.")
+                raise
             except Exception as exc:
                 state.update_step(step_id, "failed", error=str(exc))
                 workflow_log(f"步骤失败: {_workflow_step_label(step_id, request)}, 错误: {exc}.")
                 raise
+            state.raise_if_stop_requested()
             state.update_step(step_id, "succeeded", result=step_result)
             completed_steps.append(step_id)
             workflow_log(f"步骤完成: {_workflow_step_label(step_id, request)}.")
             state.wait_if_pause_requested(workflow_log)
+            state.raise_if_stop_requested()
         state.clear_current_step()
         workflow_log("工作流执行完成.")
         return {
@@ -1194,6 +1304,104 @@ def _pause_running_station_task(state: WorkflowRunState, manager: SynthesisStati
     except Exception as exc:
         logger.exception("暂停合成工站任务失败, workflow_id=%s", state.workflow_id)
         state.add_log(f"暂停合成工站任务失败: {exc}.")
+
+
+def _terminate_current_workflow_operation(state: WorkflowRunState, manager: SynthesisStationManager) -> None:
+    """
+    功能:
+        根据当前步骤下发可用的终止命令, 并让工作流线程在步骤边界停止后续操作.
+    参数:
+        state: WorkflowRunState, 工作流状态.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        None.
+    """
+    current_step = state.current_step
+    if current_step in WORKFLOW_CANCELABLE_TASK_STEPS or state.task_pause_sent is True:
+        _cancel_running_station_task(state, manager)
+    if current_step in WORKFLOW_ANALYSIS_STOP_STEPS:
+        _abort_running_analysis(state)
+    if current_step in ("batch_in", "batch_out", "auto_unload"):
+        _stop_agv_arm_operation(state)
+
+
+def _cancel_running_station_task(state: WorkflowRunState, manager: SynthesisStationManager) -> None:
+    """
+    功能:
+        对合成任务运行或监控阶段下发取消任务命令.
+    参数:
+        state: WorkflowRunState, 工作流状态.
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        None.
+    """
+    try:
+        state.add_log(f"正在取消合成工站任务, 实验ID={state.experiment_id}.")
+        manager.cancel_task(state.experiment_id)
+        state.task_pause_sent = False
+        state.add_log("合成工站取消请求已下发.")
+    except Exception as exc:
+        logger.exception("取消合成工站任务失败, workflow_id=%s", state.workflow_id)
+        state.add_log(f"取消合成工站任务失败: {exc}.")
+
+
+def _abort_running_analysis(state: WorkflowRunState) -> None:
+    """
+    功能:
+        对正在运行的智达分析任务下发终止命令.
+    参数:
+        state: WorkflowRunState, 工作流状态.
+    返回:
+        None.
+    """
+    client = None
+    try:
+        from unilabos.devices.eit_analysis_station.driver.zhida_driver import ZhidaClient
+
+        state.add_log("正在终止分析仪器任务.")
+        client = ZhidaClient()
+        client.connect()
+        result = client.abort()
+        state.add_log(f"分析仪器终止请求已下发: {result}.")
+    except Exception as exc:
+        logger.exception("终止分析仪器任务失败, workflow_id=%s", state.workflow_id)
+        state.add_log(f"终止分析仪器任务失败: {exc}.")
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception as exc:
+                logger.warning("关闭分析仪器连接失败, workflow_id=%s, err=%s", state.workflow_id, exc)
+
+
+def _stop_agv_arm_operation(state: WorkflowRunState) -> None:
+    """
+    功能:
+        对 AGV 转运动作涉及的机械臂下发停止全部任务命令.
+    参数:
+        state: WorkflowRunState, 工作流状态.
+    返回:
+        None.
+    """
+    agv_controller = None
+    try:
+        from unilabos.devices.eit_agv.controller.agv_controller import AGVController
+
+        state.add_log("正在停止 AGV 机械臂任务.")
+        agv_controller = AGVController(timeout=5000)
+        if agv_controller.connect() is False:
+            raise RuntimeError("AGV 机械臂连接失败")
+        result = agv_controller.arm.stop(block=False)
+        state.add_log(f"AGV 机械臂停止请求已下发: {result}.")
+    except Exception as exc:
+        logger.exception("停止 AGV 机械臂任务失败, workflow_id=%s", state.workflow_id)
+        state.add_log(f"停止 AGV 机械臂任务失败: {exc}.")
+    finally:
+        if agv_controller is not None:
+            try:
+                agv_controller.disconnect()
+            except Exception as exc:
+                logger.warning("断开 AGV 机械臂连接失败, workflow_id=%s, err=%s", state.workflow_id, exc)
 
 
 def _attach_workflow_loggers(log_fn: Callable[[str], None]) -> List[tuple[logging.Logger, _WorkflowLogBridge]]:

@@ -28,6 +28,20 @@ class JobBusyError(RuntimeError):
     """
 
 
+class JobStoppedError(RuntimeError):
+    """
+    功能:
+        表示后台任务收到停止请求并正常终止.
+    参数:
+        message: str, 停止原因说明.
+        result: Any, 停止时需要保存的任务结果.
+    """
+
+    def __init__(self, message: str, result: Any = None) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 @dataclass
 class JobRecord:
     """
@@ -36,7 +50,7 @@ class JobRecord:
     参数:
         job_id: str, 后台任务 ID.
         name: str, 任务名称.
-        status: str, queued/running/succeeded/failed.
+        status: str, queued/running/succeeded/failed/stopped.
         logs: List[str], 任务运行日志.
         result: Any, 任务结果.
         error: Optional[str], 失败信息.
@@ -220,6 +234,13 @@ class JobManager:
                 job.finished_at = datetime.now().isoformat(timespec="seconds")
                 job.add_log("任务执行成功.")
             logger.info("后台任务执行成功, job_id=%s, name=%s", job.job_id, job.name)
+        except JobStoppedError as exc:
+            logger.warning("后台任务已停止, job_id=%s, name=%s", job.job_id, job.name)
+            with self._lock:
+                job.result = exc.result
+                job.status = "stopped"
+                job.finished_at = datetime.now().isoformat(timespec="seconds")
+                job.add_log(f"任务已停止: {exc}")
         except Exception as exc:
             logger.exception("后台任务执行失败, job_id=%s, name=%s", job.job_id, job.name)
             with self._lock:

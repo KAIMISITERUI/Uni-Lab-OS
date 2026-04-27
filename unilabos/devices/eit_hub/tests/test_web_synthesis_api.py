@@ -49,6 +49,7 @@ class FakeSynthesisManager:
         self.call_order: list[str] = []
         self.workflow_calls: list[tuple[str, Any]] = []
         self.stop_task_calls: list[int] = []
+        self.cancel_task_calls: list[int] = []
         self.fault_recovery_calls: list[Dict[str, Any]] = []
 
     def station_state(self) -> int:
@@ -332,6 +333,18 @@ class FakeSynthesisManager:
         self.stop_task_calls.append(task_id)
         return {"success": True, "task_id": task_id}
 
+    def cancel_task(self, task_id: int) -> Dict[str, Any]:
+        """
+        功能:
+            记录取消任务调用.
+        参数:
+            task_id: int, 任务 ID.
+        返回:
+            Dict[str, Any], 取消结果.
+        """
+        self.cancel_task_calls.append(task_id)
+        return {"success": True, "task_id": task_id}
+
     def fault_recovery(
         self,
         *,
@@ -397,7 +410,7 @@ def _wait_job(client: TestClient, job_id: str, expected_status: str = "succeeded
         response = client.get(f"/api/synthesis/jobs/{job_id}")
         assert response.status_code == 200
         last_body = response.json()
-        if last_body["status"] in ("succeeded", "failed"):
+        if last_body["status"] in ("succeeded", "failed", "stopped"):
             assert last_body["status"] == expected_status
             return last_body
         time.sleep(0.05)
@@ -1013,6 +1026,48 @@ def test_workflow_pause_and_resume_calls_station_controls(
 
     fake_manager.release_event.set()
     _wait_job(client, workflow_id)
+
+
+def test_workflow_stop_cancels_station_task_and_skips_remaining_steps(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证工作流停止会取消当前合成任务, 并且不继续执行后续步骤.
+    """
+    client, fake_manager, _template_path = api_client
+    fake_manager.entered_event = threading.Event()
+    fake_manager.release_event = threading.Event()
+
+    response = client.post(
+        "/api/synthesis/workflow/start",
+        json=_workflow_payload(start_step="wait_task"),
+    )
+    assert response.status_code == 200
+    workflow_id = response.json()["workflow_id"]
+    assert fake_manager.entered_event.wait(timeout=2) is True
+
+    stop_response = client.post(f"/api/synthesis/workflow/{workflow_id}/stop")
+    assert stop_response.status_code == 200
+    stop_body = stop_response.json()
+    assert stop_body["status"] == "stopping"
+    assert fake_manager.cancel_task_calls == [321]
+
+    fake_manager.release_event.set()
+    job = _wait_job(client, workflow_id, expected_status="stopped")
+    assert job["status"] == "stopped"
+
+    status_response = client.get(f"/api/synthesis/workflow/{workflow_id}")
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["status"] == "stopped"
+    statuses = {step["id"]: step["status"] for step in body["steps"]}
+    assert statuses["wait_task"] == "stopped"
+    assert statuses["batch_out"] == "skipped"
+    assert statuses["auto_unload"] == "skipped"
+    assert fake_manager.workflow_calls == [
+        ("wait_task", {"task_id": 321, "poll_interval_s": 2.0}),
+    ]
 
 
 def test_workflow_start_returns_409_when_job_busy(

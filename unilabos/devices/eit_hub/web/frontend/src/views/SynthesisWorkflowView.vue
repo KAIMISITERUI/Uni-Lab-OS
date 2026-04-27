@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Edit, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { CircleClose, Edit, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import {
   type ReactionTemplate,
   type WorkflowBatchInMode,
@@ -13,6 +13,7 @@ import {
   pauseSynthesisWorkflow,
   resumeSynthesisWorkflow,
   startSynthesisWorkflow,
+  stopSynthesisWorkflow,
 } from '../api/synthesis'
 import { getErrorMessage } from '../api/http'
 
@@ -114,6 +115,18 @@ const workflowCanResume = computed(() => {
   return workflowState.value.status === 'paused' || workflowState.value.status === 'pausing'
 })
 
+const workflowCanStop = computed(() => {
+  if (workflowLoading.value === true || workflowState.value === null) {
+    return false
+  }
+  return (
+    workflowState.value.status === 'queued' ||
+    workflowState.value.status === 'running' ||
+    workflowState.value.status === 'pausing' ||
+    workflowState.value.status === 'paused'
+  )
+})
+
 const workflowStatusText = computed(() => {
   if (workflowState.value === null) {
     return '未开始'
@@ -123,6 +136,8 @@ const workflowStatusText = computed(() => {
     running: '运行中',
     pausing: '暂停中',
     paused: '已暂停',
+    stopping: '停止中',
+    stopped: '已停止',
     succeeded: '已完成',
     failed: '失败',
   }
@@ -139,6 +154,9 @@ const workflowStatusType = computed(() => {
   if (workflowState.value.status === 'failed') {
     return 'danger'
   }
+  if (workflowState.value.status === 'stopping' || workflowState.value.status === 'stopped') {
+    return 'danger'
+  }
   if (workflowState.value.status === 'paused' || workflowState.value.status === 'pausing') {
     return 'warning'
   }
@@ -153,6 +171,9 @@ const workflowPanelClass = computed(() => {
     return 'workflow-panel-succeeded'
   }
   if (workflowState.value.status === 'failed') {
+    return 'workflow-panel-failed'
+  }
+  if (workflowState.value.status === 'stopped') {
     return 'workflow-panel-failed'
   }
   return ''
@@ -437,6 +458,22 @@ async function resumeWorkflow() {
   }
 }
 
+async function stopWorkflow() {
+  if (currentWorkflowId.value === '') {
+    return
+  }
+  workflowLoading.value = true
+  try {
+    workflowState.value = await stopSynthesisWorkflow(currentWorkflowId.value)
+    startWorkflowPolling()
+    ElMessage.success('工作流已停止')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    workflowLoading.value = false
+  }
+}
+
 async function loadWorkflowState(
   options: { showError?: boolean; clearOnError?: boolean; stopOnError?: boolean } = {},
 ): Promise<boolean> {
@@ -486,7 +523,7 @@ function stopWorkflowPolling() {
 }
 
 function isWorkflowTerminal(statusText: string): boolean {
-  return statusText === 'succeeded' || statusText === 'failed'
+  return statusText === 'succeeded' || statusText === 'failed' || statusText === 'stopped'
 }
 
 function scrollWorkflowLogToBottom() {
@@ -524,6 +561,7 @@ function workflowStepStatusText(stepId: WorkflowStepId): string {
     succeeded: '完成',
     failed: '失败',
     skipped: '跳过',
+    stopped: '已停止',
   }
   const statusText = workflowStepStatus(stepId)
   return map[statusText] || statusText
@@ -598,6 +636,15 @@ function workflowStepClass(stepId: WorkflowStepId): string {
               @click="pauseWorkflow"
             >
               暂停
+            </el-button>
+            <el-button
+              type="danger"
+              :icon="CircleClose"
+              :loading="workflowLoading"
+              :disabled="workflowCanStop === false"
+              @click="stopWorkflow"
+            >
+              停止
             </el-button>
             <el-button
               type="success"
@@ -919,6 +966,15 @@ function workflowStepClass(stepId: WorkflowStepId): string {
 
 .workflow-step-skipped .workflow-step-index {
   background: #a8b3c2;
+}
+
+.workflow-step-stopped {
+  background: #fff2f0;
+  border-color: #f0a39a;
+}
+
+.workflow-step-stopped .workflow-step-index {
+  background: #d6422b;
 }
 
 .workflow-slider {

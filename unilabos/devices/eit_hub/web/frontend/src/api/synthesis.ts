@@ -59,7 +59,7 @@ export interface DashboardData {
 export interface JobState {
   job_id: string
   name: string
-  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped'
   logs: string[]
   result?: unknown
   error?: string | null
@@ -92,9 +92,17 @@ export type WorkflowStepId =
   | 'poll_analysis'
   | 'calculate_yields'
 
-export type WorkflowStatus = 'queued' | 'running' | 'pausing' | 'paused' | 'succeeded' | 'failed'
+export type WorkflowStatus =
+  | 'queued'
+  | 'running'
+  | 'pausing'
+  | 'paused'
+  | 'stopping'
+  | 'stopped'
+  | 'succeeded'
+  | 'failed'
 
-export type WorkflowStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
+export type WorkflowStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'stopped'
 
 export type WorkflowBatchInMode = 'manual' | 'agv'
 
@@ -271,5 +279,10 @@ export async function pauseSynthesisWorkflow(workflowId: string): Promise<Workfl
 
 export async function resumeSynthesisWorkflow(workflowId: string): Promise<WorkflowState> {
   const { data } = await http.post<WorkflowState>(`/api/synthesis/workflow/${workflowId}/resume`)
+  return data
+}
+
+export async function stopSynthesisWorkflow(workflowId: string): Promise<WorkflowState> {
+  const { data } = await http.post<WorkflowState>(`/api/synthesis/workflow/${workflowId}/stop`)
   return data
 }
