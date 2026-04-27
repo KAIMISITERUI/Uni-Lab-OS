@@ -15,10 +15,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from unilabos.devices.eit_hub.web.log_entry import LogEntry, make_entry
+
 logger = logging.getLogger("EITHubJobs")
 
 JsonDict = Dict[str, Any]
-JobCallable = Callable[[Callable[[str], None]], Any]
+# Job 闭包接收的 log 回调签名: (message, level="info", source="").
+JobLogFn = Callable[..., None]
+JobCallable = Callable[[JobLogFn], Any]
 
 
 class JobBusyError(RuntimeError):
@@ -46,12 +50,12 @@ class JobStoppedError(RuntimeError):
 class JobRecord:
     """
     功能:
-        保存后台任务的运行状态, 日志和结果.
+        保存后台任务的运行状态, 结构化日志和结果.
     参数:
         job_id: str, 后台任务 ID.
         name: str, 任务名称.
         status: str, queued/running/succeeded/failed/stopped.
-        logs: List[str], 任务运行日志.
+        logs: List[LogEntry], 任务运行的结构化日志.
         result: Any, 任务结果.
         error: Optional[str], 失败信息.
     """
@@ -59,24 +63,25 @@ class JobRecord:
     job_id: str
     name: str
     status: str = "queued"
-    logs: List[str] = field(default_factory=list)
+    logs: List[LogEntry] = field(default_factory=list)
     result: Any = None
     error: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
 
-    def add_log(self, message: str) -> None:
+    def add_log(self, message: str, level: str = "info", source: str = "") -> None:
         """
         功能:
-            追加一条带时间戳的任务日志.
+            追加一条结构化任务日志.
         参数:
-            message: str, 日志文本.
+            message: str, 日志正文.
+            level: str, info / success / warning / error.
+            source: str, 来源标识.
         返回:
             None.
         """
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.logs.append(f"[{timestamp}] {message}")
+        self.logs.append(make_entry(message, level=level, source=source))
 
     def to_dict(self) -> JsonDict:
         """
@@ -89,7 +94,7 @@ class JobRecord:
             "job_id": self.job_id,
             "name": self.name,
             "status": self.status,
-            "logs": list(self.logs),
+            "logs": [entry.to_dict() for entry in self.logs],
             "result": _to_jsonable(self.result),
             "error": self.error,
             "created_at": self.created_at,
@@ -151,7 +156,7 @@ class JobManager:
 
             job_id = uuid.uuid4().hex
             job = JobRecord(job_id=job_id, name=name)
-            job.add_log("任务已进入后台队列.")
+            job.add_log("任务已进入后台队列.", level="info", source="job")
             self._jobs[job_id] = job
             self._active_job_id = job_id
 
@@ -224,7 +229,7 @@ class JobManager:
         with self._lock:
             job.status = "running"
             job.started_at = datetime.now().isoformat(timespec="seconds")
-            job.add_log("任务开始执行.")
+            job.add_log("任务开始执行.", level="info", source="job")
 
         try:
             result = target(job.add_log)
@@ -232,7 +237,7 @@ class JobManager:
                 job.result = result
                 job.status = "succeeded"
                 job.finished_at = datetime.now().isoformat(timespec="seconds")
-                job.add_log("任务执行成功.")
+                job.add_log("任务执行成功.", level="success", source="job")
             logger.info("后台任务执行成功, job_id=%s, name=%s", job.job_id, job.name)
         except JobStoppedError as exc:
             logger.warning("后台任务已停止, job_id=%s, name=%s", job.job_id, job.name)
@@ -240,15 +245,15 @@ class JobManager:
                 job.result = exc.result
                 job.status = "stopped"
                 job.finished_at = datetime.now().isoformat(timespec="seconds")
-                job.add_log(f"任务已停止: {exc}")
+                job.add_log(f"任务已停止: {exc}", level="warning", source="job")
         except Exception as exc:
             logger.exception("后台任务执行失败, job_id=%s, name=%s", job.job_id, job.name)
             with self._lock:
                 job.error = str(exc)
                 job.status = "failed"
                 job.finished_at = datetime.now().isoformat(timespec="seconds")
-                job.add_log(f"任务执行失败: {exc}")
-                job.add_log(traceback.format_exc().strip())
+                job.add_log(f"任务执行失败: {exc}", level="error", source="job")
+                job.add_log(traceback.format_exc().strip(), level="error", source="job")
         finally:
             with self._lock:
                 if self._active_job_id == job_id:

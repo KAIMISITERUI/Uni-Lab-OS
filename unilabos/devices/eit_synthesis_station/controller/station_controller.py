@@ -143,6 +143,9 @@ class SynthesisStationController:
         self._settings = settings or Settings.from_env()
         self._client = ApiClient(self._settings)
         self._logger = logging.getLogger(self.__class__.__name__)
+        # UI 通道 logger, 仅用于希望出现在前端执行结果区的关键运行事件,
+        # 周期采样 / 状态心跳保留在 self._logger.
+        self._ui_logger = logging.getLogger("eit_hub.ui.synthesis")
 
         # 初始化数据管理器
         if self._settings.enable_data_logging:
@@ -1744,6 +1747,7 @@ class SynthesisStationController:
         self._logger.info("上料指令已发送，等待仪器回到空闲")
         self.wait_idle(stage="上料后", poll_interval_s=poll_interval_s, timeout_s=timeout_s)
         self._logger.info("上料完成")
+        self._ui_logger.info("上料完成.", extra={"level_hint": "success"})
 
         end_time = datetime.now().isoformat()
 
@@ -2609,6 +2613,11 @@ class SynthesisStationController:
         self._logger.info("下料指令已发送，等待仪器回到空闲")
         self.wait_idle(stage="下料后", poll_interval_s=poll_interval_s, timeout_s=timeout_s)
         self._logger.info("下料完成，共 %d 个托盘", len(processed_layout_list))
+        self._ui_logger.info(
+            "下料完成, 共 %d 个托盘.",
+            len(processed_layout_list),
+            extra={"level_hint": "success"},
+        )
 
         end_time = datetime.now().isoformat()
 
@@ -3830,6 +3839,11 @@ class SynthesisStationController:
         self.arrange_w_t_trays_for_task(int(target_task_id))
         resp = self._call_with_relogin(self._client.start_task, int(target_task_id))
         self._logger.info("任务启动请求已提交 task_id=%s", target_task_id)
+        self._ui_logger.info(
+            "任务启动请求已提交, task_id=%s.",
+            target_task_id,
+            extra={"level_hint": "success"},
+        )
 
         # 自动更新任务状态
         if self._data_manager:
@@ -4661,6 +4675,7 @@ class SynthesisStationController:
                 raise ValidationError(msg)
 
         self._logger.info("开始监控任务 %s 运行进度", target_task_id)
+        self._ui_logger.info("开始监控任务 %s 运行进度.", target_task_id)
 
         start_ts = time.time()
         seen_steps: Dict[str, bool] = {}
@@ -4698,6 +4713,11 @@ class SynthesisStationController:
             status = self._extract_task_status(info)
             if status == int(TaskStatus.COMPLETED):
                 self._logger.info("任务 %s 已完成", target_task_id)
+                self._ui_logger.info(
+                    "合成任务 %s 已完成.",
+                    target_task_id,
+                    extra={"level_hint": "success"},
+                )
 
                 # 自动导出任务报告并保存到任务目录
                 try:

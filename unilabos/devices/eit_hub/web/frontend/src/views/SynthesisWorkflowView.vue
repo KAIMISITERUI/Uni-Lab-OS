@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CircleClose, Edit, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import {
@@ -16,6 +16,7 @@ import {
   stopSynthesisWorkflow,
 } from '../api/synthesis'
 import { getErrorMessage } from '../api/http'
+import ResultConsole from '../components/ResultConsole.vue'
 
 const EXPERIMENT_ID_PARAM_NAME = '实验ID'
 const EXPERIMENT_NAME_PARAM_NAME = '实验名称'
@@ -50,7 +51,6 @@ const currentWorkflowId = ref('')
 const workflowState = ref<WorkflowState | null>(null)
 const workflowLoading = ref(false)
 const templateLoading = ref(false)
-const workflowLogRef = ref<HTMLElement | null>(null)
 let workflowTimer: number | undefined
 let workflowInitialized = false
 
@@ -195,12 +195,6 @@ onBeforeUnmount(() => {
   stopWorkflowPolling()
 })
 
-watch(
-  () => workflowState.value?.logs.length ?? 0,
-  () => {
-    scrollWorkflowLogToBottom()
-  },
-)
 
 async function initializeWorkflowView() {
   if (workflowInitialized === true) {
@@ -487,7 +481,6 @@ async function loadWorkflowState(
     if (isWorkflowTerminal(data.status) === true) {
       stopWorkflowPolling()
     }
-    scrollWorkflowLogToBottom()
     return true
   } catch (error) {
     if (options.stopOnError !== false) {
@@ -524,15 +517,6 @@ function stopWorkflowPolling() {
 
 function isWorkflowTerminal(statusText: string): boolean {
   return statusText === 'succeeded' || statusText === 'failed' || statusText === 'stopped'
-}
-
-function scrollWorkflowLogToBottom() {
-  void nextTick(() => {
-    if (workflowLogRef.value === null) {
-      return
-    }
-    workflowLogRef.value.scrollTop = workflowLogRef.value.scrollHeight
-  })
 }
 
 function workflowStepState(stepId: WorkflowStepId) {
@@ -701,9 +685,7 @@ function workflowStepClass(stepId: WorkflowStepId): string {
           </div>
           <div v-if="workflowState === null" class="muted">暂无运行结果</div>
           <template v-else>
-            <div ref="workflowLogRef" class="job-log workflow-log">
-              <span v-for="(line, index) in workflowState.logs" :key="`${index}-${line}`">{{ line }}</span>
-            </div>
+            <ResultConsole :entries="workflowState.logs" empty-text="暂无运行结果" />
             <el-alert
               v-if="workflowState.error"
               style="margin-top: 12px"
@@ -988,10 +970,6 @@ function workflowStepClass(stepId: WorkflowStepId): string {
 
 .workflow-output-title {
   margin-bottom: 10px;
-}
-
-.workflow-log {
-  max-height: 300px;
 }
 
 .dialog-muted {

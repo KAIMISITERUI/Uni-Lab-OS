@@ -316,20 +316,6 @@ select {
   gap: 10px;
 }
 
-.job-log {
-  display: grid;
-  gap: 6px;
-  max-height: 260px;
-  overflow: auto;
-  padding: 12px;
-  color: #24344d;
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 12px;
-  background: #f7f9fc;
-  border: 1px solid #dce5f0;
-  border-radius: 8px;
-}
-
 .table-wrap {
   width: 100%;
   min-width: 0;

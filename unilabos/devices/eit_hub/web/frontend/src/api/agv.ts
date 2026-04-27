@@ -1,4 +1,7 @@
 import http from './http'
+import type { LogEntry } from './log'
+
+export type { LogEntry } from './log'
 
 export type ChargingStandby = 'CP6' | 'PP5'
 export type QuickChangeAction = 'lock' | 'release'
@@ -624,7 +627,7 @@ export interface AgvJobState {
   job_id: string
   name: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'
-  logs: string[]
+  logs: LogEntry[]
   result?: unknown
   error?: string | null
   created_at?: string

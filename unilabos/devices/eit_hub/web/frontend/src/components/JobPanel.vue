@@ -6,6 +6,7 @@ import { fetchJob, type JobState } from '../api/synthesis'
 import { fetchAgvJob } from '../api/agv'
 import { fetchLabelPrinterJob } from '../api/labelPrinter'
 import { getErrorMessage } from '../api/http'
+import ResultConsole from './ResultConsole.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -219,8 +220,8 @@ onBeforeUnmount(stopPolling)
         </el-tag>
       </div>
 
-      <div class="job-log">
-        <span v-for="line in job.logs" :key="line">{{ line }}</span>
+      <div class="job-log-wrapper">
+        <ResultConsole :entries="job.logs" empty-text="暂无运行结果" />
       </div>
 
       <el-alert

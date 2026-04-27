@@ -29,6 +29,8 @@ from .synchronizer import EITSynthesisWorkstation
 from ..driver.exceptions import ValidationError,ApiError
 from ..utils.file_utils import safe_excel_write, safe_workbook_save
 logger = logging.getLogger("StationManager")
+# UI 通道 logger, 仅承载希望出现在前端执行结果区的关键运行事件.
+ui_logger = logging.getLogger("eit_hub.ui.synthesis_manager")
 
 JsonDict = Dict[str, Any]
 
@@ -2394,6 +2396,11 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
         analysis_ctrl = AnalysisStationController()
 
         logger.info("启动 GC-MS 轮询流程, task_id=%s, poll_interval=%.0fs", task_id, poll_interval)
+        ui_logger.info(
+            "启动 GC-MS 轮询流程, task_id=%s, 轮询间隔=%.0fs.",
+            task_id,
+            poll_interval,
+        )
         result = analysis_ctrl.poll_analysis_run(task_id=task_id, poll_interval=poll_interval)
         return result
 
@@ -2410,4 +2417,5 @@ class SynthesisStationManager(EITSynthesisWorkstation, SynthesisStationControlle
 
         analysis_ctrl = AnalysisStationController()
         logger.info("启动产率计算流程, task_id=%s", task_id)
+        ui_logger.info("启动产率计算流程, task_id=%s.", task_id)
         return analysis_ctrl.calculate_yields(task_id=task_id)

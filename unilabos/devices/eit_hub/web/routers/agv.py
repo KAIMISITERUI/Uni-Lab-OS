@@ -22,12 +22,15 @@ from ..deps import (
     get_charge_loop_service,
 )
 from ..jobs import JobBusyError, job_manager
+from ..log_entry import level_from_record, source_from_record
 from ..services.agv_context import AgvContext
 from ..services.battery_sampler import BatterySamplerService
 from ..services.charge_loop import ChargeLoopService
 from ..services.station_map import build_map_payload, save_station_layout
 
 logger = logging.getLogger("EITHubAgvRouter")
+
+UI_LOGGER_NAME = "eit_hub.ui"
 
 JsonDict = Dict[str, Any]
 
@@ -1655,18 +1658,31 @@ def test_put_tray(
 class _JobLogBridge(logging.Handler):
     """
     功能:
-        将控制器 logger 的运行日志实时转发到 Job 日志缓冲, 供前端 JobPanel 流式显示.
+        将 eit_hub.ui 命名空间下的日志记录实时转发到 Job 日志缓冲, 供前端 JobPanel 流式显示.
+        绑定 logger 应统一为 eit_hub.ui, 控制器关键事件需通过 ui_logger 写入才会进入展示通道.
     参数:
-        log_fn: Job target 闭包提供的 log 回调.
+        log_fn: Job target 闭包提供的 log 回调, 接受 (message, level, source) 关键字参数.
     """
 
-    def __init__(self, log_fn: Callable[[str], None]) -> None:
+    def __init__(self, log_fn: Callable[..., None]) -> None:
         super().__init__(level=logging.INFO)
         self._log_fn = log_fn
 
     def emit(self, record: logging.LogRecord) -> None:
+        """
+        功能:
+            处理一条日志记录, 解析级别和来源后写入 Job 日志.
+        参数:
+            record: logging.LogRecord, 日志记录.
+        返回:
+            None.
+        """
         try:
-            self._log_fn(record.getMessage())
+            self._log_fn(
+                record.getMessage(),
+                level=level_from_record(record),
+                source=source_from_record(record),
+            )
         except Exception:
             self.handleError(record)
 
@@ -1734,8 +1750,8 @@ def test_all_positions(
         if controller.current_station is None:
             raise RuntimeError("未识别当前工站, 请先校准或移动到目标工站.")
         log(f"开始全点位测试, 物料类型: {request.material_type}, 当前工站: {controller.current_station}.")
-        # 桥接控制器 logger, 把 logger.info 内容实时推送到 Job 日志
-        target_logger = logging.getLogger(type(controller).__module__)
+        # 仅订阅 eit_hub.ui 命名空间, 控制器需通过 ui_logger 写入才会进入 Job 日志
+        target_logger = logging.getLogger(UI_LOGGER_NAME)
         bridge = _JobLogBridge(log)
         target_logger.addHandler(bridge)
         try:
@@ -1793,8 +1809,8 @@ def test_batch_transfer_cycle(
                 f"任务 {index}: {task['source_tray']} <-> {task['target_tray']}, "
                 f"物料类型 {task['material_type']}.",
             )
-        # 桥接控制器 logger, 把 logger.info 内容实时推送到 Job 日志
-        target_logger = logging.getLogger(type(controller).__module__)
+        # 仅订阅 eit_hub.ui 命名空间, 控制器需通过 ui_logger 写入才会进入 Job 日志
+        target_logger = logging.getLogger(UI_LOGGER_NAME)
         bridge = _JobLogBridge(log)
         target_logger.addHandler(bridge)
         try:

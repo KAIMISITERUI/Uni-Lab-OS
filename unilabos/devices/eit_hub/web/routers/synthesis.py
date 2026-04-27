@@ -30,6 +30,9 @@ from ..excel_codec import (
 )
 from ..excel_printing import DEFAULT_BATCH_IN_TABLE_PRINTER, print_batch_in_table
 from ..jobs import JobBusyError, JobStoppedError, job_manager
+from ..log_entry import LogEntry, level_from_record, make_entry, source_from_record
+
+UI_LOGGER_NAME = "eit_hub.ui"
 
 logger = logging.getLogger("EITHubSynthesisRouter")
 
@@ -243,7 +246,7 @@ class WorkflowRunState:
         experiment_name: str, 实验名称.
         start_step: str, 开始步骤 ID.
         steps: List[WorkflowStepState], 全部步骤状态.
-        logs: List[str], 工作流日志.
+        logs: List[LogEntry], 工作流结构化日志.
     """
 
     workflow_id: str
@@ -251,7 +254,7 @@ class WorkflowRunState:
     experiment_name: str
     start_step: str
     steps: List[WorkflowStepState]
-    logs: List[str] = field(default_factory=list)
+    logs: List[LogEntry] = field(default_factory=list)
     current_step: Optional[str] = None
     pause_requested: bool = False
     paused: bool = False
@@ -260,17 +263,19 @@ class WorkflowRunState:
     stopped: bool = False
     _condition: threading.Condition = field(default_factory=lambda: threading.Condition(threading.RLock()))
 
-    def add_log(self, message: str) -> None:
+    def add_log(self, message: str, level: str = "info", source: str = "") -> None:
         """
         功能:
-            追加工作流日志.
+            追加一条结构化工作流日志.
         参数:
-            message: str, 日志文本.
+            message: str, 日志正文.
+            level: str, info / success / warning / error.
+            source: str, 来源标识, 一般为步骤 ID 或控制层标记.
         返回:
             None.
         """
         with self._condition:
-            self.logs.append(message)
+            self.logs.append(make_entry(message, level=level, source=source))
 
     def set_current_step(self, step_id: str) -> None:
         """
@@ -361,12 +366,12 @@ class WorkflowRunState:
                 return
             self._raise_stopped_locked()
 
-    def wait_if_pause_requested(self, log_fn: Callable[[str], None]) -> None:
+    def wait_if_pause_requested(self, log_fn: Callable[..., None]) -> None:
         """
         功能:
             在步骤边界等待恢复信号.
         参数:
-            log_fn: Callable, 工作流日志函数.
+            log_fn: Callable, 工作流日志函数, 接受 (message, level, source) 关键字参数.
         返回:
             None.
         """
@@ -376,13 +381,13 @@ class WorkflowRunState:
             if self.pause_requested is False:
                 return
             self.paused = True
-            log_fn("工作流已暂停, 等待恢复.")
+            log_fn("工作流已暂停, 等待恢复.", level="warning", source="workflow")
             while self.pause_requested is True:
                 if self.stop_requested is True:
                     self._raise_stopped_locked()
                 self._condition.wait(timeout=1.0)
             self.paused = False
-            log_fn("工作流已恢复, 继续执行后续步骤.")
+            log_fn("工作流已恢复, 继续执行后续步骤.", level="info", source="workflow")
 
     def resume(self) -> None:
         """
@@ -463,7 +468,7 @@ class WorkflowRunState:
                 "experiment_name": self.experiment_name,
                 "start_step": self.start_step,
                 "steps": [step.to_dict() for step in self.steps],
-                "logs": list(self.logs),
+                "logs": [entry.to_dict() for entry in self.logs],
                 "result": _workflow_to_jsonable(result),
                 "error": job_error,
             }
@@ -472,26 +477,30 @@ class WorkflowRunState:
 class _WorkflowLogBridge(logging.Handler):
     """
     功能:
-        将底层控制器日志转发到工作流日志.
+        将 eit_hub.ui 命名空间下的日志记录转发到工作流结构化日志.
     参数:
-        log_fn: Callable, 工作流日志函数.
+        log_fn: Callable, 工作流日志函数, 接受 (message, level, source) 关键字参数.
     """
 
-    def __init__(self, log_fn: Callable[[str], None]) -> None:
+    def __init__(self, log_fn: Callable[..., None]) -> None:
         super().__init__(level=logging.INFO)
         self._log_fn = log_fn
 
     def emit(self, record: logging.LogRecord) -> None:
         """
         功能:
-            处理一条日志记录并写入工作流日志.
+            处理一条日志记录, 解析出级别和来源后写入工作流日志.
         参数:
             record: logging.LogRecord, 日志记录.
         返回:
             None.
         """
         try:
-            self._log_fn(record.getMessage())
+            self._log_fn(
+                record.getMessage(),
+                level=level_from_record(record),
+                source=source_from_record(record),
+            )
         except Exception:
             self.handleError(record)
 
@@ -860,7 +869,7 @@ def pause_workflow(
         return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
 
     state.request_pause()
-    state.add_log("已收到暂停请求.")
+    state.add_log("已收到暂停请求.", level="warning", source="control")
     if state.current_step in WORKFLOW_PAUSABLE_TASK_STEPS:
         _pause_running_station_task(state, manager)
     return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
@@ -888,11 +897,11 @@ def resume_workflow(
         return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
 
     if state.task_pause_sent is True:
-        state.add_log("正在恢复合成工站任务.")
+        state.add_log("正在恢复合成工站任务.", level="info", source="control")
         manager.fault_recovery(resume_task=1)
         state.task_pause_sent = False
     state.resume()
-    state.add_log("已收到恢复请求.")
+    state.add_log("已收到恢复请求.", level="info", source="control")
     return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
 
 
@@ -918,7 +927,7 @@ def stop_workflow(
         return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
 
     state.request_stop()
-    state.add_log("已收到停止请求, 正在终止当前操作.")
+    state.add_log("已收到停止请求, 正在终止当前操作.", level="warning", source="control")
     _terminate_current_workflow_operation(state, manager)
     return state.to_dict(job_status=job.status, job_error=job.error, result=job.result)
 
@@ -1123,7 +1132,7 @@ def _run_workflow_steps(
     state: WorkflowRunState,
     request: WorkflowStartRequest,
     manager: SynthesisStationManager,
-    job_log: Callable[[str], None],
+    job_log: Callable[..., None],
 ) -> JsonDict:
     """
     功能:
@@ -1137,13 +1146,18 @@ def _run_workflow_steps(
         Dict[str, Any], 工作流执行结果.
     """
 
-    def workflow_log(message: str) -> None:
-        state.add_log(message)
-        job_log(message)
+    def workflow_log(message: str, level: str = "info", source: str = "workflow") -> None:
+        # 同步写入工作流状态日志和后台任务日志, 两端使用相同的 level/source.
+        state.add_log(message, level=level, source=source)
+        job_log(message, level=level, source=source)
 
     start_index = WORKFLOW_STEP_ORDER.index(request.start_step)
     completed_steps: List[str] = []
-    workflow_log(f"工作流开始, 实验ID={request.experiment_id}, 实验名称={request.experiment_name}.")
+    workflow_log(
+        f"工作流开始, 实验ID={request.experiment_id}, 实验名称={request.experiment_name}.",
+        level="info",
+        source="workflow",
+    )
     bridges = _attach_workflow_loggers(workflow_log)
     try:
         for step_id in WORKFLOW_STEP_ORDER[start_index:]:
@@ -1152,29 +1166,49 @@ def _run_workflow_steps(
             state.raise_if_stop_requested()
             if _workflow_step_enabled(step_id, request) is False:
                 state.update_step(step_id, "skipped")
-                workflow_log(f"跳过步骤: {_workflow_step_label(step_id, request)}.")
+                workflow_log(
+                    f"跳过步骤: {_workflow_step_label(step_id, request)}.",
+                    level="info",
+                    source=step_id,
+                )
                 continue
             state.set_current_step(step_id)
             state.update_step(step_id, "running")
-            workflow_log(f"开始步骤: {_workflow_step_label(step_id, request)}.")
+            workflow_log(
+                f"开始步骤: {_workflow_step_label(step_id, request)}.",
+                level="info",
+                source=step_id,
+            )
             try:
                 step_result = _execute_workflow_step(step_id, request, manager)
             except JobStoppedError:
                 state.update_step(step_id, "stopped")
-                workflow_log(f"步骤已停止: {_workflow_step_label(step_id, request)}.")
+                workflow_log(
+                    f"步骤已停止: {_workflow_step_label(step_id, request)}.",
+                    level="warning",
+                    source=step_id,
+                )
                 raise
             except Exception as exc:
                 state.update_step(step_id, "failed", error=str(exc))
-                workflow_log(f"步骤失败: {_workflow_step_label(step_id, request)}, 错误: {exc}.")
+                workflow_log(
+                    f"步骤失败: {_workflow_step_label(step_id, request)}, 错误: {exc}.",
+                    level="error",
+                    source=step_id,
+                )
                 raise
             state.raise_if_stop_requested()
             state.update_step(step_id, "succeeded", result=step_result)
             completed_steps.append(step_id)
-            workflow_log(f"步骤完成: {_workflow_step_label(step_id, request)}.")
+            workflow_log(
+                f"步骤完成: {_workflow_step_label(step_id, request)}.",
+                level="success",
+                source=step_id,
+            )
             state.wait_if_pause_requested(workflow_log)
             state.raise_if_stop_requested()
         state.clear_current_step()
-        workflow_log("工作流执行完成.")
+        workflow_log("工作流执行完成.", level="success", source="workflow")
         return {
             "workflow_id": state.workflow_id,
             "experiment_id": state.experiment_id,
@@ -1296,14 +1330,18 @@ def _pause_running_station_task(state: WorkflowRunState, manager: SynthesisStati
         None.
     """
     try:
-        state.add_log(f"正在暂停合成工站任务, 实验ID={state.experiment_id}.")
+        state.add_log(
+            f"正在暂停合成工站任务, 实验ID={state.experiment_id}.",
+            level="info",
+            source="control",
+        )
         manager.stop_task(state.experiment_id)
         state.task_pause_sent = True
         state.mark_paused_immediately()
-        state.add_log("合成工站暂停请求已下发.")
+        state.add_log("合成工站暂停请求已下发.", level="success", source="control")
     except Exception as exc:
         logger.exception("暂停合成工站任务失败, workflow_id=%s", state.workflow_id)
-        state.add_log(f"暂停合成工站任务失败: {exc}.")
+        state.add_log(f"暂停合成工站任务失败: {exc}.", level="error", source="control")
 
 
 def _terminate_current_workflow_operation(state: WorkflowRunState, manager: SynthesisStationManager) -> None:
@@ -1336,13 +1374,17 @@ def _cancel_running_station_task(state: WorkflowRunState, manager: SynthesisStat
         None.
     """
     try:
-        state.add_log(f"正在取消合成工站任务, 实验ID={state.experiment_id}.")
+        state.add_log(
+            f"正在取消合成工站任务, 实验ID={state.experiment_id}.",
+            level="info",
+            source="control",
+        )
         manager.cancel_task(state.experiment_id)
         state.task_pause_sent = False
-        state.add_log("合成工站取消请求已下发.")
+        state.add_log("合成工站取消请求已下发.", level="success", source="control")
     except Exception as exc:
         logger.exception("取消合成工站任务失败, workflow_id=%s", state.workflow_id)
-        state.add_log(f"取消合成工站任务失败: {exc}.")
+        state.add_log(f"取消合成工站任务失败: {exc}.", level="error", source="control")
 
 
 def _abort_running_analysis(state: WorkflowRunState) -> None:
@@ -1358,14 +1400,14 @@ def _abort_running_analysis(state: WorkflowRunState) -> None:
     try:
         from unilabos.devices.eit_analysis_station.driver.zhida_driver import ZhidaClient
 
-        state.add_log("正在终止分析仪器任务.")
+        state.add_log("正在终止分析仪器任务.", level="info", source="control")
         client = ZhidaClient()
         client.connect()
         result = client.abort()
-        state.add_log(f"分析仪器终止请求已下发: {result}.")
+        state.add_log(f"分析仪器终止请求已下发: {result}.", level="success", source="control")
     except Exception as exc:
         logger.exception("终止分析仪器任务失败, workflow_id=%s", state.workflow_id)
-        state.add_log(f"终止分析仪器任务失败: {exc}.")
+        state.add_log(f"终止分析仪器任务失败: {exc}.", level="error", source="control")
     finally:
         if client is not None:
             try:
@@ -1387,15 +1429,19 @@ def _stop_agv_arm_operation(state: WorkflowRunState) -> None:
     try:
         from unilabos.devices.eit_agv.controller.agv_controller import AGVController
 
-        state.add_log("正在停止 AGV 机械臂任务.")
+        state.add_log("正在停止 AGV 机械臂任务.", level="info", source="control")
         agv_controller = AGVController(timeout=5000)
         if agv_controller.connect() is False:
             raise RuntimeError("AGV 机械臂连接失败")
         result = agv_controller.arm.stop(block=False)
-        state.add_log(f"AGV 机械臂停止请求已下发: {result}.")
+        state.add_log(
+            f"AGV 机械臂停止请求已下发: {result}.",
+            level="success",
+            source="control",
+        )
     except Exception as exc:
         logger.exception("停止 AGV 机械臂任务失败, workflow_id=%s", state.workflow_id)
-        state.add_log(f"停止 AGV 机械臂任务失败: {exc}.")
+        state.add_log(f"停止 AGV 机械臂任务失败: {exc}.", level="error", source="control")
     finally:
         if agv_controller is not None:
             try:
@@ -1404,32 +1450,21 @@ def _stop_agv_arm_operation(state: WorkflowRunState) -> None:
                 logger.warning("断开 AGV 机械臂连接失败, workflow_id=%s, err=%s", state.workflow_id, exc)
 
 
-def _attach_workflow_loggers(log_fn: Callable[[str], None]) -> List[tuple[logging.Logger, _WorkflowLogBridge]]:
+def _attach_workflow_loggers(log_fn: Callable[..., None]) -> List[tuple[logging.Logger, _WorkflowLogBridge]]:
     """
     功能:
-        将底层关键 logger 桥接到工作流日志.
+        将专属 UI 命名空间 logger 桥接到工作流日志. 仅挂载 eit_hub.ui 一个 logger,
+        子模块需通过 logging.getLogger("eit_hub.ui.<station>") 主动写入才会进入展示通道,
+        从源头杜绝底层心跳日志泄漏.
     参数:
         log_fn: Callable, 工作流日志函数.
     返回:
-        List[tuple[logging.Logger, _WorkflowLogBridge]], 已挂载的 logger 与 handler.
+        List[tuple[logging.Logger, _WorkflowLogBridge]], 已挂载的 logger 与 handler 对.
     """
-    logger_names = [
-        "SynthesisStationManager",
-        "StationManager",
-        "unilabos.devices.eit_synthesis_station.controller.station_controller",
-        "eit_synthesis_station.controller.station_controller",
-        "unilabos.devices.eit_agv.controller.agv_controller",
-        "eit_agv.controller.agv_controller",
-        "unilabos.devices.eit_analysis_station.controller.analysis_controller",
-        "eit_analysis_station.controller.analysis_controller",
-    ]
-    bridges: List[tuple[logging.Logger, _WorkflowLogBridge]] = []
-    for logger_name in logger_names:
-        target_logger = logging.getLogger(logger_name)
-        bridge = _WorkflowLogBridge(log_fn)
-        target_logger.addHandler(bridge)
-        bridges.append((target_logger, bridge))
-    return bridges
+    target_logger = logging.getLogger(UI_LOGGER_NAME)
+    bridge = _WorkflowLogBridge(log_fn)
+    target_logger.addHandler(bridge)
+    return [(target_logger, bridge)]
 
 
 def _detach_workflow_loggers(bridges: List[tuple[logging.Logger, _WorkflowLogBridge]]) -> None:

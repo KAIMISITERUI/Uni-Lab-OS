@@ -1,4 +1,7 @@
 import http from './http'
+import type { LogEntry } from './log'
+
+export type { LogEntry } from './log'
 
 export interface ParamRow {
   name: string
@@ -60,7 +63,7 @@ export interface JobState {
   job_id: string
   name: string
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped'
-  logs: string[]
+  logs: LogEntry[]
   result?: unknown
   error?: string | null
   created_at?: string
@@ -123,7 +126,7 @@ export interface WorkflowState {
   experiment_name: string
   start_step: WorkflowStepId
   steps: WorkflowStepState[]
-  logs: string[]
+  logs: LogEntry[]
   result?: unknown
   error?: string | null
 }

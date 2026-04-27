@@ -90,6 +90,9 @@ class AnalysisStationController:
         self._settings = settings or Settings.from_env()
         configure_logging(self._settings.log_level)
         self._logger = logging.getLogger(self.__class__.__name__)
+        # UI 通道 logger, 仅用于希望出现在前端执行结果区的关键运行事件,
+        # 周期采样 / 状态心跳保留在 self._logger.
+        self._ui_logger = logging.getLogger("eit_hub.ui.analysis")
         self._logger.info("分析站控制器初始化完成, 合成任务目录: %s", self._settings.synthesis_tasks_dir)
 
     # ------------------------------------------------------------------
@@ -1168,6 +1171,7 @@ class AnalysisStationController:
         # ---------- GC_MS ----------
         if task_info["gc_ms_method"] is not None:
             self._logger.info("开始提交 GC_MS 分析任务...")
+            self._ui_logger.info("开始提交 GC-MS 分析任务.")
             try:
                 # 直接调用核心方法，跳过重复的定位+解析步骤
                 results["gc_ms"] = self._do_submit_gc_ms(
@@ -1183,6 +1187,7 @@ class AnalysisStationController:
         # ---------- UPLC_QTOF ----------
         if task_info["uplc_qtof_method"] is not None:
             self._logger.info("开始提交 UPLC_QTOF 分析任务...")
+            self._ui_logger.info("开始提交 UPLC-QTOF 分析任务.")
             try:
                 results["uplc_qtof"] = self._do_submit_uplc_qtof(
                     resolved_id,
@@ -1765,6 +1770,7 @@ class AnalysisStationController:
             # 定位任务(取 resolved_id, task_dir 不直接使用)
             _, resolved_id = self._find_task_dir(task_id)
             self._logger.info("开始处理任务 %s 的 GC-MS 结果", resolved_id)
+            self._ui_logger.info("开始处理任务 %s 的 GC-MS 谱图结果.", resolved_id)
 
             # 枚举 .D 目录
             d_dirs = self._enumerate_d_dirs(resolved_id)
@@ -1947,6 +1953,7 @@ class AnalysisStationController:
         try:
             _, resolved_id = self._find_task_dir(task_id)
             self._logger.info("开始产率计算, 任务: %s", resolved_id)
+            self._ui_logger.info("开始产率计算, 任务: %s.", resolved_id)
 
             # 定位文件
             syn_dir = self._settings.synthesis_tasks_dir / resolved_id
@@ -2038,10 +2045,16 @@ class AnalysisStationController:
             result = self.calculate_yields(resolved_id)
             if result["success"]:
                 self._logger.info("自动产率计算成功: %s", result["return_info"])
+                self._ui_logger.info(
+                    "自动产率计算成功: %s.",
+                    result["return_info"],
+                    extra={"level_hint": "success"},
+                )
             else:
                 self._logger.info("自动产率计算跳过: %s", result["return_info"])
         except Exception as exc:
             self._logger.warning("自动产率计算失败(不影响积分报告): %s", exc)
+            self._ui_logger.warning("自动产率计算失败(不影响积分报告): %s.", exc)
 
     def poll_analysis_run(
         self, task_id: Optional[str] = None, poll_interval: float = 30.0

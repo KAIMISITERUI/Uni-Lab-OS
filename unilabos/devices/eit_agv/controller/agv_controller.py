@@ -31,6 +31,10 @@ from ..data.shelf_manager import ShelfManager
 
 logger = logging.getLogger(__name__)
 
+# UI 通道 logger, 仅用于希望出现在 EIT Hub 前端执行结果区的关键运行事件,
+# 不承担诊断日志, 周期心跳/采样/调试信息一律保留在 logger 上.
+ui_logger = logging.getLogger("eit_hub.ui.agv")
+
 
 class AGVController:
     """
@@ -1532,10 +1536,12 @@ class AGVController:
             logger.debug(f"回到home位置完成: {result}")
 
             logger.info(f"取托盘流程完成: {tray_name}")
+            ui_logger.info("取托盘流程完成: %s", tray_name, extra={"level_hint": "success"})
             return True
 
         except Exception as e:
             logger.error(f"取托盘流程失败: {e}")
+            ui_logger.error("取托盘流程失败: %s -> %s", tray_name, e)
             # 发生异常时张开夹爪
             try:
                 self.arm.open_gripper(block=True)
@@ -3384,10 +3390,12 @@ class AGVController:
                 return False
 
             logger.info(f"放托盘流程完成: {tray_name}")
+            ui_logger.info("放托盘流程完成: %s", tray_name, extra={"level_hint": "success"})
             return True
 
         except Exception as e:
             logger.error(f"放托盘流程失败: {e}")
+            ui_logger.error("放托盘流程失败: %s -> %s", tray_name, e)
             return False
 
         if not self._ensure_connected():
@@ -3606,10 +3614,12 @@ class AGVController:
             logger.debug(f"回到home位置完成: {result}")
 
             logger.info(f"放托盘流程完成: {tray_name}")
+            ui_logger.info("放托盘流程完成: %s", tray_name, extra={"level_hint": "success"})
             return True
 
         except Exception as e:
             logger.error(f"放托盘流程失败: {e}")
+            ui_logger.error("放托盘流程失败: %s -> %s", tray_name, e)
             return False
 
     # ==================== 夹爪管理 ====================
@@ -3978,6 +3988,12 @@ class AGVController:
             return False
 
         logger.info(f"物料转移完成: {source_tray} -> {target_tray}")
+        ui_logger.info(
+            "物料转移完成: %s -> %s",
+            source_tray,
+            target_tray,
+            extra={"level_hint": "success"},
+        )
         return True
 
     def batch_transfer_materials(self, transfer_tasks, block=True, on_station_delivered=None):
@@ -4161,10 +4177,16 @@ class AGVController:
                     logger.info(f"站点 {station_id} 卸货完成, 已异步触发回调")
 
             logger.info(f"批量物料转运完成, 共完成{len(transfer_tasks)}个任务")
+            ui_logger.info(
+                "批量物料转运完成, 共完成 %d 个任务",
+                len(transfer_tasks),
+                extra={"level_hint": "success"},
+            )
             return True
 
         except Exception as e:
             logger.error(f"批量物料转运失败: {e}")
+            ui_logger.error("批量物料转运失败: %s", e)
             return False
 
     def batch_transfer_cycle_test(self, transfer_tasks, cycle_count=1, block=True):
@@ -4305,6 +4327,11 @@ class AGVController:
             # 全部循环完成
             logger.info(f"\n{'=' * 80}")
             logger.info(f"批量物料转运循环测试全部完成! 共完成{completed_cycles}轮循环")
+            ui_logger.info(
+                "批量物料转运循环测试全部完成, 共完成 %d 轮循环",
+                completed_cycles,
+                extra={"level_hint": "success"},
+            )
             logger.info(f"{'=' * 80}")
 
             return {
@@ -4316,6 +4343,7 @@ class AGVController:
 
         except Exception as e:
             logger.error(f"批量物料转运循环测试失败: {e}")
+            ui_logger.error("批量物料转运循环测试失败: %s", e)
             return {
                 "success": False,
                 "completed_cycles": completed_cycles,
@@ -4447,6 +4475,10 @@ class AGVController:
             return False
 
         logger.info("分析站→货架样品转运完成, AGV 已返回充电站")
+        ui_logger.info(
+            "分析站到货架样品转运完成, AGV 已返回充电站.",
+            extra={"level_hint": "success"},
+        )
         return True
 
     def _get_station_from_tray(self, tray_name):
@@ -5240,6 +5272,7 @@ class AGVController:
             # 输出测试结果汇总
             logger.info("\n" + "=" * 60)
             logger.info("全点位测试完成")
+            ui_logger.info("全点位测试完成.", extra={"level_hint": "success"})
             logger.info("=" * 60)
             logger.info(f"成功: {len(results['success'])} 个点位")
             for pos in results["success"]:
