@@ -198,6 +198,64 @@ def run_synthetic_doublet_regression() -> bool:
     return True
 
 
+def run_synthetic_baseline_separated_weak_neighbor_regression() -> bool:
+    """
+    功能:
+        验证 robust_v3 保留已经回到基线的弱小近邻峰.
+    参数:
+        无.
+    返回:
+        bool, True 表示通过.
+    """
+    rng = np.random.default_rng(85112)
+    times = np.arange(6.3, 7.2, 1.0 / 3000.0)
+    baseline = 15.0 + 0.05 * np.sin((times - 6.3) * 2.0)
+    main_peak = _gaussian(times, center=6.760, sigma=0.0030, amplitude=492.0)
+    weak_peak = _gaussian(times, center=6.827, sigma=0.0030, amplitude=34.0)
+    signal = baseline + main_peak + weak_peak + rng.normal(0.0, 0.02, size=len(times))
+
+    integrator = PeakIntegrator(
+        smoothing_window=11,
+        prominence=0.5,
+        min_distance=50,
+        integration_mode="robust_v3",
+        baseline_method="rolling_quantile",
+        baseline_quantile=20.0,
+        baseline_window_min=0.9,
+        boundary_sigma_factor=3.0,
+        boundary_edge_ratio=0.005,
+        boundary_expand_factor=6.0,
+        boundary_min_span_min=0.08,
+        boundary_max_span_min=2.0,
+        shoulder_filter_enable=True,
+        shoulder_filter_width_max_min=0.035,
+        shoulder_filter_gap_max_min=0.09,
+        shoulder_filter_relative_prominence_max=0.15,
+        tail_artifact_filter_enable=True,
+        tail_artifact_gap_max_min=0.20,
+        tail_artifact_relative_prominence_max=0.15,
+        tail_artifact_half_width_asymmetry_min=2.0,
+        tail_monotonic_filter_enable=True,
+        tail_monotonic_ratio_max=0.20,
+        max_peak_width_min=1.0,
+        leading_edge_filter_enable=True,
+        leading_edge_relative_prominence_max=0.25,
+        leading_edge_monotonic_ratio_min=0.65,
+        use_cwt_detection=False,
+    )
+    peaks = integrator.integrate(times, signal)
+
+    if _has_peak(peaks, 6.760, 0.01) is False:
+        logger.error("基线分离弱峰回归失败: 未保留主峰 RT=6.760. peaks=%s", _rounded_rts(peaks))
+        return False
+    if _has_peak(peaks, 6.827, 0.01) is False:
+        logger.error("基线分离弱峰回归失败: 未保留弱小近邻峰 RT=6.827. peaks=%s", _rounded_rts(peaks))
+        return False
+
+    logger.info("基线分离弱峰回归通过: peaks=%s", _rounded_rts(peaks))
+    return True
+
+
 def run_synthetic_shoulder_regression() -> bool:
     """
     功能:
@@ -211,9 +269,11 @@ def run_synthetic_shoulder_regression() -> bool:
     times = np.arange(8.0, 9.2, 0.01)
     baseline = 2.2e4 + 3.5e3 * np.sin((times - 8.0) * 1.7)
     first_peak = _gaussian(times, center=8.66, sigma=0.012, amplitude=3.2e7)
+    # 用尾部桥接抬高峰间谷底, 保证该样本是真肩峰而非基线分离峰.
+    tail_bridge = np.where(times > 8.66, 1.0e5 * np.exp(-(times - 8.66) / 0.08), 0.0)
     shoulder_peak = _gaussian(times, center=8.74, sigma=0.004, amplitude=4.0e5)
     second_peak = _gaussian(times, center=8.83, sigma=0.011, amplitude=5.5e6)
-    signal = baseline + first_peak + shoulder_peak + second_peak + rng.normal(0.0, 2500.0, size=len(times))
+    signal = baseline + first_peak + tail_bridge + shoulder_peak + second_peak + rng.normal(0.0, 2500.0, size=len(times))
 
     peaks_v2 = _build_integrator(
         prominence=10000.0,
@@ -284,21 +344,25 @@ def run_synthetic_tail_artifact_regression() -> bool:
     baseline = 1.8e4 + 2.5e3 * np.sin((times - 8.0) * 1.1)
     main_peak = _gaussian(times, center=8.67, sigma=0.006, amplitude=1.8e7)
     tail_signal = np.where(times > 8.67, 2.5e5 * np.exp(-(times - 8.67) / 0.06), 0.0)
-    signal = baseline + main_peak + tail_signal + rng.normal(0.0, 1800.0, size=len(times))
+    # 构造右侧缓慢衰减的尾部凸起, 关闭拖尾过滤时应作为伪峰出现.
+    tail_bump = np.where(times >= 8.74, 5.0e4 * np.exp(-(times - 8.74) / 0.12), 0.0)
+    signal = baseline + main_peak + tail_signal + tail_bump + rng.normal(0.0, 1800.0, size=len(times))
 
     peaks_disabled = _build_integrator(
         prominence=10000.0,
         min_distance=5,
         integration_mode="robust_v3",
-        shoulder_filter_enable=True,
+        shoulder_filter_enable=False,
         tail_artifact_filter_enable=False,
+        tail_monotonic_filter_enable=False,
     ).integrate(times, signal)
     peaks_enabled = _build_integrator(
         prominence=10000.0,
         min_distance=5,
         integration_mode="robust_v3",
-        shoulder_filter_enable=True,
+        shoulder_filter_enable=False,
         tail_artifact_filter_enable=True,
+        tail_monotonic_filter_enable=False,
     ).integrate(times, signal)
 
     if len(peaks_disabled) < 2 or _has_peak_in_window(peaks_disabled, 8.72, 8.78) is False:
@@ -490,18 +554,6 @@ def _run_real_case(
                 d_dir.name,
                 detector.upper(),
                 target_rt,
-                _rounded_rts(peaks),
-            )
-            return False
-
-    if detector == "tic" and d_dir.name == "760-2.D":
-        merged_peak = _closest_peak(peaks, 8.6666)
-        if merged_peak.end_time < 8.76:
-            logger.error(
-                "样本 %s %s 回归失败: 8.6666 min 前峰未吸收肩峰面积. end_time=%.4f, peaks=%s",
-                d_dir.name,
-                detector.upper(),
-                merged_peak.end_time,
                 _rounded_rts(peaks),
             )
             return False
@@ -929,6 +981,7 @@ def main() -> int:
 
     checks: List[Callable[[], bool]] = [
         run_synthetic_doublet_regression,
+        run_synthetic_baseline_separated_weak_neighbor_regression,
         run_synthetic_shoulder_regression,
         run_synthetic_tail_artifact_regression,
         run_synthetic_monotonic_tail_regression,

@@ -4,7 +4,7 @@
 功能:
     基于 GC-FID 积分报告和实验方案, 计算各样品的产率.
     支持 ECN 法, 标准曲线法和响应因子法三种计算方式.
-    从 chemical_list.xlsx 自动推算内标摩尔量, 无需手动输入浓度.
+    从 eit_chemical_manager 化学品库自动推算内标摩尔量, 无需手动输入浓度.
 参数:
     无.
 返回:
@@ -18,10 +18,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import openpyxl
-import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from .ecn import calculate_ecn_from_molecule
+
+try:
+    from unilabos.devices.eit_chemical_manager.manager.chemical_manager import (
+        ChemicalManager,
+    )
+except ImportError:
+    from eit_chemical_manager.manager.chemical_manager import ChemicalManager
 
 try:
     from rdkit import Chem
@@ -76,7 +82,7 @@ class TargetProduct:
 class YieldCalcConfig:
     """
     功能:
-        存储产率计算的完整配置, 从实验方案和 chemical_list 共同构建.
+        存储产率计算的完整配置, 从实验方案和化学品库共同构建.
     参数:
         is_name: 内标名称 (从原参数 Sheet 的 "内标种类" 读取).
         is_smiles: 内标 SMILES (从 "GC产率计算" Sheet 读取).
@@ -84,7 +90,7 @@ class YieldCalcConfig:
         is_ecn: 内标 ECN (自动计算).
         is_expected_rt: 内标预期保留时间(min), 可选.
         is_amount: 内标用量原始值 (μL 或 mg).
-        is_moles: 内标实际加入摩尔量(mol), 从 chemical_list 推算.
+        is_moles: 内标实际加入摩尔量(mol), 从化学品库推算.
         reaction_scale_mmol: 反应规模(mmol).
         calc_method: 产率计算方法, "ECN" / "标准曲线" / "响应因子".
         curve_slope: 标准曲线斜率.
@@ -676,69 +682,55 @@ class YieldCalculator:
     # ------------------------------------------------------------------
 
     def _calculate_is_moles(
-        self, is_name: str, is_amount: float, chemical_list_path: Path
+        self, is_name: str, is_amount: float
     ) -> float:
         """
         功能:
-            从 chemical_list.xlsx 查询内标的物化属性,
+            从 eit_chemical_manager 化学品库查询内标的物化属性,
             根据 physical_state / physical_form / active_content 推算实际加入摩尔量.
         参数:
             is_name: 内标种类名称 (含括号描述).
             is_amount: 内标用量(μL 或 mg).
-            chemical_list_path: chemical_list.xlsx 文件路径.
         返回:
             float: 内标摩尔量(mol).
         """
-        # 读取化学品库, 多工作表时按必需列优先选表.
-        chem_sheets = pd.read_excel(chemical_list_path, sheet_name=None)
-        chem_df = None
-        required_columns = {"substance", "molecular_weight", "physical_state"}
-        for sheet_name, sheet_df in chem_sheets.items():
-            normalized_columns = {str(col).strip().lower() for col in sheet_df.columns}
-            if required_columns.issubset(normalized_columns):
-                chem_df = sheet_df
-                logger.info("化学品库解析使用工作表: %s", sheet_name)
-                break
-
-        if chem_df is None:
-            first_sheet_name = next(iter(chem_sheets.keys()))
-            chem_df = chem_sheets[first_sheet_name]
-            logger.warning(
-                "chemical_list.xlsx 未命中必需列%s, 回退到第一张工作表: %s",
-                sorted(required_columns),
-                first_sheet_name,
-            )
-        chem_df.columns = [str(c).strip().lower() for c in chem_df.columns]
-
         def _pick(row, *keys, default=None):
             for k in keys:
-                if k in row and pd.notna(row[k]):
+                value = row.get(k)
+                if value is not None and str(value).strip() != "":
                     return row[k]
             return default
 
-        # 在化学品库中精确匹配内标名称
-        chem_info = None
-        for _, r in chem_df.iterrows():
-            row = {k: r.get(k) for k in chem_df.columns}
-            name = str(_pick(row, "substance", "name", "chemical_name", default="") or "").strip()
-            if name == is_name:
-                chem_info = {
-                    "molecular_weight": _pick(row, "molecular_weight", "mw"),
-                    "physical_state": str(_pick(row, "physical_state", "state", default="") or "").strip().lower(),
-                    "density": _pick(row, "density (g/ml)", "density(g/ml)", "density_g_ml", "density", default=None),
-                    "physical_form": str(_pick(row, "physical_form", default="") or "").strip().lower(),
-                    "active_content": _pick(
-                        row, "active_content",
-                        "active_content(mmol/ml or wt%)",
-                        "active_content(mol/l or wt%)",
-                        default=""
-                    ),
-                }
-                break
+        try:
+            row = ChemicalManager.get_shared().get_by_substance(is_name)
+        except KeyError as exc:
+            logger.error("化学品库未找到内标: %s", is_name)
+            raise ValueError(f"化学品库未找到内标: {is_name}") from exc
 
-        if chem_info is None:
-            logger.error("在 chemical_list.xlsx 中未找到内标: '%s' (精确匹配)", is_name)
-            raise ValueError(f"在 chemical_list.xlsx 中未找到内标: '{is_name}' (需精确匹配)")
+        chem_info = {
+            "molecular_weight": _pick(row, "molecular_weight", "mw"),
+            "physical_state": str(
+                _pick(row, "physical_state", "state", default="") or ""
+            ).strip().lower(),
+            "density": _pick(
+                row,
+                "density (g/ml)",
+                "density(g/ml)",
+                "density_g_ml",
+                "density",
+                default=None,
+            ),
+            "physical_form": str(
+                _pick(row, "physical_form", default="") or ""
+            ).strip().lower(),
+            "active_content": _pick(
+                row,
+                "active_content",
+                "active_content(mmol/ml or wt%)",
+                "active_content(mol/l or wt%)",
+                default="",
+            ),
+        }
 
         mw = chem_info["molecular_weight"]
         state = chem_info["physical_state"]
@@ -748,11 +740,15 @@ class YieldCalculator:
 
         if mw is None or float(mw) <= 0:
             raise ValueError(f"内标 '{is_name}' 缺少有效分子量")
+        if state == "":
+            raise ValueError(f"内标 '{is_name}' 缺少 physical_state")
+        if form == "":
+            raise ValueError(f"内标 '{is_name}' 缺少 physical_form")
 
         mw = float(mw)
 
         # 纯物质 (neat)
-        if form == "neat" or form == "":
+        if form == "neat":
             if state == "liquid":
                 # 用量单位为 μL, 需要密度
                 if density is None or float(density) <= 0:
@@ -842,19 +838,16 @@ class YieldCalculator:
     # 配置解析
     # ------------------------------------------------------------------
 
-    def parse_yield_config_legacy(
-        self, plan_path: Path, chemical_list_path: Path
-    ) -> YieldCalcConfig:
+    def parse_yield_config_legacy(self, plan_path: Path) -> YieldCalcConfig:
         """
         功能:
             从实验方案 xlsx 解析产率计算配置:
             1. 读原参数 Sheet: 反应规模(mmol), 内标种类, 内标用量(μL/mg).
             2. 读 "GC产率计算" Sheet: 内标SMILES, 目标产物列表, 计算方法.
-            3. 查 chemical_list.xlsx, 推算内标摩尔量.
+            3. 查 eit_chemical_manager 化学品库, 推算内标摩尔量.
             4. 自动计算各化合物的分子式和 ECN.
         参数:
             plan_path: 实验方案 xlsx 文件路径.
-            chemical_list_path: chemical_list.xlsx 文件路径.
         返回:
             YieldCalcConfig: 产率计算配置.
         """
@@ -912,7 +905,7 @@ class YieldCalculator:
             self._apply_target_product_properties(p)
 
         # ---------- 5. 推算内标摩尔量 ----------
-        is_moles = self._calculate_is_moles(is_name, is_amount, chemical_list_path)
+        is_moles = self._calculate_is_moles(is_name, is_amount)
 
         wb.close()
 
@@ -1039,19 +1032,16 @@ class YieldCalculator:
         )
         return fallback_sheet
 
-    def parse_yield_config(
-        self, plan_path: Path, chemical_list_path: Path
-    ) -> YieldCalcConfig:
+    def parse_yield_config(self, plan_path: Path) -> YieldCalcConfig:
         """
         功能:
             从实验方案 xlsx 解析产率计算配置:
             1. 读主参数 Sheet: 反应规模(mmol), 内标种类, 内标用量(μL/mg).
             2. 读 "GC产率计算" Sheet: 内标SMILES, 目标产物列表, 计算方法.
-            3. 查 chemical_list.xlsx, 推算内标摩尔量.
+            3. 查 eit_chemical_manager 化学品库, 推算内标摩尔量.
             4. 自动计算各化合物的分子式和 ECN.
         参数:
             plan_path: 实验方案 xlsx 文件路径.
-            chemical_list_path: chemical_list.xlsx 文件路径.
         返回:
             YieldCalcConfig: 产率计算配置.
         """
@@ -1115,7 +1105,7 @@ class YieldCalculator:
                 self._apply_target_product_properties(product)
 
             # ---------- 5. 推算内标摩尔量 ----------
-            is_moles = self._calculate_is_moles(is_name, is_amount, chemical_list_path)
+            is_moles = self._calculate_is_moles(is_name, is_amount)
 
             return YieldCalcConfig(
                 is_name=is_name,
@@ -2549,24 +2539,22 @@ class YieldCalculator:
         self,
         plan_path: Path,
         report_path: Path,
-        chemical_list_path: Path,
     ) -> Tuple[YieldCalcConfig, List[SampleYieldResult]]:
         """
         功能:
             产率计算完整流程:
-            1. 从实验方案和 chemical_list 解析配置.
+            1. 从实验方案和 eit_chemical_manager 化学品库解析配置.
             2. 从积分报告加载 TIC-FID 对照表数据.
             3. 逐 (样品 x 产物) 计算产率.
         参数:
             plan_path: 实验方案 xlsx 路径.
             report_path: 积分报告 xlsx 路径.
-            chemical_list_path: chemical_list.xlsx 路径.
         返回:
             Tuple[YieldCalcConfig, List[SampleYieldResult]]:
                 配置和所有样品的计算结果列表.
         """
         # 1. 解析配置
-        config = self.parse_yield_config(plan_path, chemical_list_path)
+        config = self.parse_yield_config(plan_path)
         logger.info(
             "产率计算配置: 方法=%s, 内标=%s(%.6f mol), 反应规模=%.2f mmol, 产物数=%d",
             config.calc_method, config.is_name, config.is_moles,

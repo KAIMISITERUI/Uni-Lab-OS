@@ -859,6 +859,119 @@ class PeakIntegrator:
         for item in results:
             item.area_percent = item.area / total_area * 100.0
 
+    @staticmethod
+    def _compute_rising_ratio(signal: np.ndarray, left_idx: int, right_idx: int) -> Optional[float]:
+        """
+        功能:
+            计算两个索引之间信号上升步数占比.
+        参数:
+            signal: 信号数组.
+            left_idx: 起始索引.
+            right_idx: 结束索引.
+        返回:
+            Optional[float], 上升步数占比, 数据不足或无效时返回 None.
+        """
+        if right_idx <= left_idx + 2:
+            return None
+
+        segment = signal[left_idx:right_idx + 1]
+        if len(segment) < 3:
+            return None
+
+        if np.any(~np.isfinite(segment)):
+            return None
+
+        diffs = np.diff(segment)
+        total_steps = len(diffs)
+        if total_steps <= 0:
+            return None
+
+        return float(np.sum(diffs > 0)) / float(total_steps)
+
+    def _has_independent_peak_basin(
+        self,
+        corrected_signal: np.ndarray,
+        smoothed_signal: np.ndarray,
+        previous_peak_idx: int,
+        current_peak_idx: int,
+        previous_rt: float,
+        current_rt: float,
+        current_height: float,
+        current_prominence: float,
+        prominence_ratio: float,
+        left_half_width_min: float,
+        right_half_width_min: float,
+    ) -> bool:
+        """
+        功能:
+            判断相邻弱峰是否具备独立峰盆地, 用于 robust_v3 合并前保护真实分峰.
+        参数:
+            corrected_signal: 基线校正后的检测信号.
+            smoothed_signal: SG平滑后未扣基线的原始信号.
+            previous_peak_idx: 前峰索引.
+            current_peak_idx: 当前候选峰索引.
+            previous_rt: 前峰保留时间(min).
+            current_rt: 当前峰保留时间(min).
+            current_height: 当前峰扣基线高度.
+            current_prominence: 当前峰 prominence.
+            prominence_ratio: 当前峰与前峰 prominence 比值.
+            left_half_width_min: 当前峰左半高宽(min).
+            right_half_width_min: 当前峰右半高宽(min).
+        返回:
+            bool, True 表示当前峰具备独立峰盆地, 不应并入前峰.
+        """
+        if bool(np.isfinite(current_height)) is False:
+            return False
+
+        if bool(np.isfinite(current_prominence)) is False:
+            return False
+
+        if current_prominence < self._prominence:
+            return False
+
+        valley_left_idx = min(previous_peak_idx, current_peak_idx)
+        valley_right_idx = max(previous_peak_idx, current_peak_idx)
+        if valley_right_idx <= valley_left_idx + 1:
+            return False
+
+        valley_segment = corrected_signal[valley_left_idx:valley_right_idx + 1]
+        finite_valley_segment = valley_segment[np.isfinite(valley_segment)]
+        if len(finite_valley_segment) == 0:
+            return False
+
+        valley_min = float(np.min(finite_valley_segment))
+        half_prominence_contour = current_height - current_prominence * 0.5
+        if valley_min > half_prominence_contour:
+            return False
+
+        if left_half_width_min <= 0.0 or right_half_width_min <= 0.0:
+            return False
+
+        half_width_balance = max(
+            self._safe_ratio(left_half_width_min, right_half_width_min),
+            self._safe_ratio(right_half_width_min, left_half_width_min),
+        )
+        if half_width_balance > self._tail_artifact_half_width_asymmetry_min:
+            return False
+
+        rising_ratio = self._compute_rising_ratio(smoothed_signal, previous_peak_idx, current_peak_idx)
+        if rising_ratio is not None:
+            if rising_ratio <= self._tail_monotonic_ratio_max:
+                return False
+
+        logger.info(
+            "RT=%.3f 与前峰 RT=%.3f 之间存在独立峰盆地, 跳过 robust_v3 相邻假峰合并. "
+            "谷底=%.4f, 半高轮廓=%.4f, 上升步占比=%s, 左右半高宽平衡=%.4f, prominence比值=%.4f",
+            current_rt,
+            previous_rt,
+            valley_min,
+            half_prominence_contour,
+            "None" if rising_ratio is None else f"{rising_ratio:.4f}",
+            half_width_balance,
+            prominence_ratio,
+        )
+        return True
+
     def _filter_adjacent_artifact_peak_indices(
         self,
         times: np.ndarray,
@@ -908,18 +1021,20 @@ class PeakIntegrator:
 
             current_width_min = float(widths_50_min[peak_no])
             current_prominence = float(prominences[peak_no])
-            if not np.isfinite(current_width_min) or not np.isfinite(current_prominence):
+            if bool(np.isfinite(current_width_min)) is False or bool(np.isfinite(current_prominence)) is False:
                 continue
 
             merge_target_no = peak_no - 1
-            while merge_target_no >= 0 and not keep_mask[merge_target_no]:
+            while merge_target_no >= 0 and bool(keep_mask[merge_target_no]) is False:
                 merge_target_no -= 1
 
             if merge_target_no < 0:
                 continue
 
             current_rt = float(times[int(peak_idx)])
-            previous_rt = float(times[int(peak_indices[merge_target_no])])
+            current_peak_idx = int(peak_idx)
+            previous_peak_idx = int(peak_indices[merge_target_no])
+            previous_rt = float(times[previous_peak_idx])
             previous_gap_min = float(current_rt - previous_rt)
             previous_prominence = float(prominences[merge_target_no])
 
@@ -927,6 +1042,24 @@ class PeakIntegrator:
                 continue
 
             prominence_ratio = self._safe_ratio(current_prominence, previous_prominence)
+            current_height = float(corrected_signal[current_peak_idx])
+            left_half_width_min = max(0.0, float((float(peak_idx) - left_ips_50[peak_no]) * dt))
+            right_half_width_min = max(0.0, float((right_ips_50[peak_no] - float(peak_idx)) * dt))
+
+            if self._has_independent_peak_basin(
+                corrected_signal=corrected_signal,
+                smoothed_signal=smoothed_signal,
+                previous_peak_idx=previous_peak_idx,
+                current_peak_idx=current_peak_idx,
+                previous_rt=previous_rt,
+                current_rt=current_rt,
+                current_height=current_height,
+                current_prominence=current_prominence,
+                prominence_ratio=prominence_ratio,
+                left_half_width_min=left_half_width_min,
+                right_half_width_min=right_half_width_min,
+            ):
+                continue
 
             if self._shoulder_filter_enable is True:
                 if previous_gap_min <= self._shoulder_filter_gap_max_min:
@@ -948,30 +1081,23 @@ class PeakIntegrator:
 
             # --- 单调下降拖尾检测: 在平滑信号(未扣基线)上判断前峰到当前峰是否近似单调递减 ---
             if self._tail_monotonic_filter_enable is True:
-                # 仅当候选峰 prominence 显著低于前峰时检查, 避免误伤真实相邻峰
+                # 仅当候选峰 prominence 显著低于前峰时检查, 避免误伤真实相邻峰.
                 if prominence_ratio <= 0.25:
-                    prev_peak_idx = int(peak_indices[merge_target_no])
-                    curr_peak_idx = int(peak_idx)
-                    # 至少 3 个数据点才有统计意义
-                    if curr_peak_idx > prev_peak_idx + 2:
-                        segment = smoothed_signal[prev_peak_idx:curr_peak_idx + 1]
-                        diffs = np.diff(segment)
-                        total_steps = len(diffs)
-                        if total_steps > 0:
-                            rising_ratio = float(np.sum(diffs > 0)) / total_steps
-                            if rising_ratio <= self._tail_monotonic_ratio_max:
-                                keep_mask[peak_no] = False
-                                merge_targets[peak_no] = merge_target_no
-                                logger.info(
-                                    "RT=%.3f 的峰判定为前峰单调下降拖尾假峰, 并入 RT=%.3f 的前峰. "
-                                    "上升步占比=%.4f (阈值=%.4f), prominence比值=%.4f",
-                                    current_rt,
-                                    previous_rt,
-                                    rising_ratio,
-                                    self._tail_monotonic_ratio_max,
-                                    prominence_ratio,
-                                )
-                                continue
+                    rising_ratio = self._compute_rising_ratio(smoothed_signal, previous_peak_idx, current_peak_idx)
+                    if rising_ratio is not None:
+                        if rising_ratio <= self._tail_monotonic_ratio_max:
+                            keep_mask[peak_no] = False
+                            merge_targets[peak_no] = merge_target_no
+                            logger.info(
+                                "RT=%.3f 的峰判定为前峰单调下降拖尾假峰, 并入 RT=%.3f 的前峰. "
+                                "上升步占比=%.4f (阈值=%.4f), prominence比值=%.4f",
+                                current_rt,
+                                previous_rt,
+                                rising_ratio,
+                                self._tail_monotonic_ratio_max,
+                                prominence_ratio,
+                            )
+                            continue
 
             if self._tail_artifact_filter_enable is False:
                 continue
@@ -982,8 +1108,6 @@ class PeakIntegrator:
             if prominence_ratio > self._tail_artifact_relative_prominence_max:
                 continue
 
-            left_half_width_min = max(0.0, float((float(peak_idx) - left_ips_50[peak_no]) * dt))
-            right_half_width_min = max(0.0, float((right_ips_50[peak_no] - float(peak_idx)) * dt))
             half_width_asymmetry = self._safe_ratio(right_half_width_min, left_half_width_min)
             if half_width_asymmetry < self._tail_artifact_half_width_asymmetry_min:
                 continue

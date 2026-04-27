@@ -208,14 +208,6 @@ class Settings:
     )  # 实验归档输出根目录, 修改后改变归档数据落盘位置.
     archive_copy_raw_data: bool = True  # 归档时是否复制 .D 原始数据目录, 打开后归档体积会显著增大.
 
-    # ---------- 化学品库目录 ----------
-    chemical_list_path: Path = field(  # 化学品清单路径, 修改后切换产率计算的物性来源.
-        default_factory=lambda: Path(__file__).parent.parent.parent
-        / "eit_synthesis_station"
-        / "sheet"
-        / "chemical_list.xlsx"
-    )
-
     # ---------- 结构图缓存目录 ----------
     structure_cache_dir: Path = field(  # 全局结构图缓存目录, 修改后影响跨任务复用缓存位置.
         default_factory=lambda: Path(__file__).parent.parent / "data" / "structure_cache"
@@ -423,7 +415,6 @@ class Settings:
             ),
             report_dir=_path("ANALYSIS_REPORT_DIR", defaults.report_dir),
             structure_cache_dir=_path("ANALYSIS_STRUCTURE_CACHE_DIR", defaults.structure_cache_dir),
-            chemical_list_path=_path("ANALYSIS_CHEMICAL_LIST_PATH", defaults.chemical_list_path),
             nist_path=_path("ANALYSIS_NIST_PATH", defaults.nist_path),
             nist_max_hits=_int("ANALYSIS_NIST_MAX_HITS", defaults.nist_max_hits),
             nist_search_timeout=_float("ANALYSIS_NIST_SEARCH_TIMEOUT", defaults.nist_search_timeout),

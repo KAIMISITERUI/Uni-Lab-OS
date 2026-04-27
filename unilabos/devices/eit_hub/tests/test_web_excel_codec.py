@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest.mock import patch
 
 import openpyxl
 
@@ -297,32 +298,12 @@ def test_reaction_template_write_result_can_be_parsed_by_yield_calculator(tmp_pa
         验证 Web 保存后的 reaction_template 可被 YieldCalculator 正确解析 GC-MS 产率配置.
     """
     template_path = tmp_path / "reaction_template.xlsx"
-    chemical_list_path = tmp_path / "chemical_list.xlsx"
     _create_template(template_path)
     write_reaction_template(_updated_payload(), template_path)
 
-    chemical_workbook = openpyxl.Workbook()
-    try:
-        worksheet = chemical_workbook.active
-        worksheet.title = "chemicals"
-        worksheet.append(
-            [
-                "substance",
-                "molecular_weight",
-                "physical_state",
-                "density",
-                "physical_form",
-                "active_content",
-            ]
-        )
-        worksheet.append(["乙腈", 41.05, "liquid", 0.786, "neat", ""])
-        worksheet.append(["1,3,5-三异丙基苯", 162.28, "liquid", 0.857, "neat", ""])
-        chemical_workbook.save(chemical_list_path)
-    finally:
-        chemical_workbook.close()
-
     calculator = YieldCalculator()
-    config = calculator.parse_yield_config(template_path, chemical_list_path)
+    with patch.object(calculator, "_calculate_is_moles", return_value=1e-4):
+        config = calculator.parse_yield_config(template_path)
 
     assert config.is_smiles == _updated_gc_ms_yield()["internal_standard_smiles"]
     assert config.calc_method == "标准曲线"

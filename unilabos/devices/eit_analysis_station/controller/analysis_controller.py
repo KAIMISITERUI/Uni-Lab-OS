@@ -1937,7 +1937,7 @@ class AnalysisStationController:
     def calculate_yields(self, task_id: Optional[str] = None) -> Dict:
         """
         功能:
-            产率计算入口, 定位实验方案/积分报告/化学品清单后调用 YieldCalculator.
+            产率计算入口, 定位实验方案和积分报告后调用 YieldCalculator.
             实验方案中需包含 "GC产率计算" Sheet, 否则跳过.
         参数:
             task_id: 任务 ID 字符串, None 表示自动选取最新任务.
@@ -1952,7 +1952,6 @@ class AnalysisStationController:
             syn_dir = self._settings.synthesis_tasks_dir / resolved_id
             plan_path = syn_dir / f"{resolved_id}_experiment_plan.xlsx"
             report_path = syn_dir / f"{resolved_id}_integration_report.xlsx"
-            chemical_list_path = self._settings.chemical_list_path
 
             if not plan_path.exists():
                 return {"success": False, "return_info": f"未找到实验方案: {plan_path}"}
@@ -1966,8 +1965,6 @@ class AnalysisStationController:
                     report_path = legacy_local_report
                 else:
                     return {"success": False, "return_info": f"未找到积分报告: {report_path}"}
-            if not chemical_list_path.exists():
-                return {"success": False, "return_info": f"未找到化学品清单: {chemical_list_path}"}
 
             # 检查实验方案是否包含 "GC产率计算" Sheet
             wb_check = openpyxl.load_workbook(str(plan_path), data_only=True)
@@ -1995,7 +1992,7 @@ class AnalysisStationController:
                 sshm_enabled=sshm_enabled,
                 ihshm_enabled=ihshm_enabled,
             )
-            config, results = calc.process_task(plan_path, report_path, chemical_list_path)
+            config, results = calc.process_task(plan_path, report_path)
 
             # 按自然顺序排序 (729-1, 729-2, ..., 729-10 而非字典序 729-1, 729-10, 729-2)
             results.sort(key=lambda r: [
