@@ -73,6 +73,7 @@ AGV_QUERY_RETRY_DELAY = 1.0    # 首次重试等待时间, 单位秒, 后续翻�
 # PP5/CP6自动充电配置
 AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES = 30  # 正常检查间隔, 单位分钟
 AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT = 50  # 低电量阈值, 低于该值触发充电
+AGV_PP5_CP6_AUTO_CHARGE_FULL_BATTERY_PCT = 95  # 满电停充阈值, CP6 内电量达到该值打开 DO7 停充, AGV 仍留在 CP6
 AGV_CHARGE_CONTROL_DO_ID = 7  # 充电控制 DO, True 停止充电, False 允许充电
 
 # 工站位置配置

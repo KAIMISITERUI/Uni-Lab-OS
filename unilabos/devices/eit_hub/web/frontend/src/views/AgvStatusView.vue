@@ -99,6 +99,7 @@ const chargingForm = ref({
   interval_minutes: 30,
   retry_wait_minutes: 5,
   low_battery_pct: 50,
+  full_battery_pct: 95,
 })
 const chargingConfigDirty = ref(false)
 const jogRefCoord = ref<'base' | 'tcp' | 'user'>('base')
@@ -212,6 +213,7 @@ watch(
     chargingForm.value.interval_minutes,
     chargingForm.value.retry_wait_minutes,
     chargingForm.value.low_battery_pct,
+    chargingForm.value.full_battery_pct,
   ],
   () => {
     if (syncingChargingConfig === false) {
@@ -426,6 +428,7 @@ function buildChargingConfig(): ChargeLoopConfig {
     interval_minutes: Number(chargingForm.value.interval_minutes),
     retry_wait_minutes: Number(chargingForm.value.retry_wait_minutes),
     low_battery_pct: Number(chargingForm.value.low_battery_pct),
+    full_battery_pct: Number(chargingForm.value.full_battery_pct),
   }
 }
 
@@ -444,6 +447,7 @@ function syncChargingFormFromStatus(data: AgvStatusResponse) {
       interval_minutes: config.interval_minutes,
       retry_wait_minutes: config.retry_wait_minutes,
       low_battery_pct: config.low_battery_pct,
+      full_battery_pct: config.full_battery_pct,
     }
   } finally {
     syncingChargingConfig = false
@@ -1135,6 +1139,10 @@ onBeforeUnmount(() => {
             </el-form-item>
             <el-form-item label="电量阈值">
               <el-input-number v-model="chargingForm.low_battery_pct" :min="10" :max="90" />
+              <span class="unit">%</span>
+            </el-form-item>
+            <el-form-item label="满电阈值">
+              <el-input-number v-model="chargingForm.full_battery_pct" :min="11" :max="100" />
               <span class="unit">%</span>
             </el-form-item>
             <div class="charge-action-row">

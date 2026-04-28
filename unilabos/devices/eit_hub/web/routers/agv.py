@@ -393,11 +393,13 @@ class ChargingStartRequest(BaseModel):
         interval_minutes: int, 正常检查间隔分钟.
         retry_wait_minutes: int, 异常重试等待分钟.
         low_battery_pct: int, 低电量阈值 0-100.
+        full_battery_pct: int, 满电停充阈值, 必须大于 low_battery_pct, 上限 100.
     """
 
     interval_minutes: int = Field(default=30, ge=1, le=180)
     retry_wait_minutes: int = Field(default=5, ge=1, le=60)
     low_battery_pct: int = Field(default=50, ge=10, le=90)
+    full_battery_pct: int = Field(default=95, ge=11, le=100)
 
 
 class TrayNameRequest(BaseModel):
@@ -1084,6 +1086,7 @@ def charging_config_save(
             interval_minutes=request.interval_minutes,
             retry_wait_minutes=request.retry_wait_minutes,
             low_battery_pct=request.low_battery_pct,
+            full_battery_pct=request.full_battery_pct,
         )
     except ValueError as exc:
         raise _json_error(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY) from exc
@@ -1111,6 +1114,7 @@ def charging_start(
             interval_minutes=request.interval_minutes,
             retry_wait_minutes=request.retry_wait_minutes,
             low_battery_pct=request.low_battery_pct,
+            full_battery_pct=request.full_battery_pct,
         )
     except ValueError as exc:
         raise _json_error(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY) from exc
@@ -1149,11 +1153,14 @@ def charging_check_once(
     _require_chassis(context)
 
     def _target(log: Callable[[str], None]) -> Any:
-        log(f"执行单次充电检查, 阈值={request.low_battery_pct}%.")
+        log(
+            f"执行单次充电检查, 低电阈值={request.low_battery_pct}%, 满电阈值={request.full_battery_pct}%."
+        )
         # 充电检查内部可能触发导航+回零, 持锁执行
         with context.arm_lock:
             result = context.get_or_create().auto_charge_pp5_cp6_check(
-                low_battery_pct=request.low_battery_pct
+                low_battery_pct=request.low_battery_pct,
+                full_battery_pct=request.full_battery_pct,
             )
         log(f"检查完成, 结果={result}.")
         return result

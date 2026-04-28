@@ -24,6 +24,7 @@ DEFAULT_CHARGE_LOOP_CONFIG: Dict[str, int] = {
     "interval_minutes": 30,
     "retry_wait_minutes": 5,
     "low_battery_pct": 50,
+    "full_battery_pct": 95,
 }
 
 
@@ -50,6 +51,7 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, int]:
         interval_minutes = int(config["interval_minutes"])
         retry_wait_minutes = int(config["retry_wait_minutes"])
         low_battery_pct = int(config["low_battery_pct"])
+        full_battery_pct = int(config["full_battery_pct"])
     except KeyError as exc:
         raise ValueError(f"充电循环配置缺少字段: {exc.args[0]}.") from exc
     except (TypeError, ValueError) as exc:
@@ -61,11 +63,15 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, int]:
         raise ValueError("重试等待必须在 1 到 60 分钟之间.")
     if (10 <= low_battery_pct <= 90) is False:
         raise ValueError("电量阈值必须在 10 到 90 之间.")
+    # 满电阈值必须严格大于低电量阈值, 上限 100, 否则浮充逻辑无效
+    if (low_battery_pct < full_battery_pct <= 100) is False:
+        raise ValueError("满电阈值必须大于低电量阈值且不超过 100.")
 
     return {
         "interval_minutes": interval_minutes,
         "retry_wait_minutes": retry_wait_minutes,
         "low_battery_pct": low_battery_pct,
+        "full_battery_pct": full_battery_pct,
     }
 
 
@@ -90,6 +96,7 @@ class ChargeLoopService:
         interval_minutes: int,
         retry_wait_minutes: int,
         low_battery_pct: int,
+        full_battery_pct: int,
     ) -> Dict[str, Any]:
         """
         功能:
@@ -98,6 +105,7 @@ class ChargeLoopService:
             interval_minutes: int, 正常检查间隔.
             retry_wait_minutes: int, 异常/跳过时的重试等待.
             low_battery_pct: int, 低电量阈值 (0-100).
+            full_battery_pct: int, 满电停充阈值, 必须大于 low_battery_pct 且不超过 100.
         返回:
             Dict, 启动后的服务状态.
         """
@@ -109,6 +117,7 @@ class ChargeLoopService:
                 "interval_minutes": interval_minutes,
                 "retry_wait_minutes": retry_wait_minutes,
                 "low_battery_pct": low_battery_pct,
+                "full_battery_pct": full_battery_pct,
             }
         )
 
@@ -129,10 +138,11 @@ class ChargeLoopService:
             thread.start()
 
         logger.info(
-            "充电循环已启动, strategy=PP5待命/CP6充电, interval=%d min, retry=%d min, threshold=%d%%",
+            "充电循环已启动, strategy=PP5待命/CP6充电, interval=%d min, retry=%d min, low=%d%%, full=%d%%",
             self._config["interval_minutes"],
             self._config["retry_wait_minutes"],
             self._config["low_battery_pct"],
+            self._config["full_battery_pct"],
         )
         return self.status()
 
@@ -141,6 +151,7 @@ class ChargeLoopService:
         interval_minutes: int,
         retry_wait_minutes: int,
         low_battery_pct: int,
+        full_battery_pct: int,
     ) -> Dict[str, Any]:
         """
         功能:
@@ -149,6 +160,7 @@ class ChargeLoopService:
             interval_minutes: int, 正常检查间隔.
             retry_wait_minutes: int, 异常/跳过时的重试等待.
             low_battery_pct: int, 低电量阈值.
+            full_battery_pct: int, 满电停充阈值, 必须大于 low_battery_pct 且不超过 100.
         返回:
             Dict[str, Any], 保存后的服务状态.
         """
@@ -157,16 +169,18 @@ class ChargeLoopService:
                 "interval_minutes": interval_minutes,
                 "retry_wait_minutes": retry_wait_minutes,
                 "low_battery_pct": low_battery_pct,
+                "full_battery_pct": full_battery_pct,
             }
         )
         with self._lock:
             self._write_config(config)
             self._config = config
         logger.info(
-            "充电循环配置已保存, interval=%d min, retry=%d min, threshold=%d%%",
+            "充电循环配置已保存, interval=%d min, retry=%d min, low=%d%%, full=%d%%",
             config["interval_minutes"],
             config["retry_wait_minutes"],
             config["low_battery_pct"],
+            config["full_battery_pct"],
         )
         return self.status()
 
@@ -220,7 +234,8 @@ class ChargeLoopService:
             try:
                 with self._context.arm_lock:
                     result = controller.auto_charge_pp5_cp6_check(
-                        low_battery_pct=self._config["low_battery_pct"]
+                        low_battery_pct=self._config["low_battery_pct"],
+                        full_battery_pct=self._config["full_battery_pct"],
                     )
                 action = {
                     "at": datetime.now().isoformat(timespec="seconds"),
@@ -250,6 +265,7 @@ class ChargeLoopService:
         """
         功能:
             从持久化文件读取充电循环配置, 文件不存在时使用默认配置.
+            历史文件可能缺少新增字段, 先与默认值合并再校验, 兼容向后升级.
         返回:
             Dict[str, int], 当前充电循环配置.
         """
@@ -260,7 +276,9 @@ class ChargeLoopService:
             payload = json.load(file_obj)
         if isinstance(payload, dict) is False:
             raise ValueError("充电循环配置文件格式错误, 必须是对象.")
-        return _normalize_config(payload)
+        # 合并默认值, 老配置缺少 full_battery_pct 等新字段时自动补全
+        merged = {**_default_config(), **payload}
+        return _normalize_config(merged)
 
     def _write_config(self, config: Dict[str, int]) -> None:
         """

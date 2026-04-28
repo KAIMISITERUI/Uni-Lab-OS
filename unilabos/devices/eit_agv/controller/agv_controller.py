@@ -26,6 +26,7 @@ from ..config.agv_config import (
     AGV_QUERY_RETRY_DELAY,
     AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
     AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
+    AGV_PP5_CP6_AUTO_CHARGE_FULL_BATTERY_PCT,
     AGV_CHARGE_CONTROL_DO_ID,
 )
 from ..config.arm_config import ENABLE_GRIP_DETECTION
@@ -2645,7 +2646,11 @@ class AGVController:
                 logger.info("等待5分钟后重试...")
                 self._interruptible_sleep(300)
 
-    def auto_charge_pp5_cp6_check(self, low_battery_pct=AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT):
+    def auto_charge_pp5_cp6_check(
+        self,
+        low_battery_pct=AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
+        full_battery_pct=AGV_PP5_CP6_AUTO_CHARGE_FULL_BATTERY_PCT,
+    ):
         """
         功能:
             基于PP5待命点和CP6充电站的自动充电检查函数.
@@ -2654,11 +2659,13 @@ class AGVController:
             主要逻辑:
                 - 在PP5且电量<low_battery_pct时, 进入CP6充电.
                 - 在PP5且电量>=low_battery_pct时, 继续在PP5待命.
-                - 在CP6且电量>85%时, 返回PP5待命.
-                - 在CP6且电量<=85%时, 关闭 DO7 允许充电并继续在CP6待命.
+                - 在CP6且电量>=full_battery_pct时, 打开 DO7 停止充电, AGV 留在 CP6 不驶出.
+                - 在CP6且电量<full_battery_pct时, 关闭 DO7 允许充电(电量回落自动浮充).
                 - 既不在PP5也不在CP6时, 视为工作途中并跳过本次检查.
         参数:
-            low_battery_pct: 低电量阈值(百分比), 默认80, 即电量低于80%触发充电.
+            low_battery_pct: 低电量阈值(百分比), 低于该值在 PP5 触发去 CP6 充电.
+            full_battery_pct: 满电阈值(百分比), 必须严格大于 low_battery_pct 且不超过 100,
+                CP6 内电量达到该值时打开 DO7 停充, AGV 仍留在 CP6.
         返回:
             dict, 包含检查结果的字典:
                 - status: "success" / "skipped" / "error"
@@ -2676,13 +2683,19 @@ class AGVController:
         logger.info("开始PP5/CP6自动充电检查")
         step_trace: List[Dict[str, Any]] = []
 
+        # 满电阈值必须严格大于低电量阈值且不超过 100, 防止配置错误导致浮充逻辑失效
+        if (low_battery_pct < full_battery_pct <= 100) is False:
+            raise ValueError(
+                f"满电阈值必须大于低电量阈值且不超过 100, 当前 low={low_battery_pct}, full={full_battery_pct}"
+            )
+
         try:
             low_threshold = low_battery_pct / 100
             self._append_charge_step_trace(
                 step_trace,
                 stage="start",
                 status="info",
-                message=f"开始PP5/CP6自动充电检查, 低电量阈值={low_battery_pct}%",
+                message=f"开始PP5/CP6自动充电检查, 低电量阈值={low_battery_pct}%, 满电阈值={full_battery_pct}%",
             )
 
             nav_result = self._query_nav_task_status_detailed(error_stage="nav_guard")
@@ -2883,7 +2896,7 @@ class AGVController:
                 )
 
             return self._auto_charge_pp5_cp6_check_at_cp6(
-                low_battery_pct=low_battery_pct,
+                full_battery_pct=full_battery_pct,
                 battery_level=battery_level,
                 current_station_id=current_station_id,
                 step_trace=step_trace,
@@ -2915,7 +2928,7 @@ class AGVController:
 
     def _auto_charge_pp5_cp6_check_at_cp6(
         self,
-        low_battery_pct: int,
+        full_battery_pct: int,
         battery_level: float,
         current_station_id: str,
         step_trace: List[Dict[str, Any]],
@@ -2923,64 +2936,68 @@ class AGVController:
         """
         功能:
             处理AGV位于CP6时的PP5/CP6自动充电检查逻辑.
+            策略: AGV 不再因满电自动离站, 仅通过 DO7 控制是否充电.
+                - 电量 >= full_battery_pct: 打开 DO7 停止充电, 留在 CP6 不驶出.
+                - 电量 <  full_battery_pct: 关闭 DO7 允许充电, 电量回落时下一轮自动恢复浮充.
 
         参数:
-            low_battery_pct: 低电量阈值, 单位百分比.
-            battery_level: 当前电池电量.
+            full_battery_pct: 满电阈值, 单位百分比, 必须 > low_battery_pct 且 <= 100.
+            battery_level: 当前电池电量, 0.0 ~ 1.0.
             current_station_id: 当前站点ID.
             step_trace: 已累计的步骤轨迹.
 
         返回:
             Dict[str, Any], 标准化检查结果.
         """
-        if battery_level > 0.85:
-            logger.info("步骤3: AGV在CP6且电量高于85%, 准备返回PP5待命")
-            move_result = self._safe_navigate_to_station_detailed(
-                station_id="PP5",
-                stage_prefix="cp6_to_pp5",
+        full_threshold = full_battery_pct / 100
+
+        if battery_level >= full_threshold:
+            # 满电: 打开 DO7 停止充电, AGV 留在 CP6, 等待外部任务调度
+            logger.info(f"步骤3: AGV在CP6且电量已达{full_battery_pct}%, 打开 DO7 停止充电并留在 CP6")
+            stop_result = self._set_charge_control_do_detailed(
+                stop_charging=True,
+                error_stage="cp6_charge_control.open_do7_for_full",
             )
-            if move_result["ok"] is False:
-                failure = move_result["failure"]
+            if stop_result["ok"] is False:
+                failure = stop_result["failure"]
                 self._append_charge_step_trace(
                     step_trace,
-                    stage=failure.get("error_stage", "cp6_to_pp5"),
+                    stage=failure.get("error_stage", "cp6_charge_control.open_do7_for_full"),
                     status="error",
-                    message=failure.get("message", "从CP6移动到PP5失败"),
+                    message=failure.get("message", "打开 DO7 停止充电失败"),
                     error_reason=failure.get("error_reason"),
                 )
                 return self._build_pp5_cp6_result(
                     status="error",
-                    action="move_to_pp5",
-                    message=f"电量{battery_level * 100:.1f}%高于85%, 但从CP6移动到PP5失败",
+                    action="set_do7_stop_charge_failed",
+                    message=f"AGV 位于 CP6 且电量{battery_level * 100:.1f}%已达{full_battery_pct}%, 但打开 DO7 停止充电失败: {failure.get('message')}",
                     step_trace=step_trace,
                     failure=failure,
                     battery_level=battery_level,
                     current_station=current_station_id,
+                    charge_control=None,
                 )
 
             self._append_charge_step_trace(
                 step_trace,
-                stage="cp6_to_pp5.arm_home",
+                stage="cp6_charge_control.open_do7_for_full",
                 status="success",
-                message="离开CP6前机械臂回零成功",
+                message=f"已打开 DO7 停止充电, AGV 留在 CP6 等待外部任务",
+                charge_control=stop_result["data"],
             )
-            self._append_charge_step_trace(
-                step_trace,
-                stage="cp6_to_pp5.navigate",
-                status="success",
-                message="AGV已从CP6返回PP5待命点",
-            )
-            logger.info("AGV已从CP6返回PP5待命点")
+            logger.info(f"AGV 位于 CP6, 电量已达{full_battery_pct}%, 已打开 DO7 停止充电, 保持在 CP6 待命")
             return self._build_pp5_cp6_result(
                 status="success",
-                action="cp6_to_pp5_after_charge",
-                message=f"电量{battery_level * 100:.1f}%高于85%, 已从CP6返回PP5待命",
+                action="stop_charging_at_cp6",
+                message=f"电量{battery_level * 100:.1f}%已达满电阈值{full_battery_pct}%, 已打开 DO7 停止充电, AGV 留在 CP6",
                 step_trace=step_trace,
                 battery_level=battery_level,
                 current_station=current_station_id,
-                charge_control=move_result["data"].get("charge_control_before_navigation"),
+                charging_enabled=False,
+                charge_control=stop_result["data"],
             )
 
+        # 未满电: 关闭 DO7 允许充电, 电量回落自动恢复浮充
         charge_enable = self._set_charge_control_do_detailed(
             stop_charging=False,
             error_stage="cp6_charge_control.close_do7_for_charge",
@@ -3016,7 +3033,7 @@ class AGVController:
         return self._build_pp5_cp6_result(
             status="success",
             action="enable_charging_at_cp6",
-            message=f"电量{battery_level * 100:.1f}%未高于85%, 已关闭 DO7 允许在 CP6 充电",
+            message=f"电量{battery_level * 100:.1f}%未达满电阈值{full_battery_pct}%, 已关闭 DO7 允许在 CP6 充电",
             step_trace=step_trace,
             battery_level=battery_level,
             current_station=current_station_id,
@@ -3063,6 +3080,7 @@ class AGVController:
         interval_minutes=AGV_PP5_CP6_AUTO_CHARGE_INTERVAL_MINUTES,
         retry_wait_minutes=5,
         low_battery_pct=AGV_PP5_CP6_AUTO_CHARGE_LOW_BATTERY_PCT,
+        full_battery_pct=AGV_PP5_CP6_AUTO_CHARGE_FULL_BATTERY_PCT,
     ):
         """
         功能:
@@ -3070,15 +3088,18 @@ class AGVController:
             - 检查成功时, 等待interval_minutes后执行下一轮.
             - 检查被跳过或出错时, 等待retry_wait_minutes后重试.
         参数:
-            interval_minutes: 检查成功后的等待时间, 单位分钟, 默认3分钟.
-            retry_wait_minutes: 检查跳过或出错后的重试间隔, 单位分钟, 默认5分钟.
-            low_battery_pct: 低电量阈值(百分比), 默认80, 即电量低于80%触发充电.
+            interval_minutes: 检查成功后的等待时间, 单位分钟.
+            retry_wait_minutes: 检查跳过或出错后的重试间隔, 单位分钟.
+            low_battery_pct: 低电量阈值(百分比), 低于该值在 PP5 触发去 CP6 充电.
+            full_battery_pct: 满电阈值(百分比), 必须 > low_battery_pct 且 <= 100,
+                CP6 内电量达到该值时打开 DO7 停充, AGV 留在 CP6 不驶出.
         返回:
             无, 持续运行直到用户中断.
         """
         logger.info(
             f"启动PP5/CP6自动充电循环, 检查间隔: {interval_minutes}分钟, "
-            f"重试间隔: {retry_wait_minutes}分钟, 低电量阈值: {low_battery_pct}%"
+            f"重试间隔: {retry_wait_minutes}分钟, 低电量阈值: {low_battery_pct}%, "
+            f"满电阈值: {full_battery_pct}%"
         )
 
         # 表示检查完成后 AGV 已/将处于 CP6 充电流程的 action, 需 1 分钟高频复查防止冲过离站阈值
@@ -3092,7 +3113,10 @@ class AGVController:
 
         while True:
             try:
-                result = self.auto_charge_pp5_cp6_check(low_battery_pct=low_battery_pct)
+                result = self.auto_charge_pp5_cp6_check(
+                    low_battery_pct=low_battery_pct,
+                    full_battery_pct=full_battery_pct,
+                )
                 action = result.get("action", "")
                 status = result.get("status", "")
                 self._log_auto_charge_pp5_cp6_result_summary(result)

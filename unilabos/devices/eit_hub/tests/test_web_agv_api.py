@@ -44,16 +44,25 @@ class FakeChargeController:
         提供充电循环服务测试所需的最小控制器.
     """
 
-    def auto_charge_pp5_cp6_check(self, low_battery_pct: int = 50) -> Dict[str, Any]:
+    def auto_charge_pp5_cp6_check(
+        self,
+        low_battery_pct: int = 50,
+        full_battery_pct: int = 95,
+    ) -> Dict[str, Any]:
         """
         功能:
             返回一次成功的充电检查结果.
         参数:
             low_battery_pct: int, 低电量阈值.
+            full_battery_pct: int, 满电停充阈值.
         返回:
             Dict[str, Any], 充电检查结果.
         """
-        return {"status": "success", "low_battery_pct": low_battery_pct}
+        return {
+            "status": "success",
+            "low_battery_pct": low_battery_pct,
+            "full_battery_pct": full_battery_pct,
+        }
 
 
 class FakeChargeContext:
@@ -106,7 +115,13 @@ class FakeChargeLoopApiService:
         """
         return {"running": self.running, "config": dict(self.config), "last_action": self.last_action}
 
-    def save_config(self, interval_minutes: int, retry_wait_minutes: int, low_battery_pct: int) -> Dict[str, Any]:
+    def save_config(
+        self,
+        interval_minutes: int,
+        retry_wait_minutes: int,
+        low_battery_pct: int,
+        full_battery_pct: int,
+    ) -> Dict[str, Any]:
         """
         功能:
             保存测试充电配置.
@@ -114,6 +129,7 @@ class FakeChargeLoopApiService:
             interval_minutes: int, 检查间隔.
             retry_wait_minutes: int, 重试等待.
             low_battery_pct: int, 电量阈值.
+            full_battery_pct: int, 满电停充阈值.
         返回:
             Dict[str, Any], 保存后的服务状态.
         """
@@ -121,10 +137,17 @@ class FakeChargeLoopApiService:
             "interval_minutes": interval_minutes,
             "retry_wait_minutes": retry_wait_minutes,
             "low_battery_pct": low_battery_pct,
+            "full_battery_pct": full_battery_pct,
         }
         return self.status()
 
-    def start(self, interval_minutes: int, retry_wait_minutes: int, low_battery_pct: int) -> Dict[str, Any]:
+    def start(
+        self,
+        interval_minutes: int,
+        retry_wait_minutes: int,
+        low_battery_pct: int,
+        full_battery_pct: int,
+    ) -> Dict[str, Any]:
         """
         功能:
             启动测试充电循环并保存配置.
@@ -132,10 +155,11 @@ class FakeChargeLoopApiService:
             interval_minutes: int, 检查间隔.
             retry_wait_minutes: int, 重试等待.
             low_battery_pct: int, 电量阈值.
+            full_battery_pct: int, 满电停充阈值.
         返回:
             Dict[str, Any], 启动后的服务状态.
         """
-        self.save_config(interval_minutes, retry_wait_minutes, low_battery_pct)
+        self.save_config(interval_minutes, retry_wait_minutes, low_battery_pct, full_battery_pct)
         self.running = True
         return self.status()
 
@@ -245,10 +269,20 @@ def test_charge_loop_service_save_config_persists_file(tmp_path: Path) -> None:
     config_path = tmp_path / "charge_loop_config.json"
     service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
 
-    body = service.save_config(interval_minutes=12, retry_wait_minutes=6, low_battery_pct=55)
+    body = service.save_config(
+        interval_minutes=12,
+        retry_wait_minutes=6,
+        low_battery_pct=55,
+        full_battery_pct=90,
+    )
 
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))
-    assert body["config"] == {"interval_minutes": 12, "retry_wait_minutes": 6, "low_battery_pct": 55}
+    assert body["config"] == {
+        "interval_minutes": 12,
+        "retry_wait_minutes": 6,
+        "low_battery_pct": 55,
+        "full_battery_pct": 90,
+    }
     assert saved_config == body["config"]
 
 
@@ -259,7 +293,12 @@ def test_charge_loop_service_loads_saved_config_after_restart(tmp_path: Path) ->
     """
     config_path = tmp_path / "charge_loop_config.json"
     service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
-    service.save_config(interval_minutes=18, retry_wait_minutes=8, low_battery_pct=60)
+    service.save_config(
+        interval_minutes=18,
+        retry_wait_minutes=8,
+        low_battery_pct=60,
+        full_battery_pct=92,
+    )
 
     restarted_service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
 
@@ -267,6 +306,7 @@ def test_charge_loop_service_loads_saved_config_after_restart(tmp_path: Path) ->
         "interval_minutes": 18,
         "retry_wait_minutes": 8,
         "low_battery_pct": 60,
+        "full_battery_pct": 92,
     }
 
 
@@ -279,13 +319,23 @@ def test_charge_loop_service_start_persists_submitted_config(tmp_path: Path) -> 
     service = ChargeLoopService(FakeChargeContext(), config_path=config_path)
 
     try:
-        body = service.start(interval_minutes=9, retry_wait_minutes=4, low_battery_pct=65)
+        body = service.start(
+            interval_minutes=9,
+            retry_wait_minutes=4,
+            low_battery_pct=65,
+            full_battery_pct=88,
+        )
         saved_config = json.loads(config_path.read_text(encoding="utf-8"))
     finally:
         service.stop()
 
     assert body["running"] is True
-    assert body["config"] == {"interval_minutes": 9, "retry_wait_minutes": 4, "low_battery_pct": 65}
+    assert body["config"] == {
+        "interval_minutes": 9,
+        "retry_wait_minutes": 4,
+        "low_battery_pct": 65,
+        "full_battery_pct": 88,
+    }
     assert saved_config == body["config"]
 
 
@@ -299,12 +349,22 @@ def test_charging_config_api_save_updates_status(monkeypatch: pytest.MonkeyPatch
 
     save_response = client.put(
         "/api/agv/charging/config",
-        json={"interval_minutes": 15, "retry_wait_minutes": 7, "low_battery_pct": 58},
+        json={
+            "interval_minutes": 15,
+            "retry_wait_minutes": 7,
+            "low_battery_pct": 58,
+            "full_battery_pct": 93,
+        },
     )
     status_response = client.get("/api/agv/charging/status")
 
     assert save_response.status_code == 200
-    assert save_response.json()["config"] == {"interval_minutes": 15, "retry_wait_minutes": 7, "low_battery_pct": 58}
+    assert save_response.json()["config"] == {
+        "interval_minutes": 15,
+        "retry_wait_minutes": 7,
+        "low_battery_pct": 58,
+        "full_battery_pct": 93,
+    }
     assert status_response.status_code == 200
     assert status_response.json()["config"] == save_response.json()["config"]
 
@@ -319,7 +379,12 @@ def test_charging_config_api_rejects_invalid_value(monkeypatch: pytest.MonkeyPat
 
     response = client.put(
         "/api/agv/charging/config",
-        json={"interval_minutes": 0, "retry_wait_minutes": 7, "low_battery_pct": 58},
+        json={
+            "interval_minutes": 0,
+            "retry_wait_minutes": 7,
+            "low_battery_pct": 58,
+            "full_battery_pct": 93,
+        },
     )
 
     assert response.status_code == 422
@@ -336,13 +401,23 @@ def test_charging_start_api_uses_submitted_config(monkeypatch: pytest.MonkeyPatc
 
     response = client.post(
         "/api/agv/charging/start",
-        json={"interval_minutes": 20, "retry_wait_minutes": 9, "low_battery_pct": 70},
+        json={
+            "interval_minutes": 20,
+            "retry_wait_minutes": 9,
+            "low_battery_pct": 70,
+            "full_battery_pct": 96,
+        },
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["running"] is True
-    assert body["config"] == {"interval_minutes": 20, "retry_wait_minutes": 9, "low_battery_pct": 70}
+    assert body["config"] == {
+        "interval_minutes": 20,
+        "retry_wait_minutes": 9,
+        "low_battery_pct": 70,
+        "full_battery_pct": 96,
+    }
     assert charger.config == body["config"]
 
 

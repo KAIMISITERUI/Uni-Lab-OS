@@ -61,6 +61,7 @@ export interface ChargeLoopConfig {
   interval_minutes: number
   retry_wait_minutes: number
   low_battery_pct: number
+  full_battery_pct: number
 }
 
 export interface AgvChargeControlInfo {
@@ -281,6 +282,7 @@ export async function startCharging(payload: {
   interval_minutes: number
   retry_wait_minutes: number
   low_battery_pct: number
+  full_battery_pct: number
 }): Promise<ChargeLoopStatus> {
   const { data } = await http.post<ChargeLoopStatus>('/api/agv/charging/start', payload)
   return data
@@ -298,9 +300,11 @@ export async function stopCharging(): Promise<ChargeLoopStatus> {
 
 export async function chargingCheckOnce(payload: {
   low_battery_pct: number
+  full_battery_pct: number
 }): Promise<JobCreateResponse> {
   const { data } = await http.post<JobCreateResponse>('/api/agv/charging/check-once', {
     low_battery_pct: payload.low_battery_pct,
+    full_battery_pct: payload.full_battery_pct,
   })
   return data
 }

@@ -312,15 +312,22 @@ class TestAutoChargePp5Cp6CheckRegression(unittest.TestCase):
         self.assertEqual(result["action"], "standby_at_pp5")
         mock_safe_nav.assert_not_called()
 
-    def test_cp6_high_battery_moves_to_pp5(self):
+    def test_cp6_full_battery_stops_charging_and_stays(self):
         """
         功能:
-            验证AGV在CP6且电量高于90%时, 会返回PP5待命.
+            验证AGV在CP6且电量已达满电阈值(默认95%)时, 打开 DO7 停止充电, 留在 CP6 不驶出.
         参数:
             无.
         返回:
             无.
         """
+        charge_data = {
+            "do_id": 7,
+            "do_status": True,
+            "stop_charging": True,
+            "charging_enabled": False,
+            "message": "已打开 DO7, 停止充电",
+        }
         with patch.object(
             self.controller,
             "_query_nav_task_status_detailed",
@@ -332,22 +339,32 @@ class TestAutoChargePp5Cp6CheckRegression(unittest.TestCase):
         ), patch.object(
             self.controller,
             "_query_battery_status_detailed",
-            return_value=_ok({"battery_level": 0.91, "ret_code": 0}),
+            return_value=_ok({"battery_level": 0.96, "ret_code": 0}),
         ), patch.object(
             self.controller,
+            "_set_charge_control_do_detailed",
+            return_value=_ok(charge_data),
+        ) as mock_set_do, patch.object(
+            self.controller,
             "_safe_navigate_to_station_detailed",
-            return_value=_ok({"home_result": 0, "navigation_result": {"task_status": 4}}),
         ) as mock_safe_nav:
             result = self.controller.auto_charge_pp5_cp6_check()
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["action"], "cp6_to_pp5_after_charge")
-        mock_safe_nav.assert_called_once_with(station_id="PP5", stage_prefix="cp6_to_pp5")
+        self.assertEqual(result["action"], "stop_charging_at_cp6")
+        self.assertIs(result["charging_enabled"], False)
+        self.assertEqual(result["charge_control"], charge_data)
+        mock_set_do.assert_called_once_with(
+            stop_charging=True,
+            error_stage="cp6_charge_control.open_do7_for_full",
+        )
+        # 满电不再驶出, 不应触发任何导航
+        mock_safe_nav.assert_not_called()
 
     def test_cp6_medium_battery_closes_do7_without_redock(self):
         """
         功能:
-            验证AGV在CP6且电量未高于85%时, 只关闭 DO7 允许充电, 不再执行PP5重对接.
+            验证AGV在CP6且电量未达满电阈值时, 关闭 DO7 允许充电, 不再执行任何导航.
         参数:
             无.
         返回:
@@ -459,10 +476,10 @@ class TestAutoChargePp5Cp6CheckRegression(unittest.TestCase):
         self.assertEqual(result["error_category"], "arm_connection")
         self.assertEqual(result["error_stage"], "pp5_to_cp6.arm_home")
 
-    def test_cp6_high_battery_move_to_pp5_failure_is_agv_navigation(self):
+    def test_cp6_full_battery_open_do7_failure(self):
         """
         功能:
-            验证AGV在CP6且高电量时, 如果导航失败导致返回PP5失败, 会返回 agv_navigation 诊断.
+            验证AGV在CP6且电量已达满电阈值时, 如果打开 DO7 失败, 返回 agv_charge_control 诊断, 且不触发任何导航.
         参数:
             无.
         返回:
@@ -479,24 +496,32 @@ class TestAutoChargePp5Cp6CheckRegression(unittest.TestCase):
         ), patch.object(
             self.controller,
             "_query_battery_status_detailed",
-            return_value=_ok({"battery_level": 0.95, "ret_code": 0}),
+            return_value=_ok({"battery_level": 0.97, "ret_code": 0}),
         ), patch.object(
             self.controller,
-            "_safe_navigate_to_station_detailed",
+            "_set_charge_control_do_detailed",
             return_value=_failure(
-                error_category="agv_navigation",
-                error_stage="cp6_to_pp5.navigate",
-                error_source="agv_navigation_port",
-                error_reason="connection_refused",
-                message="AGV导航到PP5失败",
+                error_category="agv_charge_control",
+                error_stage="cp6_charge_control.open_do7_for_full",
+                error_source="agv_other_port",
+                error_reason="ret_code_error",
+                message="打开 DO7 停止充电失败",
             ),
-        ):
+        ) as mock_set_do, patch.object(
+            self.controller,
+            "_safe_navigate_to_station_detailed",
+        ) as mock_safe_nav:
             result = self.controller.auto_charge_pp5_cp6_check()
 
         self.assertEqual(result["status"], "error")
-        self.assertEqual(result["action"], "move_to_pp5")
-        self.assertEqual(result["error_category"], "agv_navigation")
-        self.assertEqual(result["error_stage"], "cp6_to_pp5.navigate")
+        self.assertEqual(result["action"], "set_do7_stop_charge_failed")
+        self.assertEqual(result["error_stage"], "cp6_charge_control.open_do7_for_full")
+        mock_set_do.assert_called_once_with(
+            stop_charging=True,
+            error_stage="cp6_charge_control.open_do7_for_full",
+        )
+        # 满电不再驶出, 不应触发任何导航
+        mock_safe_nav.assert_not_called()
 
     def test_cp6_close_do7_failure_has_precise_stage(self):
         """
