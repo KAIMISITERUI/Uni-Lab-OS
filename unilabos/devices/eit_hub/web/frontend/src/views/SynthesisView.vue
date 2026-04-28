@@ -714,7 +714,7 @@ onBeforeUnmount(stopDashboardPolling)
                 </div>
               </div>
               <div class="resource-group">
-                <NTUStationGraph />
+                <NTUStationGraph :margin="50"/>
               </div>
               <div class="resource-group">
                 <div class="table-wrap">

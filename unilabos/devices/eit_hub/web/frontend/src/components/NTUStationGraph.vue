@@ -1,5 +1,10 @@
 <template>
-  <div :id="containerId" ref="containerRef" class="ntu-station-graph"></div>
+  <div
+    :id="containerId"
+    ref="containerRef"
+    class="ntu-station-graph"
+    :style="{ height: graphHeight }"
+  ></div>
 </template>
 
 <script setup lang="ts">
@@ -9,21 +14,107 @@
  *   组件挂载时实例化 zrender + Station + 资源轮询, 卸载时清理.
  *   纯画布, 无标题栏, 撑满父容器.
  */
-import { onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
+import { nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { StationGraph } from '@/lib/dynamic-graph/runtime/useStationGraph'
 
+interface Props {
+  margin?: number
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  margin: 24,
+})
 const containerRef = ref<HTMLDivElement>()
 const containerId = `ntu-graph-${Math.random().toString(36).slice(2, 9)}`
+const graphHeight = ref('720px')
+let graphContentRatio = 2.08
 let graph: StationGraph | null = null
 
-function handleResize (): void { graph?.onResize() }
+function handleResize (): void {
+  updateGraphHeight()
+  void nextTick(() => {
+    if (graph !== null) {
+      graph.onResize()
+    }
+  })
+}
 
-onMounted(() => {
-  graph = new StationGraph({ containerId })
-  graph.mount()
-  graph.startPolling(10_000)
+function updateGraphHeight (): void {
+  const container = containerRef.value
+  if (container === undefined) {
+    return
+  }
+  const graphMargin = normalizeGraphMargin()
+  const availableWidth = Math.max(container.clientWidth - graphMargin * 2, 1)
+  const height = availableWidth / graphContentRatio + graphMargin * 2
+  graphHeight.value = `${height}px`
+}
+
+function normalizeGraphMargin (): number {
+  const margin = Number(props.margin)
+  if (Number.isFinite(margin) === false || margin < 0) {
+    return 0
+  }
+  return margin
+}
+
+function waitForGraphPaint (): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve())
+    })
+  })
+}
+
+async function syncGraphLayout (): Promise<void> {
+  await waitForGraphPaint()
+  if (graph !== null) {
+    graphContentRatio = graph.calibrateContentBounds()
+    updateGraphHeight()
+  }
+  await nextTick()
+  if (graph !== null) {
+    graph.onResize()
+  }
+}
+
+onMounted(async () => {
+  const stationGraph = new StationGraph({
+    containerId,
+    viewportPadding: normalizeGraphMargin(),
+    onAfterRefresh: () => {
+      void syncGraphLayout()
+    },
+  })
+  graph = stationGraph
+  stationGraph.mount()
   window.addEventListener('resize', handleResize)
+  try {
+    await stationGraph.refresh()
+  } catch (error) {
+    console.error('[StationGraph] refresh error:', error)
+  }
+  await syncGraphLayout()
+  if (graph === stationGraph) {
+    stationGraph.startPolling(10_000)
+  }
 })
+
+watch(
+  () => props.margin,
+  () => {
+    const graphMargin = normalizeGraphMargin()
+    if (graph !== null) {
+      graph.setViewportPadding(graphMargin)
+    }
+    updateGraphHeight()
+    void nextTick(() => {
+      if (graph !== null) {
+        graph.onResize()
+      }
+    })
+  },
+)
 
 onActivated(() => { graph?.startPolling(10_000) })
 onDeactivated(() => { graph?.stopPolling() })
@@ -42,5 +133,6 @@ onBeforeUnmount(() => {
   background: linear-gradient(180deg, #f6f9ff 0%, #eef3fb 100%);
   border-radius: 8px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 </style>

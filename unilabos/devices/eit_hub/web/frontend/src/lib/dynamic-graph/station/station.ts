@@ -28,6 +28,13 @@ import SyncManager from '../tray/SyncManager'
 
 Zrender.registerPainter('canvas', CanvasPainter)
 
+interface GraphBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 const StationMap: Record<string, StationData> = {
   NTU: {
     raw: HAGONGDA
@@ -53,9 +60,14 @@ class Station {
   station_cache: Record<string, any>;
   powder_amount_slot?: Zrender.TSpan;
   stationModel: string
+  private fitBounds: GraphBounds = { x: 0, y: 0, width: 1, height: 1 };
+  private currentScale = 1;
+  private currentPosition: [number, number] = [0, 0];
+  private viewportPadding: number;
   private setResourceDebounced: ((resource: any[]) => void) | null = null;
 
-  constructor (stationModel?: string, raw?: string) {
+  constructor (stationModel?: string, raw?: string, viewportPadding: number = 24) {
+    this.viewportPadding = Station.normalizeViewportPadding(viewportPadding)
     const _params = window?.webb?.store?.get?.('params') || {}
     const _container = _params.$view || ''
     if (StationMap[_container]?.mut) {
@@ -167,6 +179,7 @@ class Station {
     zr.add(this.res!.root)
     this.trays_group = new Zrender.Group()
     zr.add(this.trays_group)
+    this.fitBounds = this.measureFitBounds()
     this.zr.on('click', (a: any) => {
       if (typeof a.topTarget !== 'undefined') {
         let tar = a.topTarget
@@ -187,21 +200,25 @@ class Station {
   }
 
   onResize (): void {
-    if (!this.zr || !this.res) return
+    if (this.zr === undefined || this.res === undefined) {
+      return
+    }
     this.zr?.resize?.()
 
     const width = this.zr?.getWidth?.() || 1
     const height = this.zr?.getHeight?.() || 1
-    const rwidth = (this.res?.width || 1)
-    const rheight = (this.res?.height || 1)
+    const availableWidth = Math.max(width - this.viewportPadding * 2, 1)
+    const availableHeight = Math.max(height - this.viewportPadding * 2, 1)
 
-    const scale_x = width / rwidth
-    const scale_y = height / rheight
+    const scale_x = availableWidth / this.fitBounds.width
+    const scale_y = availableHeight / this.fitBounds.height
     const scale = Math.min(scale_x, scale_y)
 
-    const centerX = (width - rwidth * scale) / 2
-    const centerY = (height - rheight * scale) / 2
+    const centerX = (width - this.fitBounds.width * scale) / 2 - this.fitBounds.x * scale
+    const centerY = (height - this.fitBounds.height * scale) / 2 - this.fitBounds.y * scale
 
+    this.currentScale = scale
+    this.currentPosition = [centerX, centerY]
     this.res?.root?.setScale?.([scale, scale])
     this.res?.root?.setPosition?.([centerX, centerY])
     this.res?.root?.dirty?.()
@@ -209,6 +226,23 @@ class Station {
     this.trays_group?.setPosition?.([centerX, centerY])
     this.trays_group?.dirty?.()
     this.zr?.flush?.()
+  }
+
+  getContentAspectRatio (): number {
+    return this.fitBounds.width / this.fitBounds.height
+  }
+
+  setViewportPadding (viewportPadding: number): void {
+    this.viewportPadding = Station.normalizeViewportPadding(viewportPadding)
+  }
+
+  updateFitBoundsFromViewport (bounds: GraphBounds): void {
+    this.fitBounds = {
+      x: (bounds.x - this.currentPosition[0]) / this.currentScale,
+      y: (bounds.y - this.currentPosition[1]) / this.currentScale,
+      width: bounds.width / this.currentScale,
+      height: bounds.height / this.currentScale
+    }
   }
 
   getSlot (layout_code: string): TraySlot {
@@ -311,6 +345,23 @@ class Station {
 
     // 只注册全局渲染任务
     SyncManager.addStationTask(this, 0)
+  }
+
+  private measureFitBounds (): GraphBounds {
+    const rect = this.res!.root.getBoundingRect()
+    return {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height
+    }
+  }
+
+  private static normalizeViewportPadding (viewportPadding: number): number {
+    if (Number.isFinite(viewportPadding) === false || viewportPadding < 0) {
+      return 0
+    }
+    return viewportPadding
   }
 
   // 修改 setResource 为防抖触发

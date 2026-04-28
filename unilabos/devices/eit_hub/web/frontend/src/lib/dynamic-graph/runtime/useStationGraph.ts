@@ -16,7 +16,16 @@ export interface StationGraphParams {
   containerId: string
   hostname?: string
   pollingIntervalMs?: number
+  viewportPadding?: number
   onClickTray?: (layout_code: string, x: number, y: number) => void
+  onAfterRefresh?: () => void
+}
+
+interface ViewportBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export class StationGraph {
@@ -32,7 +41,7 @@ export class StationGraph {
     this.params = params
     this.module = getModule()
     this.api = createApi(params.hostname || '/synthesis-api')
-    this.station = new this.module.Station('NTU')
+    this.station = new this.module.Station('NTU', undefined, params.viewportPadding)
   }
 
   public mount (): void {
@@ -128,6 +137,9 @@ export class StationGraph {
       busy = true
       try {
         await this.refresh()
+        if (typeof this.params.onAfterRefresh === 'function') {
+          this.params.onAfterRefresh()
+        }
       } catch (err) {
         console.error('[StationGraph] refresh error:', err)
       } finally {
@@ -150,9 +162,73 @@ export class StationGraph {
     this.station?.onResize?.()
   }
 
+  public setViewportPadding (viewportPadding: number): void {
+    this.params.viewportPadding = viewportPadding
+    this.station.setViewportPadding(viewportPadding)
+  }
+
+  public getContentAspectRatio (): number {
+    return this.station.getContentAspectRatio()
+  }
+
+  public calibrateContentBounds (): number {
+    const bounds = this.measureCanvasContentBounds()
+    if (bounds !== null) {
+      this.station.updateFitBoundsFromViewport(bounds)
+    }
+    return this.getContentAspectRatio()
+  }
+
   public destroy (): void {
     this.stopPolling()
     try { this.zr?.dispose?.() } catch (_e) { /* noop */ }
     this.zr = null
+  }
+
+  private measureCanvasContentBounds (): ViewportBounds | null {
+    const dom = document.getElementById(this.params.containerId)
+    if (dom === null) {
+      return null
+    }
+    const canvas = dom.querySelector('canvas')
+    if (canvas instanceof HTMLCanvasElement === false) {
+      return null
+    }
+    const rect = canvas.getBoundingClientRect()
+    const context = canvas.getContext('2d')
+    if (context === null) {
+      return null
+    }
+
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height).data
+    let minX = canvas.width
+    let minY = canvas.height
+    let maxX = -1
+    let maxY = -1
+
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const index = (y * canvas.width + x) * 4
+        if (imageData[index + 3] > 0) {
+          minX = Math.min(minX, x)
+          minY = Math.min(minY, y)
+          maxX = Math.max(maxX, x)
+          maxY = Math.max(maxY, y)
+        }
+      }
+    }
+
+    if (maxX < minX || maxY < minY) {
+      return null
+    }
+
+    const scaleX = rect.width / canvas.width
+    const scaleY = rect.height / canvas.height
+    return {
+      x: minX * scaleX,
+      y: minY * scaleY,
+      width: (maxX - minX + 1) * scaleX,
+      height: (maxY - minY + 1) * scaleY
+    }
   }
 }
