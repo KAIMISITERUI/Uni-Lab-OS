@@ -289,3 +289,54 @@ export async function stopSynthesisWorkflow(workflowId: string): Promise<Workflo
   const { data } = await http.post<WorkflowState>(`/api/synthesis/workflow/${workflowId}/stop`)
   return data
 }
+
+// 录入资源相关接口, 通过 /synthesis-api/api/* 反代到 eit_synthesis_station 设备 PC
+// 字段命名与请求体形状与 web_code (dynamic-api/resource.ts) 完全一致, 不做改写
+
+export interface InTrayResource {
+  layout_code: string
+  resource_type: string
+  substance: string
+  unit?: string
+  amount?: number
+  initial_volume?: number
+  initial_weight?: number
+  with_cap?: boolean
+  with_magneton?: boolean
+  color?: string
+  material_batch_number?: string
+  QR_code?: string
+  chemical_id?: string
+  [key: string]: unknown
+}
+
+export interface InTrayPayload {
+  tray_QR_code: string
+  resource_list: InTrayResource[]
+}
+
+export interface BatchInTrayItem {
+  tray_layout_code: string
+  resource_list: InTrayResource[]
+  [key: string]: unknown
+}
+
+export interface BatchInTrayPayload {
+  resource_req_list: BatchInTrayItem[]
+  remark?: string
+}
+
+export async function inTray(payload: InTrayPayload): Promise<Record<string, unknown>> {
+  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/InTray', payload)
+  return data
+}
+
+export async function batchInTray(payload: BatchInTrayPayload): Promise<Record<string, unknown>> {
+  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/BatchInTray', payload)
+  return data
+}
+
+export async function getResourceInfo(filters: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/GetResourceInfo', filters)
+  return data
+}

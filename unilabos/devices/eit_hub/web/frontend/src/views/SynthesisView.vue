@@ -18,6 +18,7 @@ import { getErrorMessage } from '../api/http'
 import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
 import StructurePreview from '../components/StructurePreview.vue'
 import NTUStationGraph from '../components/NTUStationGraph.vue'
+import ResourcePanel from '../components/synthesis/ResourcePanel/ResourcePanel.vue'
 
 interface ReagentOccurrence {
   amount: string
@@ -72,6 +73,27 @@ const reagentChemicalMap = ref<Record<string, ChemicalRow | null | undefined>>({
 const reagentDetailVisible = ref(false)
 const reagentDetailChemical = ref<ChemicalRow | null>(null)
 const w1SelectedPosition = ref('W-1-1')
+// 录入资源右侧面板与主 3D 视图引用, 用于右键联动和录入后的强制刷新
+const resourcePanelRef = ref<InstanceType<typeof ResourcePanel> | null>(null)
+const stationGraphRef = ref<InstanceType<typeof NTUStationGraph> | null>(null)
+
+// 主 3D 视图右键命中槽位时, 携带 layout_code 打开录入对话框
+function onSlotContextMenu (layoutCode: string, _x: number, _y: number): void {
+  if (resourcePanelRef.value !== null) {
+    resourcePanelRef.value.openDialog(layoutCode)
+  }
+}
+
+// 录入成功后强制刷新主 3D 视图, 同步显示新增试管
+async function onResourceMutationSuccess (): Promise<void> {
+  if (stationGraphRef.value !== null) {
+    try {
+      await stationGraphRef.value.refresh()
+    } catch (err) {
+      console.error('[SynthesisView] graph refresh after mutation failed:', err)
+    }
+  }
+}
 let dashboardTimer: number | undefined
 let actionRefreshTimer: number | undefined
 
@@ -713,8 +735,17 @@ onBeforeUnmount(stopDashboardPolling)
                   </div>
                 </div>
               </div>
-              <div class="resource-group">
-                <NTUStationGraph :margin="50"/>
+              <div class="resource-group station-with-panel">
+                <div class="station-graph-wrap">
+                  <NTUStationGraph
+                    ref="stationGraphRef"
+                    :margin="50"
+                    :on-context-menu-tray="onSlotContextMenu"
+                  />
+                </div>
+                <div class="station-side-panel">
+                  <ResourcePanel ref="resourcePanelRef" @success="onResourceMutationSuccess" />
+                </div>
               </div>
               <div class="resource-group">
                 <div class="table-wrap">
@@ -903,6 +934,23 @@ onBeforeUnmount(stopDashboardPolling)
 .resource-group {
   display: grid;
   min-width: 0;
+}
+
+.station-with-panel {
+  grid-template-columns: 1fr 320px;
+  gap: 12px;
+  align-items: start;
+}
+
+.station-graph-wrap {
+  min-width: 0;
+  width: 100%;
+}
+
+.station-side-panel {
+  width: 320px;
+  position: sticky;
+  top: 16px;
 }
 
 .consumable-card-grid {
