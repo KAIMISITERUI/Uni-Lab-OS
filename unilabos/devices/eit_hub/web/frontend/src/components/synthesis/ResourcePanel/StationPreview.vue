@@ -469,8 +469,10 @@ onBeforeUnmount(() => {
 .graph-wrap {
   flex: 1 1 auto;
   min-height: 0;
-  background: linear-gradient(180deg, #f6f9ff 0%, #eef3fb 100%);
+  background: #fff;
+  border: 1px solid #dce5f0;
   border-radius: 6px;
+  box-sizing: border-box;
   overflow: hidden;
   position: relative;
 }

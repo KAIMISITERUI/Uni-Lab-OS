@@ -455,7 +455,7 @@ function onCancel (): void {
 }
 .dialog-body {
   height: 78vh;
-  background: #f5f7fb;
+  background: #fff;
   padding: 8px;
   border-radius: 6px;
   overflow: hidden;

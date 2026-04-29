@@ -216,7 +216,7 @@ function scheduleResizeSync (): void {
 .ntu-station-graph {
   width: 100%;
   height: 720px;
-  background: linear-gradient(180deg, #f6f9ff 0%, #eef3fb 100%);
+  background: #fff;
   border-radius: 8px;
   box-sizing: border-box;
   overflow: hidden;

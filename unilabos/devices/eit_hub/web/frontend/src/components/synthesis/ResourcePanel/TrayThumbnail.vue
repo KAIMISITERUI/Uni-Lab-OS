@@ -231,7 +231,7 @@ onBeforeUnmount(() => {
   /* 与下方下拉框/输入框对齐 (撑满 SlotConfigCard 左列宽度), 高度保持视觉占位 */
   width: 100%;
   height: 160px;
-  background: #f6f9ff;
+  background: #fff;
   border-radius: 6px;
   position: relative;
   overflow: hidden;
