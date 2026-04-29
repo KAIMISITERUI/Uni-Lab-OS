@@ -69,6 +69,7 @@ _VISIBLE_SEARCH_COLUMNS = (
     "molecular_weight",
     "brand",
     "package_size",
+    "extra_json",
 )
 
 
@@ -352,6 +353,8 @@ class ChemicalDB:
             ValidationError: 触发唯一性约束, 例如改名为已有 substance.
         """
         values = self._prepare_insert_values(updates)
+        if "extra_json" in values:
+            values["extra_json"] = self._merge_extra_json(row_id, values["extra_json"])
         values["updated_at"] = "datetime('now')"
         set_parts = []
         params = []
@@ -372,6 +375,38 @@ class ChemicalDB:
             ) from exc
         self._conn.commit()
         return cursor.rowcount > 0
+
+    def _merge_extra_json(self, row_id: int, incoming_extra_json: str) -> str:
+        """
+        功能:
+            将本次更新的 extra_json 与行内已有 extra_json 合并, 避免刷新单组扩展字段时丢失其他扩展字段.
+        参数:
+            row_id: int, 行 id.
+            incoming_extra_json: str, 本次更新生成的 extra_json 字符串.
+        返回:
+            str, 合并后的 extra_json 字符串.
+        """
+        merged: Dict[str, Any] = {}
+        cursor = self._conn.execute("SELECT extra_json FROM chemicals WHERE id = ?", (row_id,))
+        row = cursor.fetchone()
+        if row is not None:
+            existing_extra_json = row["extra_json"]
+            if existing_extra_json is not None and str(existing_extra_json).strip() != "":
+                try:
+                    existing = json.loads(existing_extra_json)
+                    if isinstance(existing, dict) is True:
+                        merged.update(existing)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("已有 extra_json 无法解析, 将以本次更新为准: row_id=%s", row_id)
+
+        try:
+            incoming = json.loads(incoming_extra_json)
+            if isinstance(incoming, dict) is True:
+                merged.update(incoming)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("本次 extra_json 无法解析, 保留已有扩展字段: row_id=%s", row_id)
+
+        return json.dumps(merged, ensure_ascii=False)
 
     def delete_row(self, row_id: int) -> bool:
         """

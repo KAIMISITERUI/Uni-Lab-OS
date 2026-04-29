@@ -35,6 +35,15 @@ class ChemicalIn(BaseModel):
     active_content: Optional[str] = None
     smiles: Optional[str] = None
     chemicalbook_record_path: Optional[str] = None
+    hazard_signal: Optional[str] = None
+    hazard_pictograms: Optional[List[str]] = None
+    hazard_statements: Optional[List[Dict[str, Any]]] = None
+    precautionary_codes: Optional[List[str]] = None
+    hazard_source: Optional[str] = None
+    hazard_source_cid: Optional[int] = None
+    hazard_source_url: Optional[str] = None
+    hazard_updated_at: Optional[str] = None
+    hazard_echa_summary: Optional[List[str]] = None
 
 
 class ChemicalOut(BaseModel):
@@ -62,6 +71,15 @@ class ChemicalOut(BaseModel):
     package_size: Optional[str] = None
     other_name: Optional[str] = None
     chemicalbook_record_path: Optional[str] = None
+    hazard_signal: Optional[str] = None
+    hazard_pictograms: Optional[List[str]] = None
+    hazard_statements: Optional[List[Dict[str, Any]]] = None
+    precautionary_codes: Optional[List[str]] = None
+    hazard_source: Optional[str] = None
+    hazard_source_cid: Optional[int] = None
+    hazard_source_url: Optional[str] = None
+    hazard_updated_at: Optional[str] = None
+    hazard_echa_summary: Optional[List[str]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

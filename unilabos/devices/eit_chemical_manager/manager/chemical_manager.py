@@ -188,11 +188,115 @@ class ChemicalManager:
         if chemicalbook_record_path != "":
             row_data["chemicalbook_record_path"] = chemicalbook_record_path
 
+        hazard_fields = self._fetch_hazard_fields_for_row_data(
+            row_data=row_data,
+            original_query=normalized_query,
+            original_query_type=query_type,
+        )
+        if len(hazard_fields) > 0:
+            row_data.update(hazard_fields)
+
         return {
             "row_data": row_data,
             "chemicalbook_status": chemicalbook_status,
             "chemicalbook_record_path": chemicalbook_record_path,
         }
+
+    def refresh_hazard_for_row(self, row_id: int) -> Optional[Dict[str, Any]]:
+        """
+        功能:
+            按当前化学品行的 CAS, SMILES 或英文名刷新 PubChem GHS 危害字段.
+            刷新结果写入 extra_json, 主表结构不变.
+        参数:
+            row_id: int, 化学品行 id.
+        返回:
+            Optional[Dict[str, Any]], 刷新后的化学品行. 行不存在时返回 None.
+        """
+        row = self._db.get_by_id(row_id)
+        if row is None:
+            return None
+
+        hazard_fields = self._fetch_hazard_fields_for_row_data(row_data=row)
+        if len(hazard_fields) > 0:
+            self._db.update_row(row_id, hazard_fields)
+            logger.info("已刷新化学品危害信息: id=%s, source_cid=%s", row_id, hazard_fields.get("hazard_source_cid"))
+        else:
+            logger.info("未检索到化学品危害信息: id=%s", row_id)
+
+        return self._db.get_by_id(row_id)
+
+    def _fetch_hazard_fields_for_row_data(
+        self,
+        row_data: Dict[str, Any],
+        *,
+        original_query: str = "",
+        original_query_type: str = "",
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            根据行数据选择最可靠的 PubChem 查询标识, 并获取 GHS 危害字段.
+        参数:
+            row_data: Dict[str, Any], 化学品行数据.
+            original_query: str, 在线查询时用户输入的原始查询.
+            original_query_type: str, 在线查询时用户选择的查询类型.
+        返回:
+            Dict[str, Any], PubChem GHS 危害字段. 未检索到时返回空字典.
+        """
+        from ..driver.pubchem_ghs import lookup_pubchem_ghs
+
+        identifier, query_type = self._select_hazard_identifier(
+            row_data=row_data,
+            original_query=original_query,
+            original_query_type=original_query_type,
+        )
+        if identifier == "":
+            return {}
+
+        try:
+            return lookup_pubchem_ghs(
+                identifier,
+                query_type,
+                timeout=self._settings.request_timeout_s,
+            )
+        except Exception as exc:
+            logger.warning("PubChem GHS 危害信息查询异常: identifier=%s, type=%s, err=%s", identifier, query_type, exc)
+            return {}
+
+    @staticmethod
+    def _select_hazard_identifier(
+        row_data: Dict[str, Any],
+        *,
+        original_query: str = "",
+        original_query_type: str = "",
+    ) -> Tuple[str, str]:
+        """
+        功能:
+            为 PubChem GHS 查询选择标识符. 优先级为 CAS, SMILES, 英文名, 原始查询.
+        参数:
+            row_data: Dict[str, Any], 化学品行数据.
+            original_query: str, 在线查询时用户输入的原始查询.
+            original_query_type: str, 在线查询时用户选择的查询类型.
+        返回:
+            Tuple[str, str], (查询值, 查询类型). 无可用值时返回 ("", "").
+        """
+        cas_number = str(row_data.get("cas_number") or "").strip()
+        if cas_number != "":
+            return cas_number, "cas"
+
+        smiles = str(row_data.get("smiles") or "").strip()
+        if smiles != "":
+            return smiles, "smiles"
+
+        english_name = str(row_data.get("substance_english_name") or "").strip()
+        if english_name != "":
+            return english_name, "name"
+
+        query_text = str(original_query or "").strip()
+        query_type = str(original_query_type or "").strip()
+        if query_text != "" and query_type in {"cas", "name", "smiles"}:
+            return query_text, query_type
+
+        return "", ""
 
     def lookup_and_append(
         self,

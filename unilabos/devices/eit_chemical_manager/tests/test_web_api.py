@@ -111,6 +111,96 @@ def test_create_get_update_delete(client: TestClient, manager: ChemicalManager) 
     assert r.status_code == 404
 
 
+def test_create_returns_hazard_extra_fields(client: TestClient) -> None:
+    """功能: 危害字段通过 extra_json 写入并在 API 中展开返回."""
+    response = client.post(
+        "/api/chemicals",
+        json=_new_chem(
+            substance="苯",
+            cas_number="71-43-2",
+            hazard_signal="Danger",
+            hazard_pictograms=["GHS02", "GHS07", "GHS08"],
+            hazard_statements=[
+                {
+                    "code": "H350",
+                    "statement": "May cause cancer",
+                    "category": "Danger Carcinogenicity",
+                    "ratio": "100%",
+                    "raw": "H350 (100%): May cause cancer [Danger Carcinogenicity]",
+                },
+            ],
+            precautionary_codes=["P203", "P280"],
+            hazard_source="PubChem PUG-View",
+            hazard_source_cid=241,
+            hazard_source_url="https://pubchem.ncbi.nlm.nih.gov/compound/241#section=GHS-Classification",
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["hazard_signal"] == "Danger"
+    assert body["hazard_pictograms"] == ["GHS02", "GHS07", "GHS08"]
+    assert body["hazard_statements"][0]["code"] == "H350"
+    assert body["hazard_source_cid"] == 241
+
+    search_response = client.get("/api/chemicals", params={"q": "H350"})
+    assert search_response.status_code == 200
+    assert search_response.json()["total"] == 1
+    assert search_response.json()["items"][0]["substance"] == "苯"
+
+
+def test_refresh_hazard_endpoint_updates_extra_fields(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """功能: 刷新危害信息接口按行内 CAS 查询 PubChem GHS 并写回扩展字段."""
+    create_response = client.post(
+        "/api/chemicals",
+        json=_new_chem(substance="苯", cas_number="71-43-2"),
+    )
+    assert create_response.status_code == 201
+    row_id = create_response.json()["id"]
+    captured: Dict[str, Any] = {}
+
+    def fake_lookup(query: str, query_type: str, *, timeout: float) -> Dict[str, Any]:
+        captured["query"] = query
+        captured["query_type"] = query_type
+        captured["timeout"] = timeout
+        return {
+            "hazard_signal": "Danger",
+            "hazard_pictograms": ["GHS08"],
+            "hazard_statements": [
+                {
+                    "code": "H350",
+                    "statement": "May cause cancer",
+                    "category": "Danger Carcinogenicity",
+                    "ratio": "100%",
+                    "raw": "H350 (100%): May cause cancer [Danger Carcinogenicity]",
+                },
+            ],
+            "precautionary_codes": ["P203"],
+            "hazard_source": "PubChem PUG-View",
+            "hazard_source_cid": 241,
+            "hazard_source_url": "https://pubchem.ncbi.nlm.nih.gov/compound/241#section=GHS-Classification",
+            "hazard_updated_at": "2026-04-29T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(
+        "unilabos.devices.eit_chemical_manager.driver.pubchem_ghs.lookup_pubchem_ghs",
+        fake_lookup,
+    )
+
+    response = client.post(f"/api/chemicals/{row_id}/refresh-hazard")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert captured["query"] == "71-43-2"
+    assert captured["query_type"] == "cas"
+    assert body["hazard_signal"] == "Danger"
+    assert body["hazard_pictograms"] == ["GHS08"]
+    assert body["hazard_statements"][0]["code"] == "H350"
+
+
 def test_create_substance_conflict_returns_409(client: TestClient) -> None:
     """功能: 重复 substance 写入触发 UNIQUE 约束 → 409."""
     r1 = client.post("/api/chemicals", json=_new_chem())

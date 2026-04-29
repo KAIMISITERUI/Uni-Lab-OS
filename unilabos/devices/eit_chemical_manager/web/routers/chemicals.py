@@ -152,6 +152,29 @@ def get_chemical(
     return ChemicalOut(**row)
 
 
+@router.post("/{row_id}/refresh-hazard", response_model=ChemicalOut)
+def refresh_chemical_hazard(
+    row_id: int,
+    manager: ChemicalManager = Depends(get_manager),
+) -> ChemicalOut:
+    """
+    功能:
+        按当前化学品标识刷新 PubChem GHS 危害信息.
+    参数:
+        row_id: int, 化学品行 id.
+        manager: ChemicalManager, 化学品管理器.
+    返回:
+        ChemicalOut, 刷新后的化学品记录.
+    """
+    row = manager.refresh_hazard_for_row(row_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"未找到化学品 id={row_id}",
+        )
+    return ChemicalOut(**row)
+
+
 @router.post(
     "",
     response_model=ChemicalOut,
