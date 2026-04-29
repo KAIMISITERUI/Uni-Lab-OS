@@ -48,6 +48,11 @@ const drafts = reactive<Record<string, MaintenanceDraft>>({})
 const settingsDialogVisible = ref(false)
 const eventDialogVisible = ref(false)
 const activatedOnce = ref(false)
+const maintenancePageSize = 10
+const duePage = ref(1)
+const overduePage = ref(1)
+const recordsPage = ref(1)
+const eventsPage = ref(1)
 
 const recordRange = reactive({
   start_date: toDateText(addDays(new Date(), -7)),
@@ -67,6 +72,10 @@ const eventForm = reactive<MaintenanceEventForm>({
 const dueItems = computed(() => overview.value?.due_items ?? [])
 const overdueItems = computed(() => overview.value?.overdue_items ?? [])
 const allReminderItems = computed(() => [...dueItems.value, ...overdueItems.value])
+const pagedDueItems = computed(() => paginateItems(dueItems.value, duePage.value))
+const pagedOverdueItems = computed(() => paginateItems(overdueItems.value, overduePage.value))
+const pagedRecords = computed(() => paginateItems(records.value, recordsPage.value))
+const pagedEvents = computed(() => paginateItems(events.value, eventsPage.value))
 const stats = computed(() => overview.value?.stats ?? {
   due_count: 0,
   pending_count: 0,
@@ -83,6 +92,15 @@ const eventDialogTitle = computed(() => {
   return '编辑运维事件'
 })
 
+function paginateItems<T>(items: T[], page: number): T[] {
+  const startIndex = (page - 1) * maintenancePageSize
+  return items.slice(startIndex, startIndex + maintenancePageSize)
+}
+
+function recordDisplayIndex(rowIndex: number): number {
+  return (recordsPage.value - 1) * maintenancePageSize + rowIndex + 1
+}
+
 async function loadAll(): Promise<void> {
   await Promise.all([loadOverview(), loadEvents(), loadRecords()])
 }
@@ -91,6 +109,8 @@ async function loadOverview(): Promise<void> {
   loadingOverview.value = true
   try {
     overview.value = await fetchMaintenanceOverview(selectedDate.value)
+    duePage.value = 1
+    overduePage.value = 1
     syncDrafts()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
@@ -104,6 +124,7 @@ async function loadEvents(): Promise<void> {
   try {
     const response = await fetchMaintenanceEvents()
     events.value = response.events
+    eventsPage.value = 1
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -116,6 +137,7 @@ async function loadRecords(): Promise<void> {
   try {
     const response = await fetchMaintenanceRecords(recordRange.start_date, recordRange.end_date)
     records.value = response.records
+    recordsPage.value = 1
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -437,7 +459,7 @@ onActivated(() => {
       <el-tabs v-model="activeReminderTab" class="maintenance-tabs">
         <el-tab-pane label="当日待办" name="today">
           <div class="table-wrap">
-            <el-table :data="dueItems" :row-key="rowKey" v-loading="loadingOverview">
+            <el-table :data="pagedDueItems" :row-key="rowKey" v-loading="loadingOverview">
               <el-table-column label="编号" width="80">
                 <template #default="{ row }">{{ displayNumber(row.title) }}</template>
               </el-table-column>
@@ -469,11 +491,19 @@ onActivated(() => {
                 </template>
               </el-table-column>
             </el-table>
+            <el-pagination
+              v-if="dueItems.length > maintenancePageSize"
+              v-model:current-page="duePage"
+              class="maintenance-pagination"
+              :page-size="maintenancePageSize"
+              :total="dueItems.length"
+              layout="total, prev, pager, next"
+            />
           </div>
         </el-tab-pane>
         <el-tab-pane label="逾期提醒" name="overdue">
           <div class="table-wrap">
-            <el-table :data="overdueItems" :row-key="rowKey" v-loading="loadingOverview">
+            <el-table :data="pagedOverdueItems" :row-key="rowKey" v-loading="loadingOverview">
               <el-table-column label="编号" width="80">
                 <template #default="{ row }">{{ displayNumber(row.title) }}</template>
               </el-table-column>
@@ -505,6 +535,14 @@ onActivated(() => {
                 </template>
               </el-table-column>
             </el-table>
+            <el-pagination
+              v-if="overdueItems.length > maintenancePageSize"
+              v-model:current-page="overduePage"
+              class="maintenance-pagination"
+              :page-size="maintenancePageSize"
+              :total="overdueItems.length"
+              layout="total, prev, pager, next"
+            />
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -542,9 +580,9 @@ onActivated(() => {
         </div>
       </div>
       <div class="table-wrap">
-        <el-table :data="records" v-loading="loadingRecords" row-key="record_id">
+        <el-table :data="pagedRecords" v-loading="loadingRecords" row-key="record_id">
           <el-table-column label="编号" width="80">
-            <template #default="{ row }">{{ displayNumber(row.title_snapshot) }}</template>
+            <template #default="{ $index }">{{ recordDisplayIndex($index) }}</template>
           </el-table-column>
           <el-table-column prop="due_date" label="到期日期" width="120" />
           <el-table-column prop="station_snapshot" label="工站" width="140" />
@@ -557,6 +595,14 @@ onActivated(() => {
             <template #default="{ row }">{{ formatDateTime(row.completed_at) }}</template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="records.length > maintenancePageSize"
+          v-model:current-page="recordsPage"
+          class="maintenance-pagination"
+          :page-size="maintenancePageSize"
+          :total="records.length"
+          layout="total, prev, pager, next"
+        />
       </div>
     </section>
 
@@ -566,7 +612,7 @@ onActivated(() => {
         <el-button type="primary" :icon="Plus" @click="openCreateEventDialog">新增事件</el-button>
       </div>
       <div class="table-wrap">
-        <el-table :data="events" v-loading="loadingEvents" row-key="id">
+        <el-table :data="pagedEvents" v-loading="loadingEvents" row-key="id">
           <el-table-column label="编号" width="80">
             <template #default="{ row }">{{ displayNumber(row.title) }}</template>
           </el-table-column>
@@ -592,6 +638,14 @@ onActivated(() => {
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="events.length > maintenancePageSize"
+          v-model:current-page="eventsPage"
+          class="maintenance-pagination"
+          :page-size="maintenancePageSize"
+          :total="events.length"
+          layout="total, prev, pager, next"
+        />
       </div>
     </el-dialog>
 
@@ -673,6 +727,12 @@ onActivated(() => {
   border-top: 1px solid #dce5f0;
 }
 
+.maintenance-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .maintenance-complete-checkbox {
   display: inline-flex;
   align-items: center;
@@ -707,6 +767,10 @@ onActivated(() => {
   .maintenance-settings-head {
     justify-content: flex-start;
     width: 100%;
+  }
+
+  .maintenance-pagination {
+    justify-content: flex-start;
   }
 }
 
