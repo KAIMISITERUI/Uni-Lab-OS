@@ -85,6 +85,7 @@ class BaseTray {
   zr: ZRenderType | undefined;
   alone_group: Zrender.Group | undefined;
   layout_code?: string | undefined
+  trayDirection?: string | undefined
 
   config: TrayConfig;
   capType?: number
@@ -459,6 +460,7 @@ class BaseTray {
 
   create (tndir: string, zr: Zrender.Group): void {
     try {
+      this.trayDirection = tndir
       // 修正：始终用缓存的 DOM 重新 parseSVG，避免对象树复用导致渲染异常
       const cacheKey = `${this.model}_${this.children_count}_${tndir}`
       const dom = BaseTray.svgDomCache[cacheKey] ? BaseTray.svgDomCache[cacheKey].cloneNode(true) : this.cache_obj[`${tndir}_dom`]
@@ -528,6 +530,99 @@ class BaseTray {
       })
     } catch (e) {
       console.warn('applyUsedInnerShadow error', e)
+    }
+  }
+
+  private getMagnetonNodeCenter (node: any): [number, number] | null {
+    const shape = node?.shape
+    if (typeof shape?.cx === 'number' && typeof shape?.cy === 'number') {
+      return [shape.cx, shape.cy]
+    }
+    if (
+      typeof shape?.x === 'number' &&
+      typeof shape?.y === 'number' &&
+      typeof shape?.width === 'number' &&
+      typeof shape?.height === 'number'
+    ) {
+      return [shape.x + shape.width / 2, shape.y + shape.height / 2]
+    }
+    return null
+  }
+
+  private getMagnetonEllipseRotation (): number {
+    if (this.trayDirection === 'tray_right') {
+      return -Math.PI * 2 / 3
+    }
+    if (this.trayDirection === 'tray_left') {
+      return Math.PI * 2 / 3
+    }
+    return 0
+  }
+
+  private applyMagnetonUsedHighlight (els: Zrender.Group[], used: boolean): void {
+    if (this.config?.isMagnetonTray !== true) {
+      return
+    }
+    try {
+      els.forEach((el: any) => {
+        if (!el) {
+          return
+        }
+        const stack: any[] = [el]
+        while (stack.length) {
+          const node = stack.pop()
+          if (node && typeof node.setStyle === 'function') {
+            node.originStyle = node.originStyle || { ...node.style }
+            node.magnetonOriginTransform = node.magnetonOriginTransform || {
+              originX: typeof node.originX === 'number' ? node.originX : 0,
+              originY: typeof node.originY === 'number' ? node.originY : 0,
+              rotation: typeof node.rotation === 'number' ? node.rotation : 0,
+              scaleX: typeof node.scaleX === 'number' ? node.scaleX : 1,
+              scaleY: typeof node.scaleY === 'number' ? node.scaleY : 1
+            }
+            if (used) {
+              const center = this.getMagnetonNodeCenter(node)
+              const baseScaleX = node.magnetonOriginTransform.scaleX || 1
+              const baseScaleY = node.magnetonOriginTransform.scaleY || 1
+              if (center !== null) {
+                node.setOrigin?.(center)
+                node.setScale?.([baseScaleX * 0.95, baseScaleY * 0.42])
+                node.rotation = this.getMagnetonEllipseRotation()
+              }
+              node.setStyle({
+                fill: '#ffffff',
+                stroke: '#d9dee8',
+                lineWidth: 0.6,
+                shadowColor: 'rgba(38,43,62,0.28)',
+                shadowBlur: 2,
+                shadowOffsetX: 0,
+                shadowOffsetY: 1
+              })
+            } else {
+              node.setOrigin?.([
+                node.magnetonOriginTransform.originX,
+                node.magnetonOriginTransform.originY
+              ])
+              node.rotation = node.magnetonOriginTransform.rotation
+              node.setScale?.([
+                node.magnetonOriginTransform.scaleX,
+                node.magnetonOriginTransform.scaleY
+              ])
+              node.style = { ...node.originStyle }
+              node.setStyle({ shadowBlur: 0 })
+            }
+            node.dirty?.()
+          }
+          const children = node?.children?.()
+          if (children && children.length) {
+            for (let i = 0; i < children.length; i++) {
+              stack.push(children[i])
+            }
+          }
+        }
+      })
+    } catch (e) {
+      console.warn('磁子托盘高光渲染失败', e)
     }
   }
 
@@ -622,6 +717,7 @@ class BaseTray {
       syncPart(els, attrWithoutUsed, this.children[n]?.cap_type || this.capType)
       // 直接给元素应用内阴影样式
       this.applyUsedInnerShadow(els, !!attr.used)
+      this.applyMagnetonUsedHighlight(els, !!attr.used)
     }
   }
 

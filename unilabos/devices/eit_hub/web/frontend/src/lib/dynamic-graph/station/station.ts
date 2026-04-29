@@ -35,6 +35,13 @@ interface GraphBounds {
   height: number;
 }
 
+interface SceneBoundsPadding {
+  topRatio?: number;
+  rightRatio?: number;
+  bottomRatio?: number;
+  leftRatio?: number;
+}
+
 const StationMap: Record<string, StationData> = {
   NTU: {
     raw: HAGONGDA
@@ -61,6 +68,7 @@ class Station {
   powder_amount_slot?: Zrender.TSpan;
   stationModel: string
   private fitBounds: GraphBounds = { x: 0, y: 0, width: 1, height: 1 };
+  private baseFitBounds: GraphBounds = { x: 0, y: 0, width: 1, height: 1 };
   private currentScale = 1;
   private currentPosition: [number, number] = [0, 0];
   private viewportPadding: number;
@@ -180,6 +188,7 @@ class Station {
     this.trays_group = new Zrender.Group()
     zr.add(this.trays_group)
     this.fitBounds = this.measureFitBounds()
+    this.baseFitBounds = { ...this.fitBounds }
     this.zr.on('click', (a: any) => {
       if (typeof a.topTarget !== 'undefined') {
         let tar = a.topTarget
@@ -194,6 +203,27 @@ class Station {
           callback.clickTray(tar._layout_code, a.offsetX, a.offsetY)
         }
       }
+    })
+
+    // 右键菜单: 命中槽位时阻止浏览器默认菜单, 通过 contextMenuTray 回调上抛 layout_code
+    this.zr.on('contextmenu', (a: any) => {
+      if (typeof callback.contextMenuTray !== 'function') { return }
+      if (typeof a.topTarget === 'undefined') { return }
+      let tar = a.topTarget
+      while (typeof tar !== 'undefined') {
+        if (typeof tar._layout_code !== 'undefined') {
+          break
+        }
+        tar = tar.parent
+      }
+      if (typeof tar?._layout_code === 'undefined') { return }
+      if (Station.isDisableClick(tar._layout_code)) { return }
+      // zrender 在 v5 上事件对象自身没有 preventDefault, 通过原生 event 拿
+      const native = a.event || a.originalEvent
+      if (native && typeof native.preventDefault === 'function') {
+        native.preventDefault()
+      }
+      callback.contextMenuTray(tar._layout_code, a.offsetX, a.offsetY)
     })
 
     this.onResize()
@@ -236,6 +266,10 @@ class Station {
     this.viewportPadding = Station.normalizeViewportPadding(viewportPadding)
   }
 
+  resetFitBounds (): void {
+    this.fitBounds = { ...this.baseFitBounds }
+  }
+
   updateFitBoundsFromViewport (bounds: GraphBounds): void {
     this.fitBounds = {
       x: (bounds.x - this.currentPosition[0]) / this.currentScale,
@@ -243,6 +277,15 @@ class Station {
       width: bounds.width / this.currentScale,
       height: bounds.height / this.currentScale
     }
+  }
+
+  updateFitBoundsFromVisibleScene (padding?: SceneBoundsPadding): void {
+    const bounds = this.measureVisibleSceneBounds()
+    if (bounds === null) {
+      this.resetFitBounds()
+      return
+    }
+    this.fitBounds = this.expandSceneBounds(bounds, padding)
   }
 
   getSlot (layout_code: string): TraySlot {
@@ -355,6 +398,87 @@ class Station {
       width: rect.width,
       height: rect.height
     }
+  }
+
+  private measureVisibleSceneBounds (): GraphBounds | null {
+    const boundsList = [
+      this.measureDisplayBounds(this.res?.root),
+      this.measureDisplayBounds(this.trays_group)
+    ].filter((bounds): bounds is GraphBounds => bounds !== null)
+
+    if (boundsList.length === 0) {
+      return null
+    }
+
+    return boundsList.reduce((merged, bounds) => this.mergeBounds(merged, bounds))
+  }
+
+  private measureDisplayBounds (node: any): GraphBounds | null {
+    if (node === undefined || node === null) {
+      return null
+    }
+    if (node.ignore === true || node.invisible === true) {
+      return null
+    }
+    if (typeof node.getBoundingRect !== 'function') {
+      return null
+    }
+    const rect = node.getBoundingRect()
+    if (rect === undefined || rect === null) {
+      return null
+    }
+    if (
+      Number.isFinite(rect.x) === false ||
+      Number.isFinite(rect.y) === false ||
+      Number.isFinite(rect.width) === false ||
+      Number.isFinite(rect.height) === false ||
+      rect.width <= 0 ||
+      rect.height <= 0
+    ) {
+      return null
+    }
+    return {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height
+    }
+  }
+
+  private mergeBounds (left: GraphBounds, right: GraphBounds): GraphBounds {
+    const x = Math.min(left.x, right.x)
+    const y = Math.min(left.y, right.y)
+    const maxX = Math.max(left.x + left.width, right.x + right.width)
+    const maxY = Math.max(left.y + left.height, right.y + right.height)
+    return {
+      x,
+      y,
+      width: maxX - x,
+      height: maxY - y
+    }
+  }
+
+  private expandSceneBounds (bounds: GraphBounds, padding?: SceneBoundsPadding): GraphBounds {
+    const top = bounds.height * this.normalizeBoundsPaddingRatio(padding?.topRatio)
+    const right = bounds.width * this.normalizeBoundsPaddingRatio(padding?.rightRatio)
+    const bottom = bounds.height * this.normalizeBoundsPaddingRatio(padding?.bottomRatio)
+    const left = bounds.width * this.normalizeBoundsPaddingRatio(padding?.leftRatio)
+    return {
+      x: bounds.x - left,
+      y: bounds.y - top,
+      width: bounds.width + left + right,
+      height: bounds.height + top + bottom
+    }
+  }
+
+  private normalizeBoundsPaddingRatio (value?: number): number {
+    if (typeof value !== 'number') {
+      return 0
+    }
+    if (Number.isFinite(value) === false || value < 0) {
+      return 0
+    }
+    return value
   }
 
   private static normalizeViewportPadding (viewportPadding: number): number {

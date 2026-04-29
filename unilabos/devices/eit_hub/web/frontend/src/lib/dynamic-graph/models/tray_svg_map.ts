@@ -67,6 +67,8 @@ export const NTU: TraySvgType = {
   201000728: { tray_front: _201000728_front, tray_right: _201000728_right },
   201000730: { tray_front: _201000730_front, tray_right: _201000730_right },
   201000731: { tray_front: _201000731_front, tray_right: _201000731_right },
+  // 50μL Tip 头托盘上游无 SVG, 复用 1mL Tip (201000731) 的 SVG, 因两者孔位排布与外观近似
+  201000815: { tray_front: _201000731_front, tray_right: _201000731_right },
   220000023: { tray_front: _220000023_front, tray_right: _220000023_right }
 }
 

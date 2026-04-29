@@ -18,7 +18,11 @@ export interface StationGraphParams {
   pollingIntervalMs?: number
   viewportPadding?: number
   onClickTray?: (layout_code: string, x: number, y: number) => void
+  onContextMenuTray?: (layout_code: string, x: number, y: number) => void
   onAfterRefresh?: () => void
+  resourceLayoutFilter?: (layout_code: string) => boolean
+  preserveFilteredOutResources?: boolean
+  autoSelectOnClick?: boolean
 }
 
 interface ViewportBounds {
@@ -26,6 +30,20 @@ interface ViewportBounds {
   y: number;
   width: number;
   height: number;
+}
+
+interface ViewportBoundsPadding {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+}
+
+interface SceneBoundsPadding {
+  topRatio?: number;
+  rightRatio?: number;
+  bottomRatio?: number;
+  leftRatio?: number;
 }
 
 export class StationGraph {
@@ -47,16 +65,29 @@ export class StationGraph {
   public mount (): void {
     const dom = document.getElementById(this.params.containerId)
     if (!dom) { throw new Error(`Container #${this.params.containerId} not found`) }
+    // 兜底阻止浏览器默认右键菜单, 仅在容器 DOM 上, 不影响其它区域
+    dom.addEventListener('contextmenu', (ev: MouseEvent) => {
+      if (typeof this.params.onContextMenuTray === 'function') {
+        ev.preventDefault()
+      }
+    })
     this.zr = this.module.Zrender.init(dom)
     this.zr.clear?.()
     this.station.create(this.zr, {
       clickTray: (layout_code: string, x: number, y: number) => {
         const slot = this.station.getSlot(layout_code) as TraySlot
-        // 选中态高亮(等距视图绿框)
-        Object.values(this.station.slots).forEach((s: TraySlot) => { if (s.selected) s.setSelected(false) })
-        slot?.setSelected?.(true, '#0dbf75')
+        if (this.params.autoSelectOnClick !== false) {
+          // 选中态高亮(等距视图绿框)
+          Object.values(this.station.slots).forEach((s: TraySlot) => { if (s.selected) s.setSelected(false) })
+          slot?.setSelected?.(true, '#0dbf75')
+        }
         if (typeof this.params.onClickTray === 'function') {
           this.params.onClickTray(layout_code, x, y)
+        }
+      },
+      contextMenuTray: (layout_code: string, x: number, y: number) => {
+        if (typeof this.params.onContextMenuTray === 'function') {
+          this.params.onContextMenuTray(layout_code, x, y)
         }
       }
     })
@@ -68,6 +99,9 @@ export class StationGraph {
     if (this.station.stationModel) {
       resourceList = resourceList.filter(item => !item.station || item.station === this.station.stationModel)
     }
+    if (typeof this.params.resourceLayoutFilter === 'function') {
+      resourceList = resourceList.filter(item => this.params.resourceLayoutFilter?.(item.layout_code) === true)
+    }
     // 仅保留当前 module.TrayMap 中已注册的托盘型号 (BaseTray.checkModel)
     resourceList = resourceList.filter(item => item.resource_type && this.module.BaseTray.checkModel(item.resource_type))
 
@@ -75,6 +109,9 @@ export class StationGraph {
     resourceList.forEach(r => { currentMap[r.layout_code] = r })
 
     Object.keys(this.station.slots).forEach((layout_code: string) => {
+      if (this.shouldPreserveFilteredOutSlot(layout_code) === true) {
+        return
+      }
       const slot = this.station.slots[layout_code] as TraySlot
       const cur = currentMap[layout_code]
       if (cur && slot.hasTray()) {
@@ -102,6 +139,16 @@ export class StationGraph {
 
     // 触发 vessel/cap/magneton 切换 (debounced)
     this.station.setResource(resourceList)
+  }
+
+  private shouldPreserveFilteredOutSlot (layoutCode: string): boolean {
+    if (this.params.preserveFilteredOutResources !== true) {
+      return false
+    }
+    if (typeof this.params.resourceLayoutFilter !== 'function') {
+      return false
+    }
+    return this.params.resourceLayoutFilter(layoutCode) === false
   }
 
   /** 在 slot 上实例化并附着 BaseTray */
@@ -167,12 +214,21 @@ export class StationGraph {
     this.station.setViewportPadding(viewportPadding)
   }
 
+  public resetContentBounds (): void {
+    this.station.resetFitBounds()
+  }
+
+  public fitVisibleScene (padding?: SceneBoundsPadding): number {
+    this.station.updateFitBoundsFromVisibleScene(padding)
+    return this.getContentAspectRatio()
+  }
+
   public getContentAspectRatio (): number {
     return this.station.getContentAspectRatio()
   }
 
-  public calibrateContentBounds (): number {
-    const bounds = this.measureCanvasContentBounds()
+  public calibrateContentBounds (padding?: ViewportBoundsPadding): number {
+    const bounds = this.measureCanvasContentBounds(padding)
     if (bounds !== null) {
       this.station.updateFitBoundsFromViewport(bounds)
     }
@@ -185,7 +241,7 @@ export class StationGraph {
     this.zr = null
   }
 
-  private measureCanvasContentBounds (): ViewportBounds | null {
+  private measureCanvasContentBounds (padding?: ViewportBoundsPadding): ViewportBounds | null {
     const dom = document.getElementById(this.params.containerId)
     if (dom === null) {
       return null
@@ -224,11 +280,31 @@ export class StationGraph {
 
     const scaleX = rect.width / canvas.width
     const scaleY = rect.height / canvas.height
+    const padded = this.normalizeViewportBoundsPadding(padding)
     return {
-      x: minX * scaleX,
-      y: minY * scaleY,
-      width: (maxX - minX + 1) * scaleX,
-      height: (maxY - minY + 1) * scaleY
+      x: minX * scaleX - padded.left,
+      y: minY * scaleY - padded.top,
+      width: (maxX - minX + 1) * scaleX + padded.left + padded.right,
+      height: (maxY - minY + 1) * scaleY + padded.top + padded.bottom
     }
+  }
+
+  private normalizeViewportBoundsPadding (padding?: ViewportBoundsPadding): Required<ViewportBoundsPadding> {
+    return {
+      top: this.normalizePaddingValue(padding?.top),
+      right: this.normalizePaddingValue(padding?.right),
+      bottom: this.normalizePaddingValue(padding?.bottom),
+      left: this.normalizePaddingValue(padding?.left)
+    }
+  }
+
+  private normalizePaddingValue (value?: number): number {
+    if (typeof value !== 'number') {
+      return 0
+    }
+    if (Number.isFinite(value) === false || value < 0) {
+      return 0
+    }
+    return value
   }
 }

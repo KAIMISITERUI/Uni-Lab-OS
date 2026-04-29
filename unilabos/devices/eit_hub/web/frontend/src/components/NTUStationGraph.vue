@@ -19,6 +19,8 @@ import { StationGraph } from '@/lib/dynamic-graph/runtime/useStationGraph'
 
 interface Props {
   margin?: number
+  onClickTray?: (layout_code: string, x: number, y: number) => void
+  onContextMenuTray?: (layout_code: string, x: number, y: number) => void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -29,6 +31,15 @@ const containerId = `ntu-graph-${Math.random().toString(36).slice(2, 9)}`
 const graphHeight = ref('720px')
 let graphContentRatio = 2.08
 let graph: StationGraph | null = null
+
+// 暴露刷新方法供父组件在录入资源后强制同步主 3D 视图
+defineExpose({
+  refresh: async (): Promise<void> => {
+    if (graph !== null) {
+      await graph.refresh()
+    }
+  },
+})
 
 function handleResize (): void {
   updateGraphHeight()
@@ -82,6 +93,16 @@ onMounted(async () => {
   const stationGraph = new StationGraph({
     containerId,
     viewportPadding: normalizeGraphMargin(),
+    onClickTray: (layout_code, x, y) => {
+      if (typeof props.onClickTray === 'function') {
+        props.onClickTray(layout_code, x, y)
+      }
+    },
+    onContextMenuTray: (layout_code, x, y) => {
+      if (typeof props.onContextMenuTray === 'function') {
+        props.onContextMenuTray(layout_code, x, y)
+      }
+    },
     onAfterRefresh: () => {
       void syncGraphLayout()
     },

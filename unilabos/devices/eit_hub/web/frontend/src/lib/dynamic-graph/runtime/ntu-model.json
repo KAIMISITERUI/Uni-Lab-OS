@@ -8930,6 +8930,7 @@
         "create": false,
         "update": false
       },
+      "isMagnetonTray": true,
       "slotInMultipleRows": true,
       "layout": {
         "start": "lb",
