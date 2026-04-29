@@ -18,8 +18,26 @@ export interface ChemicalRow {
   package_size?: string | null
   other_name?: string | null
   chemicalbook_record_path?: string | null
+  hazard_signal?: string | null
+  hazard_pictograms?: string[] | null
+  hazard_statements?: HazardStatement[] | null
+  precautionary_codes?: string[] | null
+  hazard_source?: string | null
+  hazard_source_cid?: number | null
+  hazard_source_url?: string | null
+  hazard_updated_at?: string | null
+  hazard_echa_summary?: string[] | null
   created_at?: string | null
   updated_at?: string | null
+  [key: string]: unknown
+}
+
+export interface HazardStatement {
+  code: string
+  statement?: string | null
+  category?: string | null
+  ratio?: string | null
+  raw?: string | null
   [key: string]: unknown
 }
 
@@ -127,6 +145,11 @@ export async function updateChemical(
   payload: Partial<ChemicalRow>,
 ): Promise<ChemicalRow> {
   const { data } = await http.put<ChemicalRow>(`/api/chemicals/${id}`, payload)
+  return data
+}
+
+export async function refreshChemicalHazard(id: number): Promise<ChemicalRow> {
+  const { data } = await http.post<ChemicalRow>(`/api/chemicals/${id}/refresh-hazard`)
   return data
 }
 

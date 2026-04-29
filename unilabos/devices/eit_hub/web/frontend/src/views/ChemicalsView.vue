@@ -14,6 +14,7 @@ import {
 } from '../api/chemicals'
 import ChemicalEditDialog from '../components/ChemicalEditDialog.vue'
 import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
+import HazardDisplay from '../components/HazardDisplay.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import IntegrityPanel from '../components/IntegrityPanel.vue'
 import StructurePreview from '../components/StructurePreview.vue'
@@ -267,6 +268,16 @@ onActivated(load)
               </template>
             </el-table-column>
             <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
+            <el-table-column label="危害" width="100" align="center" header-align="center">
+              <template #default="{ row }">
+                <HazardDisplay :chemical="row" mode="summary" summary-part="level" />
+              </template>
+            </el-table-column>
+            <el-table-column label="具体内容" width="260" align="center" header-align="center">
+              <template #default="{ row }">
+                <HazardDisplay :chemical="row" mode="summary" summary-part="content" />
+              </template>
+            </el-table-column>
             <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
             <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
             <el-table-column prop="physical_form" label="形态" width="100" align="center" header-align="center" />

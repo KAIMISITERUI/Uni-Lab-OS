@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChemicalRow } from '../api/chemicals'
+import HazardDisplay from './HazardDisplay.vue'
 import StructurePreview from './StructurePreview.vue'
 
 /**
@@ -40,13 +41,13 @@ function onEdit(): void {
   <el-dialog
     :model-value="modelValue"
     :title="chemical ? `化学品详情: ${chemical.substance ?? ''}` : '化学品详情'"
-    width="920px"
+    width="min(1180px, 92vw)"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
     @close="close"
   >
     <div v-if="chemical" class="detail-body">
       <div class="detail-left">
-        <StructurePreview :smiles="chemical.smiles" :width="500" :height="400" />
+        <StructurePreview :smiles="chemical.smiles" :width="600" :height="520" />
       </div>
       <div class="detail-right">
         <el-descriptions :column="1" border size="small">
@@ -94,6 +95,7 @@ function onEdit(): void {
             {{ chemical.other_name ?? '-' }}
           </el-descriptions-item>
         </el-descriptions>
+        <HazardDisplay :chemical="chemical" mode="detail" />
       </div>
     </div>
     <template #footer>
@@ -105,19 +107,38 @@ function onEdit(): void {
 
 <style scoped>
 .detail-body {
-  display: flex;
-  gap: 20px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 600px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
 }
 .detail-left {
-  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
 }
 .detail-right {
-  flex: 1;
   min-width: 0;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .smiles-raw {
   font-family: var(--el-font-family-mono, monospace);
   word-break: break-all;
+}
+
+@media (max-width: 1024px) {
+  .detail-body {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-right {
+    max-height: 420px;
+  }
 }
 </style>

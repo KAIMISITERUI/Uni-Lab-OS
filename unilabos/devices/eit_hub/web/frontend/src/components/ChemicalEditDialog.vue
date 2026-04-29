@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   type ChemicalRow,
   createChemical,
   lookupChemical,
+  refreshChemicalHazard,
   updateChemical,
 } from '../api/chemicals'
+import HazardDisplay from './HazardDisplay.vue'
 import StructurePreview from './StructurePreview.vue'
 
 interface Props {
@@ -22,6 +24,7 @@ const emit = defineEmits<{
 }>()
 
 const submitting = ref(false)
+const refreshingHazard = ref(false)
 
 // 编辑/新增公用的字段集合; 不含 id/created_at/updated_at
 const blankForm = (): Partial<ChemicalRow> => ({
@@ -39,9 +42,19 @@ const blankForm = (): Partial<ChemicalRow> => ({
   active_content: '',
   smiles: '',
   other_name: '',
+  hazard_signal: '',
+  hazard_pictograms: null,
+  hazard_statements: null,
+  precautionary_codes: null,
+  hazard_source: '',
+  hazard_source_cid: null,
+  hazard_source_url: '',
+  hazard_updated_at: '',
+  hazard_echa_summary: null,
 })
 
 const form = reactive<Partial<ChemicalRow>>(blankForm())
+const formHazardRow = computed(() => ({ id: Number(props.row?.id ?? 0), ...form } as ChemicalRow))
 
 // SMILES 预览使用 300ms 防抖, 避免输入过程中每次按键都调用 RDKit 渲染
 const previewSmiles = ref<string>('')
@@ -115,6 +128,21 @@ function toNumberOrNull(val: unknown): number | null {
   return Number.isFinite(num) ? num : null
 }
 
+function copyAllowedFields(source: Record<string, unknown>): void {
+  // 只填充表单声明字段, 避免额外键污染保存 payload
+  const allowed = Object.keys(blankForm())
+  const numericKeys = new Set(['density', 'molecular_weight'])
+  allowed.forEach((key) => {
+    if (!(key in source)) return
+    const value = source[key]
+    if (numericKeys.has(key)) {
+      ;(form as Record<string, unknown>)[key] = toNumberOrNull(value)
+    } else {
+      ;(form as Record<string, unknown>)[key] = value ?? ''
+    }
+  })
+}
+
 async function onLookup() {
   const q = lookupState.queryText.trim()
   if (q === '') {
@@ -128,24 +156,37 @@ async function onLookup() {
       ElMessage.warning(resp.message || '未找到化合物')
       return
     }
-    // 仅保留 form 已声明的字段, 避免 row_data 中的额外键污染保存 payload
-    const allowed = Object.keys(blankForm())
-    const numericKeys = new Set(['density', 'molecular_weight'])
-    allowed.forEach((key) => {
-      if (!(key in resp.row_data!)) return
-      const value = (resp.row_data as Record<string, unknown>)[key]
-      if (numericKeys.has(key)) {
-        ;(form as Record<string, unknown>)[key] = toNumberOrNull(value)
-      } else {
-        ;(form as Record<string, unknown>)[key] = value ?? ''
-      }
-    })
+    copyAllowedFields(resp.row_data as Record<string, unknown>)
     ElMessage.success('已填充查询结果, 请检查后保存')
   } catch (err: unknown) {
     const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
     ElMessage.error(detail || (err as Error).message || '在线查询失败')
   } finally {
     lookupState.loading = false
+  }
+}
+
+async function onRefreshHazard() {
+  if (props.mode !== 'edit' || props.row === null || props.row === undefined || props.row.id === undefined) {
+    ElMessage.warning('请先保存化学品后再刷新危害信息')
+    return
+  }
+
+  refreshingHazard.value = true
+  try {
+    const saved = await refreshChemicalHazard(props.row.id)
+    copyAllowedFields(saved as Record<string, unknown>)
+    const statements = Array.isArray(saved.hazard_statements) ? saved.hazard_statements : []
+    if (statements.length > 0) {
+      ElMessage.success('已刷新危害信息')
+    } else {
+      ElMessage.warning('未检索到危害信息')
+    }
+  } catch (err: unknown) {
+    const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    ElMessage.error(detail || (err as Error).message || '刷新危害信息失败')
+  } finally {
+    refreshingHazard.value = false
   }
 }
 
@@ -268,6 +309,19 @@ async function submit() {
       <el-form-item label="other_name">
         <el-input v-model="form.other_name" />
       </el-form-item>
+      <el-form-item label="安全危害">
+        <div class="hazard-edit-row">
+          <HazardDisplay :chemical="formHazardRow" mode="summary" />
+          <el-button
+            v-if="mode === 'edit'"
+            size="small"
+            :loading="refreshingHazard"
+            @click="onRefreshHazard"
+          >
+            刷新危害信息
+          </el-button>
+        </div>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="close">取消</el-button>
@@ -294,5 +348,12 @@ async function submit() {
 }
 .smiles-preview {
   align-self: flex-start;
+}
+.hazard-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
 }
 </style>
