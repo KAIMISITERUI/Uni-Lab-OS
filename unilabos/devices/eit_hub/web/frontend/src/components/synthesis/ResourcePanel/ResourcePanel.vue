@@ -1,9 +1,9 @@
 <template>
   <!--
     功能:
-      合成页右侧资源管理面板. 当前仅渲染 录入资源 入口按钮, 其它操作 (删除/编辑/移动/清空/刷新/资源详情) 暂不实现.
+      合成页右侧资源管理面板. 渲染 录入资源 / 删除资源 入口按钮.
     事件:
-      success: 录入成功后通知父组件刷新主 3D 视图
+      success: 录入或删除成功后通知父组件刷新主 3D 视图与库存
   -->
   <div class="resource-panel">
     <div class="panel-header">
@@ -11,10 +11,15 @@
     </div>
     <div class="panel-body">
       <el-button type="primary" :icon="iconPlus" @click="openDialog()">录入资源</el-button>
+      <el-button type="danger" :icon="iconDelete" @click="openRemoveDialog()">删除资源</el-button>
     </div>
     <ResourceAddDialog
       v-model:visible="dialogVisible"
       :initial-layout-code="initialLayoutCode"
+      @success="onSuccess"
+    />
+    <ResourceRemoveDialog
+      v-model:visible="removeDialogVisible"
       @success="onSuccess"
     />
   </div>
@@ -22,15 +27,18 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { Delete, Plus } from '@element-plus/icons-vue'
 import ResourceAddDialog from './ResourceAddDialog.vue'
+import ResourceRemoveDialog from './ResourceRemoveDialog.vue'
 
 const emit = defineEmits<{
   (e: 'success'): void
 }>()
 
 const iconPlus = Plus
+const iconDelete = Delete
 const dialogVisible = ref(false)
+const removeDialogVisible = ref(false)
 const initialLayoutCode = ref('')
 
 // 暴露方法供父组件 (例如右键菜单触发) 携带 layout_code 打开对话框
@@ -39,11 +47,15 @@ function openDialog (layoutCode?: string): void {
   dialogVisible.value = true
 }
 
+function openRemoveDialog (): void {
+  removeDialogVisible.value = true
+}
+
 function onSuccess (): void {
   emit('success')
 }
 
-defineExpose({ openDialog })
+defineExpose({ openDialog, openRemoveDialog })
 </script>
 
 <style scoped>

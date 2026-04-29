@@ -336,6 +336,28 @@ export async function batchInTray(payload: BatchInTrayPayload): Promise<Record<s
   return data
 }
 
+// 批量删除资源 (多托盘下料), 与 web_code removeResourceBatch 字段保持一致
+export interface BatchOutTrayItem {
+  layout_code: string
+  resource_type?: string
+}
+
+export interface BatchOutTrayPayload {
+  layout_list: BatchOutTrayItem[]
+  move_type?: string
+  remark?: string
+}
+
+export async function batchOutTray(payload: BatchOutTrayPayload): Promise<Record<string, unknown>> {
+  const body: BatchOutTrayPayload = {
+    layout_list: payload.layout_list,
+    move_type: payload.move_type || 'main_out',
+  }
+  if (payload.remark) { body.remark = payload.remark }
+  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/BatchOutTray', body)
+  return data
+}
+
 export async function getResourceInfo(filters: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/GetResourceInfo', filters)
   return data

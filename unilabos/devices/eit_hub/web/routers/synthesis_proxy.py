@@ -135,3 +135,30 @@ def proxy_batch_in_tray(
         "BatchInTray",
         lambda: manager._client.batch_in_tray(resource_req_list),
     )
+
+
+@router.post("/BatchOutTray")
+def proxy_batch_out_tray(
+    body: Dict[str, Any] = Body(...),
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> Dict[str, Any]:
+    """
+    功能:
+        代理 dynamic-resource 前端的 BatchOutTray 调用 (批量删除资源 / 多托盘下料).
+        透传 layout_list 与 move_type 到设备 /api/BatchOutTray, 与 web_code removeResourceBatch 入参完全一致.
+    参数:
+        body: Dict[str, Any], 必须包含 layout_list 列表, 每项含 layout_code 与可选 resource_type;
+              可选 move_type, 默认 "main_out".
+        manager: SynthesisStationManager, 由 FastAPI 依赖注入.
+    返回:
+        Dict[str, Any], 设备 /api/BatchOutTray 原始 JSON 响应.
+    """
+    layout_list = body.get("layout_list", []) or []
+    if not isinstance(layout_list, list):
+        raise HTTPException(status_code=400, detail="layout_list 必须为数组")
+    move_type = body.get("move_type") or "main_out"
+    return _invoke_with_relogin(
+        manager,
+        "BatchOutTray",
+        lambda: manager._client.batch_out_tray(layout_list, move_type),
+    )

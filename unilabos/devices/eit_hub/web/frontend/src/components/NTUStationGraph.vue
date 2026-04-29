@@ -19,12 +19,16 @@ import { StationGraph } from '@/lib/dynamic-graph/runtime/useStationGraph'
 
 interface Props {
   margin?: number
+  // 是否启用 StationGraph 内部的"点击自动单选"行为 (互斥单选+自动 setSelected/setHighlight)
+  // 默认 true 保持主合成页 SynthesisView 现有行为; 多选场景 (如删除资源对话框) 应传 false 让父组件自行控制选中视觉
+  autoSelectOnClick?: boolean
   onClickTray?: (layout_code: string, x: number, y: number) => void
   onContextMenuTray?: (layout_code: string, x: number, y: number) => void
 }
 
 const props = withDefaults(defineProps<Props>(), {
   margin: 24,
+  autoSelectOnClick: true,
 })
 const containerRef = ref<HTMLDivElement>()
 const containerId = `ntu-graph-${Math.random().toString(36).slice(2, 9)}`
@@ -37,9 +41,13 @@ let resizeFrame: number | null = null
 let layoutTaskId = 0
 
 // 暴露刷新方法供父组件在录入资源后强制同步主 3D 视图
+// getStation 供需要直接操作槽位 (如删除资源对话框中 setHighlight) 的父组件按 layout_code 取 slot
 defineExpose({
   refresh: async (): Promise<void> => {
     await refreshAndSyncLayout(true)
+  },
+  getStation: (): any => {
+    return graph?.station ?? null
   },
 })
 
@@ -131,6 +139,7 @@ onMounted(async () => {
   const stationGraph = new StationGraph({
     containerId,
     viewportPadding: normalizeGraphMargin(),
+    autoSelectOnClick: props.autoSelectOnClick,
     onClickTray: (layout_code, x, y) => {
       if (typeof props.onClickTray === 'function') {
         props.onClickTray(layout_code, x, y)
