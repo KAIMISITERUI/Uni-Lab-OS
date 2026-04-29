@@ -34,6 +34,12 @@ import { onBeforeUnmount, onMounted, ref, watch, nextTick, computed } from 'vue'
 import { Location } from '@element-plus/icons-vue'
 import { StationGraph } from '@/lib/dynamic-graph/runtime/useStationGraph'
 import { getModule } from '@/lib/dynamic-graph'
+import {
+  applyTrayVisualResource,
+  buildTrayVisualResource,
+  type TrayVisualResource,
+  type TrayVisualWell,
+} from '@/lib/dynamic-graph/utils/trayVisual'
 import type { TraySlot } from '@/lib/dynamic-graph/station/slot'
 
 // 单个槽位的预览配置, 父组件汇总后传入
@@ -237,7 +243,6 @@ function syncSlotResourcesToGraph (): void {
         if (BaseTray) {
           const oldTray = slot.tray
           trayInstance = BaseTray.fromModel(sr.trayModel)
-          trayInstance.setResource(resource)
           slot.setTray(trayInstance)
           if (oldTray && oldTray !== trayInstance) {
             oldTray.remove?.(station.trays_group)
@@ -250,7 +255,7 @@ function syncSlotResourcesToGraph (): void {
     }
     if (!trayInstance) { return }
     try {
-      trayInstance.setResource(resource)
+      applyTrayVisualResource(trayInstance, resource, 'station')
     } catch (err) {
       console.debug('[StationPreview] tray.setResource error:', err)
     }
@@ -259,22 +264,20 @@ function syncSlotResourcesToGraph (): void {
   applyVisiblePrefixes()
 }
 
-function buildPreviewResource (sr: SlotResourcePreview): Record<string, unknown> {
-  const children = sr.filledWells.map((w) => ({
-    layout_code: `${sr.layoutCode}:${w.slotIndex}`,
-    slot_index: w.slotIndex,
-    selected: true,
-    used: true,
-    display: true,
-    resource_type: sr.vesselType,
-    with_cap: w.with_cap !== false,
-    with_magneton: w.with_magneton === true,
+function buildPreviewResource (sr: SlotResourcePreview): TrayVisualResource {
+  const wells: TrayVisualWell[] = sr.filledWells.map((w) => ({
+    slotIndex: w.slotIndex,
+    resourceType: sr.vesselType,
+    used: false,
+    withCap: w.with_cap !== false,
+    withMagneton: w.with_magneton === true,
   }))
-  return {
-    children,
-    layout_code: sr.layoutCode,
-    with_cap: children.some((child) => child.with_cap === true),
-  }
+
+  return buildTrayVisualResource({
+    layoutCode: sr.layoutCode,
+    trayModel: sr.trayModel,
+    wells,
+  })
 }
 
 function applyVisiblePrefixes (): void {

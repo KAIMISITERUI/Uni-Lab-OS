@@ -10,6 +10,7 @@
 import { getModule, type Module } from '../index'
 import type { Station } from '../station/station'
 import type { TraySlot } from '../station/slot'
+import { applyTrayVisualResource } from '../utils/trayVisual'
 import { createApi, type Api, type GraphResource } from './api-shim'
 
 export interface StationGraphParams {
@@ -114,31 +115,30 @@ export class StationGraph {
       }
       const slot = this.station.slots[layout_code] as TraySlot
       const cur = currentMap[layout_code]
-      if (cur && slot.hasTray()) {
+      if (this.isNoTrayResourceLayout(layout_code) === true) {
+        if (slot.hasTray() === true) {
+          slot.removeTray()
+        }
+        return
+      }
+      if (cur !== undefined && slot.hasTray() === true) {
         if (cur.resource_type === slot.tray?.model) {
-          // 同型, 仅更新 children 显示
-          const indexMap: Record<string, number> = {}
-          cur.children?.forEach(c => {
-            if (c.slot_index !== undefined) { indexMap[c.slot_index] = c.slot_index }
-          })
-          slot.tray?.children?.forEach?.((item: any, index: number) => {
-            item.display = indexMap[index] !== undefined
-          })
-          slot.tray?.setResource?.(cur as any)
+          // 同型号只刷新托盘内部视觉, 避免工站 SVG 内置孔位叠加.
+          applyTrayVisualResource(slot.tray, cur as any, 'station')
         } else {
           // 换型, 移除老托盘后重建
           slot.removeTray()
           this.attachTray(slot, cur)
         }
-      } else if (!cur && slot.hasTray()) {
+      } else if (cur === undefined && slot.hasTray() === true) {
         slot.removeTray()
-      } else if (cur && !slot.hasTray()) {
+      } else if (cur !== undefined && slot.hasTray() === false) {
         this.attachTray(slot, cur)
       }
     })
 
-    // 触发 vessel/cap/magneton 切换 (debounced)
-    this.station.setResource(resourceList)
+    // 仅无托盘槽位使用工站底图内置资源, 常规槽位统一交给托盘 SVG.
+    this.station.setResource(resourceList.filter(resource => this.isNoTrayResourceLayout(resource.layout_code) === true))
   }
 
   private shouldPreserveFilteredOutSlot (layoutCode: string): boolean {
@@ -151,16 +151,27 @@ export class StationGraph {
     return this.params.resourceLayoutFilter(layoutCode) === false
   }
 
-  /** 在 slot 上实例化并附着 BaseTray */
-  private attachTray (slot: TraySlot, resource: GraphResource): void {
+  private isNoTrayResourceLayout (layoutCode: string): boolean {
+    return this.getNoTrayResourcePrefixes().some(prefix => layoutCode.startsWith(prefix))
+  }
+
+  private getNoTrayResourcePrefixes (): string[] {
     const params = window.webb.store.get('params') || {}
     const $view = params.$view
     const _model = params.model || {}
-    const noTray: string[] = _model.no_tray_resource?.[$view]?.[this.station.stationModel || ''] || _model.no_tray_resource?.[$view] || []
-    if (Array.isArray(noTray) && noTray.find(prefix => slot.layout_code.startsWith(prefix))) {
+    const noTray = _model.no_tray_resource?.[$view]?.[this.station.stationModel || ''] || _model.no_tray_resource?.[$view] || []
+    if (Array.isArray(noTray) === false) {
+      return []
+    }
+    return noTray
+  }
+
+  /** 在 slot 上实例化并附着 BaseTray */
+  private attachTray (slot: TraySlot, resource: GraphResource): void {
+    if (this.isNoTrayResourceLayout(slot.layout_code) === true) {
       return
     }
-    if (!resource.resource_type) { return }
+    if (resource.resource_type === undefined || resource.resource_type === '') { return }
     let trayInstance: any = null
     try {
       trayInstance = this.module.BaseTray.fromModel(resource.resource_type)
@@ -168,9 +179,9 @@ export class StationGraph {
       console.warn('[StationGraph] fromModel failed:', resource.resource_type, err)
       return
     }
-    if (!trayInstance) { return }
+    if (trayInstance === undefined || trayInstance === null) { return }
     slot.setTray(trayInstance)
-    trayInstance.setResource(resource)
+    applyTrayVisualResource(trayInstance, resource as any, 'station')
   }
 
   /** 启动周期轮询 (默认 10s) */

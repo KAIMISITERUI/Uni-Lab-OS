@@ -16,6 +16,13 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch, nextTick } from 'vue'
 import { getModule } from '@/lib/dynamic-graph'
+import {
+  applyTrayVisualResource,
+  buildTrayVisualResource,
+  cancelTrayVisualRender,
+  type TrayVisualResource,
+  type TrayVisualWell,
+} from '@/lib/dynamic-graph/utils/trayVisual'
 import type { WellInfo } from './types'
 
 interface Props {
@@ -106,103 +113,38 @@ function syncResourceToTray (): void {
 function setResourceToTray (tray: any): void {
   if (tray === undefined || tray === null || typeof tray.setResource !== 'function') { return }
   try {
-    tray.setResource(buildPreviewResource(tray))
-    renderTrayImmediately(tray)
+    applyTrayVisualResource(tray, buildThumbnailResource(tray), 'thumbnail')
   } catch (err) {
     // 部分托盘 model 不支持完整 setResource, 容忍
     console.debug('[TrayThumbnail] setResource error:', err)
   }
 }
 
-function renderTrayImmediately (tray: any): void {
-  if (tray === undefined || tray === null) { return }
-  const zr = tray.zr
-  try {
-    zr?.resize?.()
-    flushThrottle(tray.onResize)
-    syncTrayItems(tray)
-    applyThumbnailScale(tray)
-    if (typeof tray.alignToBottom === 'function') {
-      tray.alignToBottom()
-    }
-    flushThrottle(tray.alignToBottom)
-    tray.res?.root?.dirty?.()
-    tray.alone_group?.dirty?.()
-    zr?.flush?.()
-  } catch (err) {
-    console.debug('[TrayThumbnail] render immediate error:', err)
-  }
-}
-
-function flushThrottle (fn: any): void {
-  if (typeof fn?.flush === 'function') {
-    fn.flush()
-  }
-}
-
-function cancelThrottle (fn: any): void {
-  if (typeof fn?.cancel === 'function') {
-    fn.cancel()
-  }
-}
-
-function syncTrayItems (tray: any): void {
-  const childrenCount = Array.isArray(tray.children) ? tray.children.length : 0
-  if (typeof tray.syncItem !== 'function') { return }
-  for (let index = 0; index < childrenCount; index++) {
-    tray.syncItem(index)
-  }
-}
-
-function applyThumbnailScale (tray: any): void {
-  const zr = tray.zr
-  if (
-    zr === undefined ||
-    zr === null ||
-    tray.res === undefined ||
-    tray.res === null ||
-    tray.alone_group === undefined ||
-    tray.alone_group === null
-  ) {
-    return
-  }
-  const width = zr.getWidth?.() || 1
-  const height = zr.getHeight?.() || 1
-  const scaleX = width / (tray.res.width || 1)
-  const scaleY = height / (tray.res.height || 1)
-  const scale = Math.min(scaleX, scaleY)
-  tray.alone_group.setScale?.([scale, scale])
-}
-
-function buildPreviewResource (tray: any): Record<string, unknown> {
+function buildThumbnailResource (tray: any): TrayVisualResource {
   // 把已选孔位映射回 trayIns 内部 children, 字段对齐 web_code setResource 入参 (used + slot_index + resource_type + with_cap)
   // resource_type 必传, 否则 3D 不知道画哪个容器型号; 取自托盘 vessel_models[0] 默认
   const vesselType: string = tray?.config?.vessel_models?.[0] || ''
-  const children = props.wells
+  const wells: TrayVisualWell[] = props.wells
     .filter((w) => w.state === 'filled')
     .map((w) => ({
-      layout_code: `${props.layoutCode}:${w.slotIndex}`,
-      slot_index: w.slotIndex,
-      slot_label: `${w.colLabel}${w.rowLabel}`,
-      selected: true,
-      used: true,
-      display: true,
-      resource_type: vesselType,
-      with_cap: w.with_cap !== false,  // 默认带盖
-      with_magneton: w.with_magneton === true,
+      slotIndex: w.slotIndex,
+      slotLabel: `${w.colLabel}${w.rowLabel}`,
+      used: false,
+      resourceType: vesselType,
+      withCap: w.with_cap !== false,
+      withMagneton: w.with_magneton === true,
     }))
-  return {
-    children,
-    layout_code: props.layoutCode,
-    with_cap: children.some((child) => child.with_cap === true),
-  }
+  return buildTrayVisualResource({
+    layoutCode: props.layoutCode,
+    trayModel: props.trayModel,
+    wells,
+  })
 }
 
 function destroyLayer (layerIndex: 0 | 1): void {
   const tray = trayInstances[layerIndex]
   if (tray !== undefined && tray !== null) {
-    cancelThrottle(tray.onResize)
-    cancelThrottle(tray.alignToBottom)
+    cancelTrayVisualRender(tray)
     tray.zr = undefined
     tray.alone_group = undefined
   }
