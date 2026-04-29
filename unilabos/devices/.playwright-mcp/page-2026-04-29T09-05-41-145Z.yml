@@ -1,0 +1,1437 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - heading "EIT Hub" [level=1] [ref=e6]
+        - paragraph [ref=e7]: Uni-Lab OS Workstations
+      - navigation [ref=e8]:
+        - link "设备总览" [ref=e9] [cursor=pointer]:
+          - /url: /devices
+          - img [ref=e11]
+          - generic [ref=e14]: 设备总览
+        - link "合成工站" [ref=e15] [cursor=pointer]:
+          - /url: /synthesis
+          - img [ref=e16]
+          - generic [ref=e18]: 合成工站
+        - link "分析工站" [ref=e19] [cursor=pointer]:
+          - /url: /analysis
+          - img [ref=e20]
+          - generic [ref=e22]: 分析工站
+        - generic [ref=e23]:
+          - link "AGV 运输车" [ref=e24] [cursor=pointer]:
+            - /url: /agv
+            - img [ref=e25]
+            - generic [ref=e29]: AGV 运输车
+          - button "展开 AGV 子菜单" [ref=e30] [cursor=pointer]:
+            - img [ref=e32]
+        - link "化学品库" [ref=e34] [cursor=pointer]:
+          - /url: /chemicals
+          - img [ref=e36]
+          - generic [ref=e38]: 化学品库
+        - link "任务编辑" [ref=e39] [cursor=pointer]:
+          - /url: /synthesis-task-editor
+          - img [ref=e41]
+          - generic [ref=e43]: 任务编辑
+        - link "工作流" [ref=e44] [cursor=pointer]:
+          - /url: /synthesis-workflow
+          - img [ref=e46]
+          - generic [ref=e48]: 工作流
+        - link "任务历史" [ref=e49] [cursor=pointer]:
+          - /url: /task-history
+          - img [ref=e51]
+          - generic [ref=e53]: 任务历史
+        - link "运维管理" [ref=e54] [cursor=pointer]:
+          - /url: /maintenance
+          - img [ref=e56]
+          - generic [ref=e58]: 运维管理
+        - link "标签打印机" [ref=e59] [cursor=pointer]:
+          - /url: /label-printer
+          - img [ref=e61]
+          - generic [ref=e63]: 标签打印机
+    - generic [ref=e64]:
+      - generic [ref=e65]:
+        - heading "合成工站" [level=2] [ref=e66]
+        - generic [ref=e67]:
+          - img [ref=e69]
+          - generic [ref=e71]: 2026/4/29 17:04:27
+          - button "访问令牌" [ref=e72] [cursor=pointer]:
+            - generic [ref=e73]: 访问令牌
+      - main [ref=e74]:
+        - generic [ref=e75]:
+          - generic [ref=e76]:
+            - generic [ref=e77]:
+              - generic [ref=e78]: 工站状态
+              - generic [ref=e79]: 空闲
+              - generic [ref=e80]: 实时轮询
+            - generic [ref=e81]:
+              - generic [ref=e82]: 水含量
+              - generic [ref=e83]: 0.0 ppm
+              - generic [ref=e84]: 手套箱
+            - generic [ref=e85]:
+              - generic [ref=e86]: 氧含量
+              - generic [ref=e87]: 0.0 ppm
+              - generic [ref=e88]: 手套箱
+            - generic [ref=e89]:
+              - generic [ref=e90]: 箱压
+              - generic [ref=e91]: "0.2"
+              - generic [ref=e92]: 环境监测
+          - generic [ref=e93]:
+            - generic [ref=e94]:
+              - heading "站内资源" [level=2] [ref=e95]
+              - button "刷新" [ref=e96] [cursor=pointer]:
+                - img [ref=e3276]
+                - generic [ref=e100]: 刷新
+            - generic [ref=e101]:
+              - generic [ref=e103]:
+                - generic [ref=e104]:
+                  - generic [ref=e105]:
+                    - generic [ref=e106]: 2 mL 反应试管
+                    - generic [ref=e107]: "0"
+                  - img [ref=e110]
+                - generic [ref=e114]:
+                  - generic [ref=e115]:
+                    - generic [ref=e116]: 反应密封盖
+                    - generic [ref=e117]: "0"
+                  - img [ref=e120]
+                - generic [ref=e122]:
+                  - generic [ref=e123]:
+                    - generic [ref=e124]: 2 mL 试管磁子
+                    - generic [ref=e125]: "0"
+                  - img [ref=e128]
+                - generic [ref=e131]:
+                  - generic [ref=e132]:
+                    - generic [ref=e133]: 5 mL Tip 头
+                    - generic [ref=e134]: "14"
+                  - img [ref=e137]
+                - generic [ref=e139]:
+                  - generic [ref=e140]:
+                    - generic [ref=e141]: 1 mL Tip 头
+                    - generic [ref=e142]: "59"
+                  - img [ref=e145]
+                - generic [ref=e147]:
+                  - generic [ref=e148]:
+                    - generic [ref=e149]: 50 μL Tip 头
+                    - generic [ref=e150]: "4"
+                  - img [ref=e153]
+                - generic [ref=e155]:
+                  - generic [ref=e156]:
+                    - generic [ref=e157]: 闪滤瓶内瓶
+                    - generic [ref=e158]: "36"
+                  - img [ref=e161]
+                - generic [ref=e166]:
+                  - generic [ref=e167]:
+                    - generic [ref=e168]: 闪滤瓶外瓶
+                    - generic [ref=e169]: "0"
+                  - img [ref=e172]
+              - generic [ref=e182]:
+                - generic [ref=e183]: 资源管理
+                - button "录入资源" [ref=e185] [cursor=pointer]:
+                  - img [ref=e187]
+                  - generic [ref=e189]: 录入资源
+              - generic [ref=e193]:
+                - table [ref=e195]:
+                  - rowgroup [ref=e203]:
+                    - row "结构式 物质名称 物态 剩余量 位置 托盘种类" [ref=e204]:
+                      - columnheader "结构式" [ref=e205]:
+                        - generic [ref=e206]: 结构式
+                      - columnheader "物质名称" [ref=e207]:
+                        - generic [ref=e208]: 物质名称
+                      - columnheader "物态" [ref=e209]:
+                        - generic [ref=e210]: 物态
+                      - columnheader "剩余量" [ref=e211]:
+                        - generic [ref=e212]: 剩余量
+                      - columnheader "位置" [ref=e213]:
+                        - generic [ref=e214]: 位置
+                      - columnheader "托盘种类" [ref=e215]:
+                        - generic [ref=e216]: 托盘种类
+                - table [ref=e221]:
+                  - rowgroup [ref=e229]:
+                    - row "1,3,5-三异丙基苯(溶液,1mol/L in MeCN) liquid 38mL W-1-1 / A1 125 mL试剂瓶托盘" [ref=e230]:
+                      - cell [ref=e231]:
+                        - img [ref=e235]
+                      - cell "1,3,5-三异丙基苯(溶液,1mol/L in MeCN)" [ref=e252]:
+                        - button "1,3,5-三异丙基苯(溶液,1mol/L in MeCN)" [ref=e254] [cursor=pointer]:
+                          - generic [ref=e255]: 1,3,5-三异丙基苯(溶液,1mol/L in MeCN)
+                      - cell "liquid" [ref=e256]:
+                        - generic [ref=e257]: liquid
+                      - cell "38mL" [ref=e258]:
+                        - generic [ref=e261]: 38mL
+                      - cell "W-1-1 / A1" [ref=e262]:
+                        - generic [ref=e265]: W-1-1 / A1
+                      - cell "125 mL试剂瓶托盘" [ref=e266]:
+                        - generic [ref=e269]: 125 mL试剂瓶托盘
+                    - row "乙腈 liquid 48mL W-1-1 / A2 125 mL试剂瓶托盘" [ref=e270]:
+                      - cell [ref=e271]:
+                        - img [ref=e275]
+                      - cell "乙腈" [ref=e285]:
+                        - button "乙腈" [ref=e287] [cursor=pointer]:
+                          - generic [ref=e288]: 乙腈
+                      - cell "liquid" [ref=e289]:
+                        - generic [ref=e290]: liquid
+                      - cell "48mL" [ref=e291]:
+                        - generic [ref=e294]: 48mL
+                      - cell "W-1-1 / A2" [ref=e295]:
+                        - generic [ref=e298]: W-1-1 / A2
+                      - cell "125 mL试剂瓶托盘" [ref=e299]:
+                        - generic [ref=e302]: 125 mL试剂瓶托盘
+                    - row "N,N-二甲基乙酰胺 liquid 120mL W-1-2 / A1 125 mL试剂瓶托盘" [ref=e303]:
+                      - cell [ref=e304]:
+                        - img [ref=e308]
+                      - cell "N,N-二甲基乙酰胺" [ref=e322]:
+                        - button "N,N-二甲基乙酰胺" [ref=e324] [cursor=pointer]:
+                          - generic [ref=e325]: N,N-二甲基乙酰胺
+                      - cell "liquid" [ref=e326]:
+                        - generic [ref=e327]: liquid
+                      - cell "120mL" [ref=e328]:
+                        - generic [ref=e331]: 120mL
+                      - cell "W-1-2 / A1" [ref=e332]:
+                        - generic [ref=e335]: W-1-2 / A1
+                      - cell "125 mL试剂瓶托盘" [ref=e336]:
+                        - generic [ref=e339]: 125 mL试剂瓶托盘
+                    - row "N,N-二甲基甲酰胺 liquid 120mL W-1-2 / A2 125 mL试剂瓶托盘" [ref=e340]:
+                      - cell [ref=e341]:
+                        - img [ref=e345]
+                      - cell "N,N-二甲基甲酰胺" [ref=e357]:
+                        - button "N,N-二甲基甲酰胺" [ref=e359] [cursor=pointer]:
+                          - generic [ref=e360]: N,N-二甲基甲酰胺
+                      - cell "liquid" [ref=e361]:
+                        - generic [ref=e362]: liquid
+                      - cell "120mL" [ref=e363]:
+                        - generic [ref=e366]: 120mL
+                      - cell "W-1-2 / A2" [ref=e367]:
+                        - generic [ref=e370]: W-1-2 / A2
+                      - cell "125 mL试剂瓶托盘" [ref=e371]:
+                        - generic [ref=e374]: 125 mL试剂瓶托盘
+                    - row "1,4-二氧六环 liquid 84.1mL W-1-3 / A1 125 mL试剂瓶托盘" [ref=e375]:
+                      - cell [ref=e376]:
+                        - img [ref=e380]
+                      - cell "1,4-二氧六环" [ref=e394]:
+                        - button "1,4-二氧六环" [ref=e396] [cursor=pointer]:
+                          - generic [ref=e397]: 1,4-二氧六环
+                      - cell "liquid" [ref=e398]:
+                        - generic [ref=e399]: liquid
+                      - cell "84.1mL" [ref=e400]:
+                        - generic [ref=e403]: 84.1mL
+                      - cell "W-1-3 / A1" [ref=e404]:
+                        - generic [ref=e407]: W-1-3 / A1
+                      - cell "125 mL试剂瓶托盘" [ref=e408]:
+                        - generic [ref=e411]: 125 mL试剂瓶托盘
+                    - row "四氢呋喃 liquid 100mL W-1-3 / A2 125 mL试剂瓶托盘" [ref=e412]:
+                      - cell [ref=e413]:
+                        - img [ref=e417]
+                      - cell "四氢呋喃" [ref=e430]:
+                        - button "四氢呋喃" [ref=e432] [cursor=pointer]:
+                          - generic [ref=e433]: 四氢呋喃
+                      - cell "liquid" [ref=e434]:
+                        - generic [ref=e435]: liquid
+                      - cell "100mL" [ref=e436]:
+                        - generic [ref=e439]: 100mL
+                      - cell "W-1-3 / A2" [ref=e440]:
+                        - generic [ref=e443]: W-1-3 / A2
+                      - cell "125 mL试剂瓶托盘" [ref=e444]:
+                        - generic [ref=e447]: 125 mL试剂瓶托盘
+                    - row "二氯甲烷 liquid 105mL W-1-4 / A1 125 mL试剂瓶托盘" [ref=e448]:
+                      - cell [ref=e449]:
+                        - img [ref=e453]
+                      - cell "二氯甲烷" [ref=e463]:
+                        - button "二氯甲烷" [ref=e465] [cursor=pointer]:
+                          - generic [ref=e466]: 二氯甲烷
+                      - cell "liquid" [ref=e467]:
+                        - generic [ref=e468]: liquid
+                      - cell "105mL" [ref=e469]:
+                        - generic [ref=e472]: 105mL
+                      - cell "W-1-4 / A1" [ref=e473]:
+                        - generic [ref=e476]: W-1-4 / A1
+                      - cell "125 mL试剂瓶托盘" [ref=e477]:
+                        - generic [ref=e480]: 125 mL试剂瓶托盘
+                    - row "二甲基亚砜 liquid 108.5mL W-1-4 / A2 125 mL试剂瓶托盘" [ref=e481]:
+                      - cell [ref=e482]:
+                        - img [ref=e486]
+                      - cell "二甲基亚砜" [ref=e496]:
+                        - button "二甲基亚砜" [ref=e498] [cursor=pointer]:
+                          - generic [ref=e499]: 二甲基亚砜
+                      - cell "liquid" [ref=e500]:
+                        - generic [ref=e501]: liquid
+                      - cell "108.5mL" [ref=e502]:
+                        - generic [ref=e505]: 108.5mL
+                      - cell "W-1-4 / A2" [ref=e506]:
+                        - generic [ref=e509]: W-1-4 / A2
+                      - cell "125 mL试剂瓶托盘" [ref=e510]:
+                        - generic [ref=e513]: 125 mL试剂瓶托盘
+                    - row "二氟溴甲基三甲基硅烷 liquid 3.756mL W-1-5 / A1 8 mL试剂瓶托盘" [ref=e514]:
+                      - cell [ref=e515]:
+                        - img [ref=e519]
+                      - cell "二氟溴甲基三甲基硅烷" [ref=e536]:
+                        - button "二氟溴甲基三甲基硅烷" [ref=e538] [cursor=pointer]:
+                          - generic [ref=e539]: 二氟溴甲基三甲基硅烷
+                      - cell "liquid" [ref=e540]:
+                        - generic [ref=e541]: liquid
+                      - cell "3.756mL" [ref=e542]:
+                        - generic [ref=e545]: 3.756mL
+                      - cell "W-1-5 / A1" [ref=e546]:
+                        - generic [ref=e549]: W-1-5 / A1
+                      - cell "8 mL试剂瓶托盘" [ref=e550]:
+                        - generic [ref=e553]: 8 mL试剂瓶托盘
+                    - row "4-甲氧基苄醇 (溶液，0.4 M in CH2Cl2) liquid 5.5mL W-1-5 / A2 8 mL试剂瓶托盘" [ref=e554]:
+                      - cell [ref=e555]:
+                        - img [ref=e559]
+                      - cell "4-甲氧基苄醇 (溶液，0.4 M in CH2Cl2)" [ref=e580]:
+                        - button "4-甲氧基苄醇 (溶液，0.4 M in CH2Cl2)" [ref=e582] [cursor=pointer]:
+                          - generic [ref=e583]: 4-甲氧基苄醇 (溶液，0.4 M in CH2Cl2)
+                      - cell "liquid" [ref=e584]:
+                        - generic [ref=e585]: liquid
+                      - cell "5.5mL" [ref=e586]:
+                        - generic [ref=e589]: 5.5mL
+                      - cell "W-1-5 / A2" [ref=e590]:
+                        - generic [ref=e593]: W-1-5 / A2
+                      - cell "8 mL试剂瓶托盘" [ref=e594]:
+                        - generic [ref=e597]: 8 mL试剂瓶托盘
+                    - row "4-溴苄醇 (溶液，0.4 M in CH2Cl2) liquid 5.5mL W-1-5 / A3 8 mL试剂瓶托盘" [ref=e598]:
+                      - cell [ref=e599]:
+                        - img [ref=e603]
+                      - cell "4-溴苄醇 (溶液，0.4 M in CH2Cl2)" [ref=e627]:
+                        - button "4-溴苄醇 (溶液，0.4 M in CH2Cl2)" [ref=e629] [cursor=pointer]:
+                          - generic [ref=e630]: 4-溴苄醇 (溶液，0.4 M in CH2Cl2)
+                      - cell "liquid" [ref=e631]:
+                        - generic [ref=e632]: liquid
+                      - cell "5.5mL" [ref=e633]:
+                        - generic [ref=e636]: 5.5mL
+                      - cell "W-1-5 / A3" [ref=e637]:
+                        - generic [ref=e640]: W-1-5 / A3
+                      - cell "8 mL试剂瓶托盘" [ref=e641]:
+                        - generic [ref=e644]: 8 mL试剂瓶托盘
+                    - row "4-氯苯甲醇 (溶液，0.4 M in CH2Cl2) liquid 5.5mL W-1-5 / A4 8 mL试剂瓶托盘" [ref=e645]:
+                      - cell [ref=e646]:
+                        - img [ref=e650]
+                      - cell "4-氯苯甲醇 (溶液，0.4 M in CH2Cl2)" [ref=e674]:
+                        - button "4-氯苯甲醇 (溶液，0.4 M in CH2Cl2)" [ref=e676] [cursor=pointer]:
+                          - generic [ref=e677]: 4-氯苯甲醇 (溶液，0.4 M in CH2Cl2)
+                      - cell "liquid" [ref=e678]:
+                        - generic [ref=e679]: liquid
+                      - cell "5.5mL" [ref=e680]:
+                        - generic [ref=e683]: 5.5mL
+                      - cell "W-1-5 / A4" [ref=e684]:
+                        - generic [ref=e687]: W-1-5 / A4
+                      - cell "8 mL试剂瓶托盘" [ref=e688]:
+                        - generic [ref=e691]: 8 mL试剂瓶托盘
+                    - row "4-(羟基甲基)苯腈 (溶液，0.4 M in CH2Cl2) liquid 5.5mL W-1-5 / B1 8 mL试剂瓶托盘" [ref=e692]:
+                      - cell [ref=e693]:
+                        - img [ref=e697]
+                      - cell "4-(羟基甲基)苯腈 (溶液，0.4 M in CH2Cl2)" [ref=e725]:
+                        - button "4-(羟基甲基)苯腈 (溶液，0.4 M in CH2Cl2)" [ref=e727] [cursor=pointer]:
+                          - generic [ref=e728]: 4-(羟基甲基)苯腈 (溶液，0.4 M in CH2Cl2)
+                      - cell "liquid" [ref=e729]:
+                        - generic [ref=e730]: liquid
+                      - cell "5.5mL" [ref=e731]:
+                        - generic [ref=e734]: 5.5mL
+                      - cell "W-1-5 / B1" [ref=e735]:
+                        - generic [ref=e738]: W-1-5 / B1
+                      - cell "8 mL试剂瓶托盘" [ref=e739]:
+                        - generic [ref=e742]: 8 mL试剂瓶托盘
+                    - row "4-(羟甲基)苯甲酸甲酯 (溶液，0.4 M in CH2Cl2) liquid 5.5mL W-1-5 / B2 8 mL试剂瓶托盘" [ref=e743]:
+                      - cell [ref=e744]:
+                        - img [ref=e748]
+                      - cell "4-(羟甲基)苯甲酸甲酯 (溶液，0.4 M in CH2Cl2)" [ref=e777]:
+                        - button "4-(羟甲基)苯甲酸甲酯 (溶液，0.4 M in CH2Cl2)" [ref=e779] [cursor=pointer]:
+                          - generic [ref=e780]: 4-(羟甲基)苯甲酸甲酯 (溶液，0.4 M in CH2Cl2)
+                      - cell "liquid" [ref=e781]:
+                        - generic [ref=e782]: liquid
+                      - cell "5.5mL" [ref=e783]:
+                        - generic [ref=e786]: 5.5mL
+                      - cell "W-1-5 / B2" [ref=e787]:
+                        - generic [ref=e790]: W-1-5 / B2
+                      - cell "8 mL试剂瓶托盘" [ref=e791]:
+                        - generic [ref=e794]: 8 mL试剂瓶托盘
+                    - row "4-甲基苄醇 (溶液，0.4 M in CH2Cl2) liquid 5.5mL W-1-5 / B3 8 mL试剂瓶托盘" [ref=e795]:
+                      - cell [ref=e796]:
+                        - img [ref=e800]
+                      - cell "4-甲基苄醇 (溶液，0.4 M in CH2Cl2)" [ref=e821]:
+                        - button "4-甲基苄醇 (溶液，0.4 M in CH2Cl2)" [ref=e823] [cursor=pointer]:
+                          - generic [ref=e824]: 4-甲基苄醇 (溶液，0.4 M in CH2Cl2)
+                      - cell "liquid" [ref=e825]:
+                        - generic [ref=e826]: liquid
+                      - cell "5.5mL" [ref=e827]:
+                        - generic [ref=e830]: 5.5mL
+                      - cell "W-1-5 / B3" [ref=e831]:
+                        - generic [ref=e834]: W-1-5 / B3
+                      - cell "8 mL试剂瓶托盘" [ref=e835]:
+                        - generic [ref=e838]: 8 mL试剂瓶托盘
+                    - row "对叔丁基苯甲醛 liquid 3.334mL W-2-1 / A1 8 mL试剂瓶托盘" [ref=e839]:
+                      - cell [ref=e840]:
+                        - img [ref=e844]
+                      - cell "对叔丁基苯甲醛" [ref=e863]:
+                        - button "对叔丁基苯甲醛" [ref=e865] [cursor=pointer]:
+                          - generic [ref=e866]: 对叔丁基苯甲醛
+                      - cell "liquid" [ref=e867]:
+                        - generic [ref=e868]: liquid
+                      - cell "3.334mL" [ref=e869]:
+                        - generic [ref=e872]: 3.334mL
+                      - cell "W-2-1 / A1" [ref=e873]:
+                        - generic [ref=e876]: W-2-1 / A1
+                      - cell "8 mL试剂瓶托盘" [ref=e877]:
+                        - generic [ref=e880]: 8 mL试剂瓶托盘
+                    - row "DBU liquid 6.955mL W-2-1 / A2 8 mL试剂瓶托盘" [ref=e881]:
+                      - cell [ref=e882]:
+                        - img [ref=e886]
+                      - cell "DBU" [ref=e913]:
+                        - button "DBU" [ref=e915] [cursor=pointer]:
+                          - generic [ref=e916]: DBU
+                      - cell "liquid" [ref=e917]:
+                        - generic [ref=e918]: liquid
+                      - cell "6.955mL" [ref=e919]:
+                        - generic [ref=e922]: 6.955mL
+                      - cell "W-2-1 / A2" [ref=e923]:
+                        - generic [ref=e926]: W-2-1 / A2
+                      - cell "8 mL试剂瓶托盘" [ref=e927]:
+                        - generic [ref=e930]: 8 mL试剂瓶托盘
+                    - row "丙二腈 (溶液, 0.4 M in 乙腈) liquid 2mL 2mL W-2-2 / A1 W-2-2 / A4 8 mL试剂瓶托盘 8 mL试剂瓶托盘" [ref=e931]:
+                      - cell [ref=e932]:
+                        - img [ref=e936]
+                      - cell "丙二腈 (溶液, 0.4 M in 乙腈)" [ref=e956]:
+                        - button "丙二腈 (溶液, 0.4 M in 乙腈)" [ref=e958] [cursor=pointer]:
+                          - generic [ref=e959]: 丙二腈 (溶液, 0.4 M in 乙腈)
+                      - cell "liquid" [ref=e960]:
+                        - generic [ref=e961]: liquid
+                      - cell "2mL 2mL" [ref=e962]:
+                        - generic [ref=e964]:
+                          - generic [ref=e965]: 2mL
+                          - generic [ref=e966]: 2mL
+                      - cell "W-2-2 / A1 W-2-2 / A4" [ref=e967]:
+                        - generic [ref=e969]:
+                          - generic [ref=e970]: W-2-2 / A1
+                          - generic [ref=e971]: W-2-2 / A4
+                      - cell "8 mL试剂瓶托盘 8 mL试剂瓶托盘" [ref=e972]:
+                        - generic [ref=e974]:
+                          - generic [ref=e975]: 8 mL试剂瓶托盘
+                          - generic [ref=e976]: 8 mL试剂瓶托盘
+                    - row "水杨醛 liquid 7.832mL W-2-2 / A2 8 mL试剂瓶托盘" [ref=e977]:
+                      - cell [ref=e978]:
+                        - img [ref=e982]
+                      - cell "水杨醛" [ref=e1004]:
+                        - button "水杨醛" [ref=e1006] [cursor=pointer]:
+                          - generic [ref=e1007]: 水杨醛
+                      - cell "liquid" [ref=e1008]:
+                        - generic [ref=e1009]: liquid
+                      - cell "7.832mL" [ref=e1010]:
+                        - generic [ref=e1013]: 7.832mL
+                      - cell "W-2-2 / A2" [ref=e1014]:
+                        - generic [ref=e1017]: W-2-2 / A2
+                      - cell "8 mL试剂瓶托盘" [ref=e1018]:
+                        - generic [ref=e1021]: 8 mL试剂瓶托盘
+                    - row "苯丙醛 liquid 7.792mL W-2-2 / A3 8 mL试剂瓶托盘" [ref=e1022]:
+                      - cell [ref=e1023]:
+                        - img [ref=e1027]
+                      - cell "苯丙醛" [ref=e1053]:
+                        - button "苯丙醛" [ref=e1055] [cursor=pointer]:
+                          - generic [ref=e1056]: 苯丙醛
+                      - cell "liquid" [ref=e1057]:
+                        - generic [ref=e1058]: liquid
+                      - cell "7.792mL" [ref=e1059]:
+                        - generic [ref=e1062]: 7.792mL
+                      - cell "W-2-2 / A3" [ref=e1063]:
+                        - generic [ref=e1066]: W-2-2 / A3
+                      - cell "8 mL试剂瓶托盘" [ref=e1067]:
+                        - generic [ref=e1070]: 8 mL试剂瓶托盘
+                    - row "丙二酸二甲酯 liquid 5.7mL W-2-3 / A1 8 mL试剂瓶托盘" [ref=e1071]:
+                      - cell [ref=e1072]:
+                        - img [ref=e1076]
+                      - cell "丙二酸二甲酯" [ref=e1094]:
+                        - button "丙二酸二甲酯" [ref=e1096] [cursor=pointer]:
+                          - generic [ref=e1097]: 丙二酸二甲酯
+                      - cell "liquid" [ref=e1098]:
+                        - generic [ref=e1099]: liquid
+                      - cell "5.7mL" [ref=e1100]:
+                        - generic [ref=e1103]: 5.7mL
+                      - cell "W-2-3 / A1" [ref=e1104]:
+                        - generic [ref=e1107]: W-2-3 / A1
+                      - cell "8 mL试剂瓶托盘" [ref=e1108]:
+                        - generic [ref=e1111]: 8 mL试剂瓶托盘
+                    - row "丙烯醛 liquid 7.958mL W-2-3 / A2 8 mL试剂瓶托盘" [ref=e1112]:
+                      - cell [ref=e1113]:
+                        - img [ref=e1117]
+                      - cell "丙烯醛" [ref=e1128]:
+                        - button "丙烯醛" [ref=e1130] [cursor=pointer]:
+                          - generic [ref=e1131]: 丙烯醛
+                      - cell "liquid" [ref=e1132]:
+                        - generic [ref=e1133]: liquid
+                      - cell "7.958mL" [ref=e1134]:
+                        - generic [ref=e1137]: 7.958mL
+                      - cell "W-2-3 / A2" [ref=e1138]:
+                        - generic [ref=e1141]: W-2-3 / A2
+                      - cell "8 mL试剂瓶托盘" [ref=e1142]:
+                        - generic [ref=e1145]: 8 mL试剂瓶托盘
+                    - row "1,3,5-三异丙基苯 liquid 2.8mL W-2-3 / A3 8 mL试剂瓶托盘" [ref=e1146]:
+                      - cell [ref=e1147]:
+                        - img [ref=e1151]
+                      - cell "1,3,5-三异丙基苯" [ref=e1168]:
+                        - button "1,3,5-三异丙基苯" [ref=e1170] [cursor=pointer]:
+                          - generic [ref=e1171]: 1,3,5-三异丙基苯
+                      - cell "liquid" [ref=e1172]:
+                        - generic [ref=e1173]: liquid
+                      - cell "2.8mL" [ref=e1174]:
+                        - generic [ref=e1177]: 2.8mL
+                      - cell "W-2-3 / A3" [ref=e1178]:
+                        - generic [ref=e1181]: W-2-3 / A3
+                      - cell "8 mL试剂瓶托盘" [ref=e1182]:
+                        - generic [ref=e1185]: 8 mL试剂瓶托盘
+                    - row "丙二酸二乙酯 liquid 7.148mL W-2-3 / A4 8 mL试剂瓶托盘" [ref=e1186]:
+                      - cell [ref=e1187]:
+                        - img [ref=e1191]
+                      - cell "丙二酸二乙酯" [ref=e1214]:
+                        - button "丙二酸二乙酯" [ref=e1216] [cursor=pointer]:
+                          - generic [ref=e1217]: 丙二酸二乙酯
+                      - cell "liquid" [ref=e1218]:
+                        - generic [ref=e1219]: liquid
+                      - cell "7.148mL" [ref=e1220]:
+                        - generic [ref=e1223]: 7.148mL
+                      - cell "W-2-3 / A4" [ref=e1224]:
+                        - generic [ref=e1227]: W-2-3 / A4
+                      - cell "8 mL试剂瓶托盘" [ref=e1228]:
+                        - generic [ref=e1231]: 8 mL试剂瓶托盘
+                    - row "乙酰丙酮 liquid 7.424mL W-2-3 / B1 8 mL试剂瓶托盘" [ref=e1232]:
+                      - cell [ref=e1233]:
+                        - img [ref=e1237]
+                      - cell "乙酰丙酮" [ref=e1249]:
+                        - button "乙酰丙酮" [ref=e1251] [cursor=pointer]:
+                          - generic [ref=e1252]: 乙酰丙酮
+                      - cell "liquid" [ref=e1253]:
+                        - generic [ref=e1254]: liquid
+                      - cell "7.424mL" [ref=e1255]:
+                        - generic [ref=e1258]: 7.424mL
+                      - cell "W-2-3 / B1" [ref=e1259]:
+                        - generic [ref=e1262]: W-2-3 / B1
+                      - cell "8 mL试剂瓶托盘" [ref=e1263]:
+                        - generic [ref=e1266]: 8 mL试剂瓶托盘
+                    - row "丙烯酸甲酯 liquid 7.943mL W-2-3 / B2 8 mL试剂瓶托盘" [ref=e1267]:
+                      - cell [ref=e1268]:
+                        - img [ref=e1272]
+                      - cell "丙烯酸甲酯" [ref=e1285]:
+                        - button "丙烯酸甲酯" [ref=e1287] [cursor=pointer]:
+                          - generic [ref=e1288]: 丙烯酸甲酯
+                      - cell "liquid" [ref=e1289]:
+                        - generic [ref=e1290]: liquid
+                      - cell "7.943mL" [ref=e1291]:
+                        - generic [ref=e1294]: 7.943mL
+                      - cell "W-2-3 / B2" [ref=e1295]:
+                        - generic [ref=e1298]: W-2-3 / B2
+                      - cell "8 mL试剂瓶托盘" [ref=e1299]:
+                        - generic [ref=e1302]: 8 mL试剂瓶托盘
+                    - row "丙烯酸苯酯 liquid 7.916mL W-2-3 / B3 8 mL试剂瓶托盘" [ref=e1303]:
+                      - cell [ref=e1304]:
+                        - img [ref=e1308]
+                      - cell "丙烯酸苯酯" [ref=e1334]:
+                        - button "丙烯酸苯酯" [ref=e1336] [cursor=pointer]:
+                          - generic [ref=e1337]: 丙烯酸苯酯
+                      - cell "liquid" [ref=e1338]:
+                        - generic [ref=e1339]: liquid
+                      - cell "7.916mL" [ref=e1340]:
+                        - generic [ref=e1343]: 7.916mL
+                      - cell "W-2-3 / B3" [ref=e1344]:
+                        - generic [ref=e1347]: W-2-3 / B3
+                      - cell "8 mL试剂瓶托盘" [ref=e1348]:
+                        - generic [ref=e1351]: 8 mL试剂瓶托盘
+                    - row "巴豆酸甲酯 liquid 7.937mL W-2-3 / B4 8 mL试剂瓶托盘" [ref=e1352]:
+                      - cell [ref=e1353]:
+                        - img [ref=e1357]
+                      - cell "巴豆酸甲酯" [ref=e1372]:
+                        - button "巴豆酸甲酯" [ref=e1374] [cursor=pointer]:
+                          - generic [ref=e1375]: 巴豆酸甲酯
+                      - cell "liquid" [ref=e1376]:
+                        - generic [ref=e1377]: liquid
+                      - cell "7.937mL" [ref=e1378]:
+                        - generic [ref=e1381]: 7.937mL
+                      - cell "W-2-3 / B4" [ref=e1382]:
+                        - generic [ref=e1385]: W-2-3 / B4
+                      - cell "8 mL试剂瓶托盘" [ref=e1386]:
+                        - generic [ref=e1389]: 8 mL试剂瓶托盘
+                    - row "对硝基甲苯 (溶液，0.4 M in iPrOH) liquid 1.5mL W-2-4 / A1 8 mL试剂瓶托盘" [ref=e1390]:
+                      - cell [ref=e1391]:
+                        - img [ref=e1395]
+                      - cell "对硝基甲苯 (溶液，0.4 M in iPrOH)" [ref=e1420]:
+                        - button "对硝基甲苯 (溶液，0.4 M in iPrOH)" [ref=e1422] [cursor=pointer]:
+                          - generic [ref=e1423]: 对硝基甲苯 (溶液，0.4 M in iPrOH)
+                      - cell "liquid" [ref=e1424]:
+                        - generic [ref=e1425]: liquid
+                      - cell "1.5mL" [ref=e1426]:
+                        - generic [ref=e1429]: 1.5mL
+                      - cell "W-2-4 / A1" [ref=e1430]:
+                        - generic [ref=e1433]: W-2-4 / A1
+                      - cell "8 mL试剂瓶托盘" [ref=e1434]:
+                        - generic [ref=e1437]: 8 mL试剂瓶托盘
+                    - row "对氟硝基苯 (溶液, 0.4 M in 异丙醇) liquid 7.5mL W-2-4 / A2 8 mL试剂瓶托盘" [ref=e1438]:
+                      - cell [ref=e1439]:
+                        - img [ref=e1443]
+                      - cell "对氟硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1468]:
+                        - button "对氟硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1470] [cursor=pointer]:
+                          - generic [ref=e1471]: 对氟硝基苯 (溶液, 0.4 M in 异丙醇)
+                      - cell "liquid" [ref=e1472]:
+                        - generic [ref=e1473]: liquid
+                      - cell "7.5mL" [ref=e1474]:
+                        - generic [ref=e1477]: 7.5mL
+                      - cell "W-2-4 / A2" [ref=e1478]:
+                        - generic [ref=e1481]: W-2-4 / A2
+                      - cell "8 mL试剂瓶托盘" [ref=e1482]:
+                        - generic [ref=e1485]: 8 mL试剂瓶托盘
+                    - row "对硝基苯乙醇 (溶液, 0.4 M in 异丙醇) liquid 7.5mL W-2-4 / A3 8 mL试剂瓶托盘" [ref=e1486]:
+                      - cell [ref=e1487]:
+                        - img [ref=e1491]
+                      - cell "对硝基苯乙醇 (溶液, 0.4 M in 异丙醇)" [ref=e1521]:
+                        - button "对硝基苯乙醇 (溶液, 0.4 M in 异丙醇)" [ref=e1523] [cursor=pointer]:
+                          - generic [ref=e1524]: 对硝基苯乙醇 (溶液, 0.4 M in 异丙醇)
+                      - cell "liquid" [ref=e1525]:
+                        - generic [ref=e1526]: liquid
+                      - cell "7.5mL" [ref=e1527]:
+                        - generic [ref=e1530]: 7.5mL
+                      - cell "W-2-4 / A3" [ref=e1531]:
+                        - generic [ref=e1534]: W-2-4 / A3
+                      - cell "8 mL试剂瓶托盘" [ref=e1535]:
+                        - generic [ref=e1538]: 8 mL试剂瓶托盘
+                    - row "4-硝基苯甲醚 (溶液, 0.4 M in 异丙醇) liquid 7.5mL W-2-4 / A4 8 mL试剂瓶托盘" [ref=e1539]:
+                      - cell [ref=e1540]:
+                        - img [ref=e1544]
+                      - cell "4-硝基苯甲醚 (溶液, 0.4 M in 异丙醇)" [ref=e1571]:
+                        - button "4-硝基苯甲醚 (溶液, 0.4 M in 异丙醇)" [ref=e1573] [cursor=pointer]:
+                          - generic [ref=e1574]: 4-硝基苯甲醚 (溶液, 0.4 M in 异丙醇)
+                      - cell "liquid" [ref=e1575]:
+                        - generic [ref=e1576]: liquid
+                      - cell "7.5mL" [ref=e1577]:
+                        - generic [ref=e1580]: 7.5mL
+                      - cell "W-2-4 / A4" [ref=e1581]:
+                        - generic [ref=e1584]: W-2-4 / A4
+                      - cell "8 mL试剂瓶托盘" [ref=e1585]:
+                        - generic [ref=e1588]: 8 mL试剂瓶托盘
+                    - row "间溴硝基苯 (溶液, 0.4 M in 异丙醇) liquid 7.5mL W-2-4 / B1 8 mL试剂瓶托盘" [ref=e1589]:
+                      - cell [ref=e1590]:
+                        - img [ref=e1594]
+                      - cell "间溴硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1618]:
+                        - button "间溴硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1620] [cursor=pointer]:
+                          - generic [ref=e1621]: 间溴硝基苯 (溶液, 0.4 M in 异丙醇)
+                      - cell "liquid" [ref=e1622]:
+                        - generic [ref=e1623]: liquid
+                      - cell "7.5mL" [ref=e1624]:
+                        - generic [ref=e1627]: 7.5mL
+                      - cell "W-2-4 / B1" [ref=e1628]:
+                        - generic [ref=e1631]: W-2-4 / B1
+                      - cell "8 mL试剂瓶托盘" [ref=e1632]:
+                        - generic [ref=e1635]: 8 mL试剂瓶托盘
+                    - row "3-溴-4-氯硝基苯 (溶液, 0.4 M in 异丙醇) liquid 7.5mL W-2-4 / B2 8 mL试剂瓶托盘" [ref=e1636]:
+                      - cell [ref=e1637]:
+                        - img [ref=e1641]
+                      - cell "3-溴-4-氯硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1669]:
+                        - button "3-溴-4-氯硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1671] [cursor=pointer]:
+                          - generic [ref=e1672]: 3-溴-4-氯硝基苯 (溶液, 0.4 M in 异丙醇)
+                      - cell "liquid" [ref=e1673]:
+                        - generic [ref=e1674]: liquid
+                      - cell "7.5mL" [ref=e1675]:
+                        - generic [ref=e1678]: 7.5mL
+                      - cell "W-2-4 / B2" [ref=e1679]:
+                        - generic [ref=e1682]: W-2-4 / B2
+                      - cell "8 mL试剂瓶托盘" [ref=e1683]:
+                        - generic [ref=e1686]: 8 mL试剂瓶托盘
+                    - row "5-硝基喹啉 (溶液, 0.4 M in 异丙醇) liquid 7.5mL W-2-4 / B3 8 mL试剂瓶托盘" [ref=e1687]:
+                      - cell [ref=e1688]:
+                        - img [ref=e1692]
+                      - cell "5-硝基喹啉 (溶液, 0.4 M in 异丙醇)" [ref=e1726]:
+                        - button "5-硝基喹啉 (溶液, 0.4 M in 异丙醇)" [ref=e1728] [cursor=pointer]:
+                          - generic [ref=e1729]: 5-硝基喹啉 (溶液, 0.4 M in 异丙醇)
+                      - cell "liquid" [ref=e1730]:
+                        - generic [ref=e1731]: liquid
+                      - cell "7.5mL" [ref=e1732]:
+                        - generic [ref=e1735]: 7.5mL
+                      - cell "W-2-4 / B3" [ref=e1736]:
+                        - generic [ref=e1739]: W-2-4 / B3
+                      - cell "8 mL试剂瓶托盘" [ref=e1740]:
+                        - generic [ref=e1743]: 8 mL试剂瓶托盘
+                    - row "间叔丁基硝基苯 (溶液, 0.4 M in 异丙醇) liquid 7.5mL W-2-4 / B4 8 mL试剂瓶托盘" [ref=e1744]:
+                      - cell [ref=e1745]:
+                        - img [ref=e1749]
+                      - cell "间叔丁基硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1775]:
+                        - button "间叔丁基硝基苯 (溶液, 0.4 M in 异丙醇)" [ref=e1777] [cursor=pointer]:
+                          - generic [ref=e1778]: 间叔丁基硝基苯 (溶液, 0.4 M in 异丙醇)
+                      - cell "liquid" [ref=e1779]:
+                        - generic [ref=e1780]: liquid
+                      - cell "7.5mL" [ref=e1781]:
+                        - generic [ref=e1784]: 7.5mL
+                      - cell "W-2-4 / B4" [ref=e1785]:
+                        - generic [ref=e1788]: W-2-4 / B4
+                      - cell "8 mL试剂瓶托盘" [ref=e1789]:
+                        - generic [ref=e1792]: 8 mL试剂瓶托盘
+                    - row "硝基苯 liquid 7.98mL W-2-4 / C1 8 mL试剂瓶托盘" [ref=e1793]:
+                      - cell [ref=e1794]:
+                        - img [ref=e1798]
+                      - cell "硝基苯" [ref=e1823]:
+                        - button "硝基苯" [ref=e1825] [cursor=pointer]:
+                          - generic [ref=e1826]: 硝基苯
+                      - cell "liquid" [ref=e1827]:
+                        - generic [ref=e1828]: liquid
+                      - cell "7.98mL" [ref=e1829]:
+                        - generic [ref=e1832]: 7.98mL
+                      - cell "W-2-4 / C1" [ref=e1833]:
+                        - generic [ref=e1836]: W-2-4 / C1
+                      - cell "8 mL试剂瓶托盘" [ref=e1837]:
+                        - generic [ref=e1840]: 8 mL试剂瓶托盘
+                    - row "对乙基硝基苯 liquid 7.973mL W-2-4 / C2 8 mL试剂瓶托盘" [ref=e1841]:
+                      - cell [ref=e1842]:
+                        - img [ref=e1846]
+                      - cell "对乙基硝基苯" [ref=e1871]:
+                        - button "对乙基硝基苯" [ref=e1873] [cursor=pointer]:
+                          - generic [ref=e1874]: 对乙基硝基苯
+                      - cell "liquid" [ref=e1875]:
+                        - generic [ref=e1876]: liquid
+                      - cell "7.973mL" [ref=e1877]:
+                        - generic [ref=e1880]: 7.973mL
+                      - cell "W-2-4 / C2" [ref=e1881]:
+                        - generic [ref=e1884]: W-2-4 / C2
+                      - cell "8 mL试剂瓶托盘" [ref=e1885]:
+                        - generic [ref=e1888]: 8 mL试剂瓶托盘
+                    - row "间氟硝基苯 liquid 2.979mL W-2-4 / C3 8 mL试剂瓶托盘" [ref=e1889]:
+                      - cell [ref=e1890]:
+                        - img [ref=e1894]
+                      - cell "间氟硝基苯" [ref=e1917]:
+                        - button "间氟硝基苯" [ref=e1919] [cursor=pointer]:
+                          - generic [ref=e1920]: 间氟硝基苯
+                      - cell "liquid" [ref=e1921]:
+                        - generic [ref=e1922]: liquid
+                      - cell "2.979mL" [ref=e1923]:
+                        - generic [ref=e1926]: 2.979mL
+                      - cell "W-2-4 / C3" [ref=e1927]:
+                        - generic [ref=e1930]: W-2-4 / C3
+                      - cell "8 mL试剂瓶托盘" [ref=e1931]:
+                        - generic [ref=e1934]: 8 mL试剂瓶托盘
+                    - row "1-氟-2-硝基苯 liquid 7.979mL W-2-4 / C4 8 mL试剂瓶托盘" [ref=e1935]:
+                      - cell [ref=e1936]:
+                        - img [ref=e1940]
+                      - cell "1-氟-2-硝基苯" [ref=e1965]:
+                        - button "1-氟-2-硝基苯" [ref=e1967] [cursor=pointer]:
+                          - generic [ref=e1968]: 1-氟-2-硝基苯
+                      - cell "liquid" [ref=e1969]:
+                        - generic [ref=e1970]: liquid
+                      - cell "7.979mL" [ref=e1971]:
+                        - generic [ref=e1974]: 7.979mL
+                      - cell "W-2-4 / C4" [ref=e1975]:
+                        - generic [ref=e1978]: W-2-4 / C4
+                      - cell "8 mL试剂瓶托盘" [ref=e1979]:
+                        - generic [ref=e1982]: 8 mL试剂瓶托盘
+                    - row "碘甲烷 liquid 1.9mL W-2-7 / A1 2 mL试剂瓶托盘" [ref=e1983]:
+                      - cell [ref=e1984]:
+                        - img [ref=e1988]
+                      - cell "碘甲烷" [ref=e1990]:
+                        - button "碘甲烷" [ref=e1992] [cursor=pointer]:
+                          - generic [ref=e1993]: 碘甲烷
+                      - cell "liquid" [ref=e1994]:
+                        - generic [ref=e1995]: liquid
+                      - cell "1.9mL" [ref=e1996]:
+                        - generic [ref=e1999]: 1.9mL
+                      - cell "W-2-7 / A1" [ref=e2000]:
+                        - generic [ref=e2003]: W-2-7 / A1
+                      - cell "2 mL试剂瓶托盘" [ref=e2004]:
+                        - generic [ref=e2007]: 2 mL试剂瓶托盘
+                    - row "愈创木酚 liquid 1.868mL W-2-7 / A2 2 mL试剂瓶托盘" [ref=e2008]:
+                      - cell [ref=e2009]:
+                        - img [ref=e2013]
+                      - cell "愈创木酚" [ref=e2033]:
+                        - button "愈创木酚" [ref=e2035] [cursor=pointer]:
+                          - generic [ref=e2036]: 愈创木酚
+                      - cell "liquid" [ref=e2037]:
+                        - generic [ref=e2038]: liquid
+                      - cell "1.868mL" [ref=e2039]:
+                        - generic [ref=e2042]: 1.868mL
+                      - cell "W-2-7 / A2" [ref=e2043]:
+                        - generic [ref=e2046]: W-2-7 / A2
+                      - cell "2 mL试剂瓶托盘" [ref=e2047]:
+                        - generic [ref=e2050]: 2 mL试剂瓶托盘
+                    - row "间甲酚 liquid 1.874mL W-2-7 / A3 2 mL试剂瓶托盘" [ref=e2051]:
+                      - cell [ref=e2052]:
+                        - img [ref=e2056]
+                      - cell "间甲酚" [ref=e2070]:
+                        - button "间甲酚" [ref=e2072] [cursor=pointer]:
+                          - generic [ref=e2073]: 间甲酚
+                      - cell "liquid" [ref=e2074]:
+                        - generic [ref=e2075]: liquid
+                      - cell "1.874mL" [ref=e2076]:
+                        - generic [ref=e2079]: 1.874mL
+                      - cell "W-2-7 / A3" [ref=e2080]:
+                        - generic [ref=e2083]: W-2-7 / A3
+                      - cell "2 mL试剂瓶托盘" [ref=e2084]:
+                        - generic [ref=e2087]: 2 mL试剂瓶托盘
+                    - row "间溴苯酚 liquid 1.874mL W-2-7 / A4 2 mL试剂瓶托盘" [ref=e2088]:
+                      - cell [ref=e2089]:
+                        - img [ref=e2093]
+                      - cell "间溴苯酚" [ref=e2111]:
+                        - button "间溴苯酚" [ref=e2113] [cursor=pointer]:
+                          - generic [ref=e2114]: 间溴苯酚
+                      - cell "liquid" [ref=e2115]:
+                        - generic [ref=e2116]: liquid
+                      - cell "1.874mL" [ref=e2117]:
+                        - generic [ref=e2120]: 1.874mL
+                      - cell "W-2-7 / A4" [ref=e2121]:
+                        - generic [ref=e2124]: W-2-7 / A4
+                      - cell "2 mL试剂瓶托盘" [ref=e2125]:
+                        - generic [ref=e2128]: 2 mL试剂瓶托盘
+                    - row "1-氯-5-碘戊烷 liquid 1.776mL W-2-7 / A5 2 mL试剂瓶托盘" [ref=e2129]:
+                      - cell [ref=e2130]:
+                        - img [ref=e2134]
+                      - cell "1-氯-5-碘戊烷" [ref=e2151]:
+                        - button "1-氯-5-碘戊烷" [ref=e2153] [cursor=pointer]:
+                          - generic [ref=e2154]: 1-氯-5-碘戊烷
+                      - cell "liquid" [ref=e2155]:
+                        - generic [ref=e2156]: liquid
+                      - cell "1.776mL" [ref=e2157]:
+                        - generic [ref=e2160]: 1.776mL
+                      - cell "W-2-7 / A5" [ref=e2161]:
+                        - generic [ref=e2164]: W-2-7 / A5
+                      - cell "2 mL试剂瓶托盘" [ref=e2165]:
+                        - generic [ref=e2168]: 2 mL试剂瓶托盘
+                    - row "1-碘戊烷 liquid 1.792mL W-2-7 / A6 2 mL试剂瓶托盘" [ref=e2169]:
+                      - cell [ref=e2170]:
+                        - img [ref=e2174]
+                      - cell "1-碘戊烷" [ref=e2186]:
+                        - button "1-碘戊烷" [ref=e2188] [cursor=pointer]:
+                          - generic [ref=e2189]: 1-碘戊烷
+                      - cell "liquid" [ref=e2190]:
+                        - generic [ref=e2191]: liquid
+                      - cell "1.792mL" [ref=e2192]:
+                        - generic [ref=e2195]: 1.792mL
+                      - cell "W-2-7 / A6" [ref=e2196]:
+                        - generic [ref=e2199]: W-2-7 / A6
+                      - cell "2 mL试剂瓶托盘" [ref=e2200]:
+                        - generic [ref=e2203]: 2 mL试剂瓶托盘
+                    - row "碘环己烷 liquid 1.792mL W-2-7 / A7 2 mL试剂瓶托盘" [ref=e2204]:
+                      - cell [ref=e2205]:
+                        - img [ref=e2209]
+                      - cell "碘环己烷" [ref=e2224]:
+                        - button "碘环己烷" [ref=e2226] [cursor=pointer]:
+                          - generic [ref=e2227]: 碘环己烷
+                      - cell "liquid" [ref=e2228]:
+                        - generic [ref=e2229]: liquid
+                      - cell "1.792mL" [ref=e2230]:
+                        - generic [ref=e2233]: 1.792mL
+                      - cell "W-2-7 / A7" [ref=e2234]:
+                        - generic [ref=e2237]: W-2-7 / A7
+                      - cell "2 mL试剂瓶托盘" [ref=e2238]:
+                        - generic [ref=e2241]: 2 mL试剂瓶托盘
+                    - row "碘乙烷 liquid 1.872mL W-2-7 / A8 2 mL试剂瓶托盘" [ref=e2242]:
+                      - cell [ref=e2243]:
+                        - img [ref=e2247]
+                      - cell "碘乙烷" [ref=e2253]:
+                        - button "碘乙烷" [ref=e2255] [cursor=pointer]:
+                          - generic [ref=e2256]: 碘乙烷
+                      - cell "liquid" [ref=e2257]:
+                        - generic [ref=e2258]: liquid
+                      - cell "1.872mL" [ref=e2259]:
+                        - generic [ref=e2262]: 1.872mL
+                      - cell "W-2-7 / A8" [ref=e2263]:
+                        - generic [ref=e2266]: W-2-7 / A8
+                      - cell "2 mL试剂瓶托盘" [ref=e2267]:
+                        - generic [ref=e2270]: 2 mL试剂瓶托盘
+                    - row "1-碘-3,3,3-三氟丙烷 liquid 1.812mL W-2-7 / B1 2 mL试剂瓶托盘" [ref=e2271]:
+                      - cell [ref=e2272]:
+                        - img [ref=e2276]
+                      - cell "1-碘-3,3,3-三氟丙烷" [ref=e2293]:
+                        - button "1-碘-3,3,3-三氟丙烷" [ref=e2295] [cursor=pointer]:
+                          - generic [ref=e2296]: 1-碘-3,3,3-三氟丙烷
+                      - cell "liquid" [ref=e2297]:
+                        - generic [ref=e2298]: liquid
+                      - cell "1.812mL" [ref=e2299]:
+                        - generic [ref=e2302]: 1.812mL
+                      - cell "W-2-7 / B1" [ref=e2303]:
+                        - generic [ref=e2306]: W-2-7 / B1
+                      - cell "2 mL试剂瓶托盘" [ref=e2307]:
+                        - generic [ref=e2310]: 2 mL试剂瓶托盘
+                    - row "2-萘酚 solid 444mg W-3-1 / A1 30 mL粉桶托盘" [ref=e2311]:
+                      - cell [ref=e2312]:
+                        - img [ref=e2316]
+                      - cell "2-萘酚" [ref=e2340]:
+                        - button "2-萘酚" [ref=e2342] [cursor=pointer]:
+                          - generic [ref=e2343]: 2-萘酚
+                      - cell "solid" [ref=e2344]:
+                        - generic [ref=e2345]: solid
+                      - cell "444mg" [ref=e2346]:
+                        - generic [ref=e2349]: 444mg
+                      - cell "W-3-1 / A1" [ref=e2350]:
+                        - generic [ref=e2353]: W-3-1 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2354]:
+                        - generic [ref=e2357]: 30 mL粉桶托盘
+                    - row "磷酸三钾 solid 2533.2mg W-3-1 / B1 30 mL粉桶托盘" [ref=e2358]:
+                      - cell [ref=e2359]:
+                        - img [ref=e2363]
+                      - cell "磷酸三钾" [ref=e2388]:
+                        - button "磷酸三钾" [ref=e2390] [cursor=pointer]:
+                          - generic [ref=e2391]: 磷酸三钾
+                      - cell "solid" [ref=e2392]:
+                        - generic [ref=e2393]: solid
+                      - cell "2533.2mg" [ref=e2394]:
+                        - generic [ref=e2397]: 2533.2mg
+                      - cell "W-3-1 / B1" [ref=e2398]:
+                        - generic [ref=e2401]: W-3-1 / B1
+                      - cell "30 mL粉桶托盘" [ref=e2402]:
+                        - generic [ref=e2405]: 30 mL粉桶托盘
+                    - row "异丙醇 liquid 17mL W-3-2 / A1 40 mL试剂瓶托盘" [ref=e2406]:
+                      - cell [ref=e2407]:
+                        - img [ref=e2411]
+                      - cell "异丙醇" [ref=e2417]:
+                        - button "异丙醇" [ref=e2419] [cursor=pointer]:
+                          - generic [ref=e2420]: 异丙醇
+                      - cell "liquid" [ref=e2421]:
+                        - generic [ref=e2422]: liquid
+                      - cell "17mL" [ref=e2423]:
+                        - generic [ref=e2426]: 17mL
+                      - cell "W-3-2 / A1" [ref=e2427]:
+                        - generic [ref=e2430]: W-3-2 / A1
+                      - cell "40 mL试剂瓶托盘" [ref=e2431]:
+                        - generic [ref=e2434]: 40 mL试剂瓶托盘
+                    - row "无水碳酸钾 solid 622.7mg W-4-1 / A1 30 mL粉桶托盘" [ref=e2435]:
+                      - cell [ref=e2436]:
+                        - img [ref=e2440]
+                      - cell "无水碳酸钾" [ref=e2457]:
+                        - button "无水碳酸钾" [ref=e2459] [cursor=pointer]:
+                          - generic [ref=e2460]: 无水碳酸钾
+                      - cell "solid" [ref=e2461]:
+                        - generic [ref=e2462]: solid
+                      - cell "622.7mg" [ref=e2463]:
+                        - generic [ref=e2466]: 622.7mg
+                      - cell "W-4-1 / A1" [ref=e2467]:
+                        - generic [ref=e2470]: W-4-1 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2471]:
+                        - generic [ref=e2474]: 30 mL粉桶托盘
+                    - row "碳酸铯 solid 328.7mg W-4-1 / B1 30 mL粉桶托盘" [ref=e2475]:
+                      - cell [ref=e2476]:
+                        - img [ref=e2480]
+                      - cell "碳酸铯" [ref=e2499]:
+                        - button "碳酸铯" [ref=e2501] [cursor=pointer]:
+                          - generic [ref=e2502]: 碳酸铯
+                      - cell "solid" [ref=e2503]:
+                        - generic [ref=e2504]: solid
+                      - cell "328.7mg" [ref=e2505]:
+                        - generic [ref=e2508]: 328.7mg
+                      - cell "W-4-1 / B1" [ref=e2509]:
+                        - generic [ref=e2512]: W-4-1 / B1
+                      - cell "30 mL粉桶托盘" [ref=e2513]:
+                        - generic [ref=e2516]: 30 mL粉桶托盘
+                    - row "联硼酸频那醇酯 solid 1085.6mg W-4-2 / A1 30 mL粉桶托盘" [ref=e2517]:
+                      - cell [ref=e2518]:
+                        - img [ref=e2522]
+                      - cell "联硼酸频那醇酯" [ref=e2556]:
+                        - button "联硼酸频那醇酯" [ref=e2558] [cursor=pointer]:
+                          - generic [ref=e2559]: 联硼酸频那醇酯
+                      - cell "solid" [ref=e2560]:
+                        - generic [ref=e2561]: solid
+                      - cell "1085.6mg" [ref=e2562]:
+                        - generic [ref=e2565]: 1085.6mg
+                      - cell "W-4-2 / A1" [ref=e2566]:
+                        - generic [ref=e2569]: W-4-2 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2570]:
+                        - generic [ref=e2573]: 30 mL粉桶托盘
+                    - row "叔丁醇钾 solid 1515.8mg W-4-2 / B1 30 mL粉桶托盘" [ref=e2574]:
+                      - cell [ref=e2575]:
+                        - img [ref=e2579]
+                      - cell "叔丁醇钾" [ref=e2589]:
+                        - button "叔丁醇钾" [ref=e2591] [cursor=pointer]:
+                          - generic [ref=e2592]: 叔丁醇钾
+                      - cell "solid" [ref=e2593]:
+                        - generic [ref=e2594]: solid
+                      - cell "1515.8mg" [ref=e2595]:
+                        - generic [ref=e2598]: 1515.8mg
+                      - cell "W-4-2 / B1" [ref=e2599]:
+                        - generic [ref=e2602]: W-4-2 / B1
+                      - cell "30 mL粉桶托盘" [ref=e2603]:
+                        - generic [ref=e2606]: 30 mL粉桶托盘
+                    - row "对羟基苯甲醛 solid 1658.4mg W-4-3 / A1 30 mL粉桶托盘" [ref=e2607]:
+                      - cell [ref=e2608]:
+                        - img [ref=e2612]
+                      - cell "对羟基苯甲醛" [ref=e2637]:
+                        - button "对羟基苯甲醛" [ref=e2639] [cursor=pointer]:
+                          - generic [ref=e2640]: 对羟基苯甲醛
+                      - cell "solid" [ref=e2641]:
+                        - generic [ref=e2642]: solid
+                      - cell "1658.4mg" [ref=e2643]:
+                        - generic [ref=e2646]: 1658.4mg
+                      - cell "W-4-3 / A1" [ref=e2647]:
+                        - generic [ref=e2650]: W-4-3 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2651]:
+                        - generic [ref=e2654]: 30 mL粉桶托盘
+                    - row "间羟基苯甲醛 solid 1658.4mg W-4-3 / B1 30 mL粉桶托盘" [ref=e2655]:
+                      - cell [ref=e2656]:
+                        - img [ref=e2660]
+                      - cell "间羟基苯甲醛" [ref=e2683]:
+                        - button "间羟基苯甲醛" [ref=e2685] [cursor=pointer]:
+                          - generic [ref=e2686]: 间羟基苯甲醛
+                      - cell "solid" [ref=e2687]:
+                        - generic [ref=e2688]: solid
+                      - cell "1658.4mg" [ref=e2689]:
+                        - generic [ref=e2692]: 1658.4mg
+                      - cell "W-4-3 / B1" [ref=e2693]:
+                        - generic [ref=e2696]: W-4-3 / B1
+                      - cell "30 mL粉桶托盘" [ref=e2697]:
+                        - generic [ref=e2700]: 30 mL粉桶托盘
+                    - row "碘化亚铜 solid 1977.2mg W-4-4 / A1 30 mL粉桶托盘" [ref=e2701]:
+                      - cell [ref=e2702]:
+                        - img [ref=e2706]
+                      - cell "碘化亚铜" [ref=e2712]:
+                        - button "碘化亚铜" [ref=e2714] [cursor=pointer]:
+                          - generic [ref=e2715]: 碘化亚铜
+                      - cell "solid" [ref=e2716]:
+                        - generic [ref=e2717]: solid
+                      - cell "1977.2mg" [ref=e2718]:
+                        - generic [ref=e2721]: 1977.2mg
+                      - cell "W-4-4 / A1" [ref=e2722]:
+                        - generic [ref=e2725]: W-4-4 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2726]:
+                        - generic [ref=e2729]: 30 mL粉桶托盘
+                    - row "1-乙基-(3-二甲基氨基丙基)碳酰二亚胺盐酸盐 solid 344mg W-4-5 / A1 30 mL粉桶托盘" [ref=e2730]:
+                      - cell [ref=e2731]:
+                        - img [ref=e2735]
+                      - cell "1-乙基-(3-二甲基氨基丙基)碳酰二亚胺盐酸盐" [ref=e2764]:
+                        - button "1-乙基-(3-二甲基氨基丙基)碳酰二亚胺盐酸盐" [ref=e2766] [cursor=pointer]:
+                          - generic [ref=e2767]: 1-乙基-(3-二甲基氨基丙基)碳酰二亚胺盐酸盐
+                      - cell "solid" [ref=e2768]:
+                        - generic [ref=e2769]: solid
+                      - cell "344mg" [ref=e2770]:
+                        - generic [ref=e2773]: 344mg
+                      - cell "W-4-5 / A1" [ref=e2774]:
+                        - generic [ref=e2777]: W-4-5 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2778]:
+                        - generic [ref=e2781]: 30 mL粉桶托盘
+                    - row "4-二甲氨基吡啶 solid 1913.2mg W-4-5 / B1 30 mL粉桶托盘" [ref=e2782]:
+                      - cell [ref=e2783]:
+                        - img [ref=e2787]
+                      - cell "4-二甲氨基吡啶" [ref=e2809]:
+                        - button "4-二甲氨基吡啶" [ref=e2811] [cursor=pointer]:
+                          - generic [ref=e2812]: 4-二甲氨基吡啶
+                      - cell "solid" [ref=e2813]:
+                        - generic [ref=e2814]: solid
+                      - cell "1913.2mg" [ref=e2815]:
+                        - generic [ref=e2818]: 1913.2mg
+                      - cell "W-4-5 / B1" [ref=e2819]:
+                        - generic [ref=e2822]: W-4-5 / B1
+                      - cell "30 mL粉桶托盘" [ref=e2823]:
+                        - generic [ref=e2826]: 30 mL粉桶托盘
+                    - row "戴斯-马丁氧化剂 solid 47.2mg W-4-6 / A1 30 mL粉桶托盘" [ref=e2827]:
+                      - cell [ref=e2828]:
+                        - img [ref=e2832]
+                      - cell "戴斯-马丁氧化剂" [ref=e2893]:
+                        - button "戴斯-马丁氧化剂" [ref=e2895] [cursor=pointer]:
+                          - generic [ref=e2896]: 戴斯-马丁氧化剂
+                      - cell "solid" [ref=e2897]:
+                        - generic [ref=e2898]: solid
+                      - cell "47.2mg" [ref=e2899]:
+                        - generic [ref=e2902]: 47.2mg
+                      - cell "W-4-6 / A1" [ref=e2903]:
+                        - generic [ref=e2906]: W-4-6 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2907]:
+                        - generic [ref=e2910]: 30 mL粉桶托盘
+                    - row "L-脯氨酸 solid 4862mg W-4-7 / A1 30 mL粉桶托盘" [ref=e2911]:
+                      - cell [ref=e2912]:
+                        - img [ref=e2916]
+                      - cell "L-脯氨酸" [ref=e2940]:
+                        - button "L-脯氨酸" [ref=e2942] [cursor=pointer]:
+                          - generic [ref=e2943]: L-脯氨酸
+                      - cell "solid" [ref=e2944]:
+                        - generic [ref=e2945]: solid
+                      - cell "4862mg" [ref=e2946]:
+                        - generic [ref=e2949]: 4862mg
+                      - cell "W-4-7 / A1" [ref=e2950]:
+                        - generic [ref=e2953]: W-4-7 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2954]:
+                        - generic [ref=e2957]: 30 mL粉桶托盘
+                    - row "对二甲胺基苯甲醛 solid 5761.6mg W-4-8 / A1 30 mL粉桶托盘" [ref=e2958]:
+                      - cell [ref=e2959]:
+                        - img [ref=e2963]
+                      - cell "对二甲胺基苯甲醛" [ref=e2982]:
+                        - button "对二甲胺基苯甲醛" [ref=e2984] [cursor=pointer]:
+                          - generic [ref=e2985]: 对二甲胺基苯甲醛
+                      - cell "solid" [ref=e2986]:
+                        - generic [ref=e2987]: solid
+                      - cell "5761.6mg" [ref=e2988]:
+                        - generic [ref=e2991]: 5761.6mg
+                      - cell "W-4-8 / A1" [ref=e2992]:
+                        - generic [ref=e2995]: W-4-8 / A1
+                      - cell "30 mL粉桶托盘" [ref=e2996]:
+                        - generic [ref=e2999]: 30 mL粉桶托盘
+          - generic [ref=e3001]:
+            - generic [ref=e3002]:
+              - heading "设备状态" [level=3] [ref=e3004]
+              - generic [ref=e3005]:
+                - generic [ref=e3006]:
+                  - generic [ref=e3007]: 机械臂
+                  - generic [ref=e3009]: AVAILABLE
+                - generic [ref=e3010]:
+                  - generic [ref=e3011]: 加粉模块
+                  - generic [ref=e3013]: AVAILABLE
+                - generic [ref=e3014]:
+                  - generic [ref=e3015]: 热磁力搅拌模块
+                  - generic [ref=e3017]: AVAILABLE
+                - generic [ref=e3018]:
+                  - generic [ref=e3019]: 开盖模块
+                  - generic [ref=e3021]: AVAILABLE
+                - generic [ref=e3022]:
+                  - generic [ref=e3023]: W1排货架
+                  - generic [ref=e3025]: OUTSIDE
+                - generic [ref=e3026]:
+                  - generic [ref=e3027]: W-1-1、W-1-2
+                  - generic [ref=e3029]: HOME
+                - generic [ref=e3030]:
+                  - generic [ref=e3031]: W-1-3、W-1-4
+                  - generic [ref=e3033]: HOME
+                - generic [ref=e3034]:
+                  - generic [ref=e3035]: W-1-5、W-1-6
+                  - generic [ref=e3037]: HOME
+                - generic [ref=e3038]:
+                  - generic [ref=e3039]: W-1-7、W-1-8
+                  - generic [ref=e3041]: OUTSIDE
+                - generic [ref=e3042]:
+                  - generic [ref=e3043]: 中转货架
+                  - generic [ref=e3045]: AVAILABLE
+                - generic [ref=e3046]:
+                  - generic [ref=e3047]: 过渡舱外门
+                  - generic [ref=e3049]: OPEN
+                - generic [ref=e3050]:
+                  - generic [ref=e3051]: 过渡舱内门
+                  - generic [ref=e3053]: CLOSE
+                - generic [ref=e3054]:
+                  - generic [ref=e3055]: 加磁子模块
+                  - generic [ref=e3057]: AVAILABLE
+                - generic [ref=e3058]:
+                  - generic [ref=e3059]: 闪滤模块
+                  - generic [ref=e3061]: AVAILABLE
+                - generic [ref=e3062]:
+                  - generic [ref=e3063]: 交换仓货架
+                  - generic [ref=e3065]: UNAVAILABLE
+            - generic [ref=e3066]:
+              - heading "其它操作" [level=3] [ref=e3068]
+              - generic [ref=e3069]:
+                - button "设备初始化" [ref=e3070] [cursor=pointer]:
+                  - generic [ref=e3071]: 设备初始化
+                - generic [ref=e3072]:
+                  - generic [ref=e3073]: 过渡舱外门
+                  - button "关闭外门" [ref=e3075] [cursor=pointer]:
+                    - generic [ref=e3076]: 关闭外门
+                - generic [ref=e3077]:
+                  - generic [ref=e3078]: W1 排货架
+                  - generic [ref=e3080]:
+                    - generic [ref=e3084] [cursor=pointer]:
+                      - generic:
+                        - combobox [ref=e3086]
+                        - generic [ref=e3087]: W-1-1
+                      - img [ref=e3090]
+                    - button "执行推出" [ref=e3092] [cursor=pointer]:
+                      - generic [ref=e3093]: 执行推出
+                  - generic [ref=e3094]: 后台控制
+                  - link "访问合成工站控制页面" [ref=e3095] [cursor=pointer]:
+                    - /url: http://10.40.13.51:9191/#/?$skipCheckService=true&hostname=http://10.40.13.51:4669&$view=NTU
+                    - img [ref=e3097]
+                    - generic [ref=e3099]: 访问合成工站控制页面
+          - generic [ref=e3100]:
+            - generic [ref=e3101]:
+              - heading "运行结果" [level=3] [ref=e3102]
+              - generic [ref=e3103]:
+                - generic [ref=e3105]: 未开始
+                - button "刷新" [ref=e3106] [cursor=pointer]:
+                  - img [ref=e3108]
+                  - generic [ref=e3110]: 刷新
+            - generic [ref=e3111]: 暂无运行结果
+  - dialog [ref=e3113]:
+    - generic [ref=e3114]:
+      - banner [ref=e3115]:
+        - generic [ref=e3116]: 录入资源
+        - button "关闭此对话框" [ref=e3117] [cursor=pointer]:
+          - img [ref=e3119]
+      - generic [ref=e3123]:
+        - generic [ref=e3124]:
+          - generic [ref=e3125]: 资源视图预览
+          - generic [ref=e3127]:
+            - generic [ref=e3129]:
+              - generic [ref=e3131]:
+                - img [ref=e3134]
+                - textbox "位置码" [ref=e3137]: 已选 1 个位置
+              - generic [ref=e3192]:
+                - generic [ref=e3193]: TB-2-4
+                - button "关闭此标签" [ref=e3194]:
+                  - img [ref=e3196] [cursor=pointer]
+            - radiogroup "radio-group" [ref=e3143]:
+              - generic [ref=e3144]:
+                - radio "W-1上料" [ref=e3145]
+                - generic [ref=e3146] [cursor=pointer]: W-1上料
+              - generic [ref=e3147]:
+                - radio "TB上料" [checked] [ref=e3148]
+                - generic [ref=e3149] [cursor=pointer]: TB上料
+        - generic [ref=e3150]:
+          - generic [ref=e3151]: 资源配置
+          - generic [ref=e3198]:
+            - generic [ref=e3199]:
+              - generic [ref=e3200]: TB-2-4
+              - button "移除位置" [ref=e3201] [cursor=pointer]:
+                - generic [ref=e3202]: 移除位置
+            - generic [ref=e3204]:
+              - generic [ref=e3208]:
+                - generic [ref=e3209]:
+                  - generic [ref=e3210]: "*托盘类型"
+                  - generic [ref=e3213]:
+                    - generic [ref=e3257]:
+                      - combobox "*托盘类型" [active] [ref=e3215]
+                      - generic [ref=e3216]: 1mL Tip 头托盘-TECAN (201000731)
+                    - img [ref=e3219] [cursor=pointer]
+                - generic [ref=e3221]:
+                  - generic [ref=e3222]: 托盘条码
+                  - textbox "托盘条码" [ref=e3226]:
+                    - /placeholder: 请扫码
+              - generic [ref=e3278]:
+                - table [ref=e3279]:
+                  - rowgroup [ref=e3280]:
+                    - row "12 A12 B12 C12 D12 E12 F12 G12 H12" [ref=e3281]:
+                      - cell "12" [ref=e3282]:
+                        - generic [ref=e3283] [cursor=pointer]: "12"
+                      - cell "A12" [ref=e3284]:
+                        - generic [ref=e3285] [cursor=pointer]: A12
+                      - cell "B12" [ref=e3286]:
+                        - generic [ref=e3287] [cursor=pointer]: B12
+                      - cell "C12" [ref=e3288]:
+                        - generic [ref=e3289] [cursor=pointer]: C12
+                      - cell "D12" [ref=e3290]:
+                        - generic [ref=e3291] [cursor=pointer]: D12
+                      - cell "E12" [ref=e3292]:
+                        - generic [ref=e3293] [cursor=pointer]: E12
+                      - cell "F12" [ref=e3294]:
+                        - generic [ref=e3295] [cursor=pointer]: F12
+                      - cell "G12" [ref=e3296]:
+                        - generic [ref=e3297] [cursor=pointer]: G12
+                      - cell "H12" [ref=e3298]:
+                        - generic [ref=e3299] [cursor=pointer]: H12
+                    - row "11 A11 B11 C11 D11 E11 F11 G11 H11" [ref=e3300]:
+                      - cell "11" [ref=e3301]:
+                        - generic [ref=e3302] [cursor=pointer]: "11"
+                      - cell "A11" [ref=e3303]:
+                        - generic [ref=e3304] [cursor=pointer]: A11
+                      - cell "B11" [ref=e3305]:
+                        - generic [ref=e3306] [cursor=pointer]: B11
+                      - cell "C11" [ref=e3307]:
+                        - generic [ref=e3308] [cursor=pointer]: C11
+                      - cell "D11" [ref=e3309]:
+                        - generic [ref=e3310] [cursor=pointer]: D11
+                      - cell "E11" [ref=e3311]:
+                        - generic [ref=e3312] [cursor=pointer]: E11
+                      - cell "F11" [ref=e3313]:
+                        - generic [ref=e3314] [cursor=pointer]: F11
+                      - cell "G11" [ref=e3315]:
+                        - generic [ref=e3316] [cursor=pointer]: G11
+                      - cell "H11" [ref=e3317]:
+                        - generic [ref=e3318] [cursor=pointer]: H11
+                    - row "10 A10 B10 C10 D10 E10 F10 G10 H10" [ref=e3319]:
+                      - cell "10" [ref=e3320]:
+                        - generic [ref=e3321] [cursor=pointer]: "10"
+                      - cell "A10" [ref=e3322]:
+                        - generic [ref=e3323] [cursor=pointer]: A10
+                      - cell "B10" [ref=e3324]:
+                        - generic [ref=e3325] [cursor=pointer]: B10
+                      - cell "C10" [ref=e3326]:
+                        - generic [ref=e3327] [cursor=pointer]: C10
+                      - cell "D10" [ref=e3328]:
+                        - generic [ref=e3329] [cursor=pointer]: D10
+                      - cell "E10" [ref=e3330]:
+                        - generic [ref=e3331] [cursor=pointer]: E10
+                      - cell "F10" [ref=e3332]:
+                        - generic [ref=e3333] [cursor=pointer]: F10
+                      - cell "G10" [ref=e3334]:
+                        - generic [ref=e3335] [cursor=pointer]: G10
+                      - cell "H10" [ref=e3336]:
+                        - generic [ref=e3337] [cursor=pointer]: H10
+                    - row "9 A9 B9 C9 D9 E9 F9 G9 H9" [ref=e3338]:
+                      - cell "9" [ref=e3339]:
+                        - generic [ref=e3340] [cursor=pointer]: "9"
+                      - cell "A9" [ref=e3341]:
+                        - generic [ref=e3342] [cursor=pointer]: A9
+                      - cell "B9" [ref=e3343]:
+                        - generic [ref=e3344] [cursor=pointer]: B9
+                      - cell "C9" [ref=e3345]:
+                        - generic [ref=e3346] [cursor=pointer]: C9
+                      - cell "D9" [ref=e3347]:
+                        - generic [ref=e3348] [cursor=pointer]: D9
+                      - cell "E9" [ref=e3349]:
+                        - generic [ref=e3350] [cursor=pointer]: E9
+                      - cell "F9" [ref=e3351]:
+                        - generic [ref=e3352] [cursor=pointer]: F9
+                      - cell "G9" [ref=e3353]:
+                        - generic [ref=e3354] [cursor=pointer]: G9
+                      - cell "H9" [ref=e3355]:
+                        - generic [ref=e3356] [cursor=pointer]: H9
+                    - row "8 A8 B8 C8 D8 E8 F8 G8 H8" [ref=e3357]:
+                      - cell "8" [ref=e3358]:
+                        - generic [ref=e3359] [cursor=pointer]: "8"
+                      - cell "A8" [ref=e3360]:
+                        - generic [ref=e3361] [cursor=pointer]: A8
+                      - cell "B8" [ref=e3362]:
+                        - generic [ref=e3363] [cursor=pointer]: B8
+                      - cell "C8" [ref=e3364]:
+                        - generic [ref=e3365] [cursor=pointer]: C8
+                      - cell "D8" [ref=e3366]:
+                        - generic [ref=e3367] [cursor=pointer]: D8
+                      - cell "E8" [ref=e3368]:
+                        - generic [ref=e3369] [cursor=pointer]: E8
+                      - cell "F8" [ref=e3370]:
+                        - generic [ref=e3371] [cursor=pointer]: F8
+                      - cell "G8" [ref=e3372]:
+                        - generic [ref=e3373] [cursor=pointer]: G8
+                      - cell "H8" [ref=e3374]:
+                        - generic [ref=e3375] [cursor=pointer]: H8
+                    - row "7 A7 B7 C7 D7 E7 F7 G7 H7" [ref=e3376]:
+                      - cell "7" [ref=e3377]:
+                        - generic [ref=e3378] [cursor=pointer]: "7"
+                      - cell "A7" [ref=e3379]:
+                        - generic [ref=e3380] [cursor=pointer]: A7
+                      - cell "B7" [ref=e3381]:
+                        - generic [ref=e3382] [cursor=pointer]: B7
+                      - cell "C7" [ref=e3383]:
+                        - generic [ref=e3384] [cursor=pointer]: C7
+                      - cell "D7" [ref=e3385]:
+                        - generic [ref=e3386] [cursor=pointer]: D7
+                      - cell "E7" [ref=e3387]:
+                        - generic [ref=e3388] [cursor=pointer]: E7
+                      - cell "F7" [ref=e3389]:
+                        - generic [ref=e3390] [cursor=pointer]: F7
+                      - cell "G7" [ref=e3391]:
+                        - generic [ref=e3392] [cursor=pointer]: G7
+                      - cell "H7" [ref=e3393]:
+                        - generic [ref=e3394] [cursor=pointer]: H7
+                    - row "6 A6 B6 C6 D6 E6 F6 G6 H6" [ref=e3395]:
+                      - cell "6" [ref=e3396]:
+                        - generic [ref=e3397] [cursor=pointer]: "6"
+                      - cell "A6" [ref=e3398]:
+                        - generic [ref=e3399] [cursor=pointer]: A6
+                      - cell "B6" [ref=e3400]:
+                        - generic [ref=e3401] [cursor=pointer]: B6
+                      - cell "C6" [ref=e3402]:
+                        - generic [ref=e3403] [cursor=pointer]: C6
+                      - cell "D6" [ref=e3404]:
+                        - generic [ref=e3405] [cursor=pointer]: D6
+                      - cell "E6" [ref=e3406]:
+                        - generic [ref=e3407] [cursor=pointer]: E6
+                      - cell "F6" [ref=e3408]:
+                        - generic [ref=e3409] [cursor=pointer]: F6
+                      - cell "G6" [ref=e3410]:
+                        - generic [ref=e3411] [cursor=pointer]: G6
+                      - cell "H6" [ref=e3412]:
+                        - generic [ref=e3413] [cursor=pointer]: H6
+                    - row "5 A5 B5 C5 D5 E5 F5 G5 H5" [ref=e3414]:
+                      - cell "5" [ref=e3415]:
+                        - generic [ref=e3416] [cursor=pointer]: "5"
+                      - cell "A5" [ref=e3417]:
+                        - generic [ref=e3418] [cursor=pointer]: A5
+                      - cell "B5" [ref=e3419]:
+                        - generic [ref=e3420] [cursor=pointer]: B5
+                      - cell "C5" [ref=e3421]:
+                        - generic [ref=e3422] [cursor=pointer]: C5
+                      - cell "D5" [ref=e3423]:
+                        - generic [ref=e3424] [cursor=pointer]: D5
+                      - cell "E5" [ref=e3425]:
+                        - generic [ref=e3426] [cursor=pointer]: E5
+                      - cell "F5" [ref=e3427]:
+                        - generic [ref=e3428] [cursor=pointer]: F5
+                      - cell "G5" [ref=e3429]:
+                        - generic [ref=e3430] [cursor=pointer]: G5
+                      - cell "H5" [ref=e3431]:
+                        - generic [ref=e3432] [cursor=pointer]: H5
+                    - row "4 A4 B4 C4 D4 E4 F4 G4 H4" [ref=e3433]:
+                      - cell "4" [ref=e3434]:
+                        - generic [ref=e3435] [cursor=pointer]: "4"
+                      - cell "A4" [ref=e3436]:
+                        - generic [ref=e3437] [cursor=pointer]: A4
+                      - cell "B4" [ref=e3438]:
+                        - generic [ref=e3439] [cursor=pointer]: B4
+                      - cell "C4" [ref=e3440]:
+                        - generic [ref=e3441] [cursor=pointer]: C4
+                      - cell "D4" [ref=e3442]:
+                        - generic [ref=e3443] [cursor=pointer]: D4
+                      - cell "E4" [ref=e3444]:
+                        - generic [ref=e3445] [cursor=pointer]: E4
+                      - cell "F4" [ref=e3446]:
+                        - generic [ref=e3447] [cursor=pointer]: F4
+                      - cell "G4" [ref=e3448]:
+                        - generic [ref=e3449] [cursor=pointer]: G4
+                      - cell "H4" [ref=e3450]:
+                        - generic [ref=e3451] [cursor=pointer]: H4
+                    - row "3 A3 B3 C3 D3 E3 F3 G3 H3" [ref=e3452]:
+                      - cell "3" [ref=e3453]:
+                        - generic [ref=e3454] [cursor=pointer]: "3"
+                      - cell "A3" [ref=e3455]:
+                        - generic [ref=e3456] [cursor=pointer]: A3
+                      - cell "B3" [ref=e3457]:
+                        - generic [ref=e3458] [cursor=pointer]: B3
+                      - cell "C3" [ref=e3459]:
+                        - generic [ref=e3460] [cursor=pointer]: C3
+                      - cell "D3" [ref=e3461]:
+                        - generic [ref=e3462] [cursor=pointer]: D3
+                      - cell "E3" [ref=e3463]:
+                        - generic [ref=e3464] [cursor=pointer]: E3
+                      - cell "F3" [ref=e3465]:
+                        - generic [ref=e3466] [cursor=pointer]: F3
+                      - cell "G3" [ref=e3467]:
+                        - generic [ref=e3468] [cursor=pointer]: G3
+                      - cell "H3" [ref=e3469]:
+                        - generic [ref=e3470] [cursor=pointer]: H3
+                    - row "2 A2 B2 C2 D2 E2 F2 G2 H2" [ref=e3471]:
+                      - cell "2" [ref=e3472]:
+                        - generic [ref=e3473] [cursor=pointer]: "2"
+                      - cell "A2" [ref=e3474]:
+                        - generic [ref=e3475] [cursor=pointer]: A2
+                      - cell "B2" [ref=e3476]:
+                        - generic [ref=e3477] [cursor=pointer]: B2
+                      - cell "C2" [ref=e3478]:
+                        - generic [ref=e3479] [cursor=pointer]: C2
+                      - cell "D2" [ref=e3480]:
+                        - generic [ref=e3481] [cursor=pointer]: D2
+                      - cell "E2" [ref=e3482]:
+                        - generic [ref=e3483] [cursor=pointer]: E2
+                      - cell "F2" [ref=e3484]:
+                        - generic [ref=e3485] [cursor=pointer]: F2
+                      - cell "G2" [ref=e3486]:
+                        - generic [ref=e3487] [cursor=pointer]: G2
+                      - cell "H2" [ref=e3488]:
+                        - generic [ref=e3489] [cursor=pointer]: H2
+                    - row "1 A1 B1 C1 D1 E1 F1 G1 H1" [ref=e3490]:
+                      - cell "1" [ref=e3491]:
+                        - generic [ref=e3492] [cursor=pointer]: "1"
+                      - cell "A1" [ref=e3493]:
+                        - generic [ref=e3494] [cursor=pointer]: A1
+                      - cell "B1" [ref=e3495]:
+                        - generic [ref=e3496] [cursor=pointer]: B1
+                      - cell "C1" [ref=e3497]:
+                        - generic [ref=e3498] [cursor=pointer]: C1
+                      - cell "D1" [ref=e3499]:
+                        - generic [ref=e3500] [cursor=pointer]: D1
+                      - cell "E1" [ref=e3501]:
+                        - generic [ref=e3502] [cursor=pointer]: E1
+                      - cell "F1" [ref=e3503]:
+                        - generic [ref=e3504] [cursor=pointer]: F1
+                      - cell "G1" [ref=e3505]:
+                        - generic [ref=e3506] [cursor=pointer]: G1
+                      - cell "H1" [ref=e3507]:
+                        - generic [ref=e3508] [cursor=pointer]: H1
+                    - row "A B C D E F G H" [ref=e3509]:
+                      - cell [ref=e3510]
+                      - cell "A" [ref=e3511]:
+                        - generic [ref=e3512] [cursor=pointer]: A
+                      - cell "B" [ref=e3513]:
+                        - generic [ref=e3514] [cursor=pointer]: B
+                      - cell "C" [ref=e3515]:
+                        - generic [ref=e3516] [cursor=pointer]: C
+                      - cell "D" [ref=e3517]:
+                        - generic [ref=e3518] [cursor=pointer]: D
+                      - cell "E" [ref=e3519]:
+                        - generic [ref=e3520] [cursor=pointer]: E
+                      - cell "F" [ref=e3521]:
+                        - generic [ref=e3522] [cursor=pointer]: F
+                      - cell "G" [ref=e3523]:
+                        - generic [ref=e3524] [cursor=pointer]: G
+                      - cell "H" [ref=e3525]:
+                        - generic [ref=e3526] [cursor=pointer]: H
+                - generic [ref=e3527]:
+                  - button "全选" [ref=e3528] [cursor=pointer]:
+                    - generic [ref=e3529]: 全选
+                  - button "取消" [ref=e3530] [cursor=pointer]:
+                    - generic [ref=e3531]: 取消
+      - contentinfo [ref=e3174]:
+        - generic [ref=e3175]:
+          - button "取消" [ref=e3176] [cursor=pointer]:
+            - generic [ref=e3177]: 取消
+          - button "确定" [ref=e3178] [cursor=pointer]:
+            - generic [ref=e3179]: 确定

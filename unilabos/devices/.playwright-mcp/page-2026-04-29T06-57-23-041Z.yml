@@ -1,0 +1,58 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "EIT Hub" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Uni-Lab OS Workstations
+    - navigation [ref=e8]:
+      - link "设备总览" [ref=e9] [cursor=pointer]:
+        - /url: /devices
+        - img [ref=e11]
+        - generic [ref=e14]: 设备总览
+      - link "合成工站" [ref=e15] [cursor=pointer]:
+        - /url: /synthesis
+        - img [ref=e16]
+        - generic [ref=e18]: 合成工站
+      - link "分析工站" [ref=e19] [cursor=pointer]:
+        - /url: /analysis
+        - img [ref=e20]
+        - generic [ref=e22]: 分析工站
+      - generic [ref=e23]:
+        - link "AGV 运输车" [ref=e24] [cursor=pointer]:
+          - /url: /agv
+          - img [ref=e25]
+          - generic [ref=e29]: AGV 运输车
+        - button "展开 AGV 子菜单" [ref=e30] [cursor=pointer]:
+          - img [ref=e32]
+      - link "化学品库" [ref=e34] [cursor=pointer]:
+        - /url: /chemicals
+        - img [ref=e36]
+        - generic [ref=e38]: 化学品库
+      - link "任务编辑" [ref=e39] [cursor=pointer]:
+        - /url: /synthesis-task-editor
+        - img [ref=e41]
+        - generic [ref=e43]: 任务编辑
+      - link "工作流" [ref=e44] [cursor=pointer]:
+        - /url: /synthesis-workflow
+        - img [ref=e46]
+        - generic [ref=e48]: 工作流
+      - link "任务历史" [ref=e49] [cursor=pointer]:
+        - /url: /task-history
+        - img [ref=e51]
+        - generic [ref=e53]: 任务历史
+      - link "运维管理" [ref=e54] [cursor=pointer]:
+        - /url: /maintenance
+        - img [ref=e56]
+        - generic [ref=e58]: 运维管理
+      - link "标签打印机" [ref=e59] [cursor=pointer]:
+        - /url: /label-printer
+        - img [ref=e61]
+        - generic [ref=e63]: 标签打印机
+  - generic [ref=e64]:
+    - generic [ref=e65]:
+      - heading "EIT Hub" [level=2] [ref=e66]
+      - generic [ref=e67]:
+        - img [ref=e69]
+        - generic [ref=e71]: 2026/4/29 14:57:22
+        - button "访问令牌" [ref=e72] [cursor=pointer]:
+          - generic [ref=e73]: 访问令牌
+    - main [ref=e74]
