@@ -2,7 +2,7 @@
   <div
     :id="containerId"
     ref="containerRef"
-    class="ntu-station-graph"
+    :class="['ntu-station-graph', { 'is-ready': graphReady }]"
     :style="{ height: graphHeight }"
   ></div>
 </template>
@@ -29,36 +29,37 @@ const props = withDefaults(defineProps<Props>(), {
 const containerRef = ref<HTMLDivElement>()
 const containerId = `ntu-graph-${Math.random().toString(36).slice(2, 9)}`
 const graphHeight = ref('720px')
+const graphReady = ref(false)
 let graphContentRatio = 2.08
 let graph: StationGraph | null = null
+let resizeObserver: ResizeObserver | null = null
+let resizeFrame: number | null = null
+let layoutTaskId = 0
 
 // 暴露刷新方法供父组件在录入资源后强制同步主 3D 视图
 defineExpose({
   refresh: async (): Promise<void> => {
-    if (graph !== null) {
-      await graph.refresh()
-    }
+    await refreshAndSyncLayout(true)
   },
 })
 
 function handleResize (): void {
-  updateGraphHeight()
-  void nextTick(() => {
-    if (graph !== null) {
-      graph.onResize()
-    }
-  })
+  scheduleResizeSync()
 }
 
-function updateGraphHeight (): void {
+function updateGraphHeight (): boolean {
   const container = containerRef.value
   if (container === undefined) {
-    return
+    return false
+  }
+  if (container.clientWidth <= 0) {
+    return false
   }
   const graphMargin = normalizeGraphMargin()
   const availableWidth = Math.max(container.clientWidth - graphMargin * 2, 1)
   const height = availableWidth / graphContentRatio + graphMargin * 2
   graphHeight.value = `${height}px`
+  return true
 }
 
 function normalizeGraphMargin (): number {
@@ -78,18 +79,55 @@ function waitForGraphPaint (): Promise<void> {
 }
 
 async function syncGraphLayout (): Promise<void> {
+  const stationGraph = graph
+  if (stationGraph === null) {
+    return
+  }
+  const taskId = ++layoutTaskId
   await waitForGraphPaint()
-  if (graph !== null) {
-    graphContentRatio = graph.calibrateContentBounds()
+  if (graph === stationGraph && taskId === layoutTaskId) {
+    graphContentRatio = stationGraph.calibrateContentBounds()
     updateGraphHeight()
   }
   await nextTick()
-  if (graph !== null) {
-    graph.onResize()
+  if (graph === stationGraph && taskId === layoutTaskId) {
+    stationGraph.onResize()
+  }
+}
+
+async function refreshAndSyncLayout (hideUntilSynced = false): Promise<void> {
+  const stationGraph = graph
+  if (stationGraph === null) {
+    return
+  }
+  const shouldReveal = hideUntilSynced === true || graphReady.value === false
+  if (shouldReveal === true) {
+    graphReady.value = false
+  }
+
+  let refreshError: unknown = null
+  try {
+    await stationGraph.refresh()
+  } catch (error) {
+    refreshError = error
+  }
+
+  try {
+    await syncGraphLayout()
+  } finally {
+    if (shouldReveal === true && graph === stationGraph) {
+      graphReady.value = true
+    }
+  }
+
+  if (refreshError !== null) {
+    throw refreshError
   }
 }
 
 onMounted(async () => {
+  await nextTick()
+  updateGraphHeight()
   const stationGraph = new StationGraph({
     containerId,
     viewportPadding: normalizeGraphMargin(),
@@ -110,12 +148,12 @@ onMounted(async () => {
   graph = stationGraph
   stationGraph.mount()
   window.addEventListener('resize', handleResize)
+  setupResizeObserver()
   try {
-    await stationGraph.refresh()
+    await refreshAndSyncLayout(true)
   } catch (error) {
     console.error('[StationGraph] refresh error:', error)
   }
-  await syncGraphLayout()
   if (graph === stationGraph) {
     stationGraph.startPolling(10_000)
   }
@@ -128,12 +166,7 @@ watch(
     if (graph !== null) {
       graph.setViewportPadding(graphMargin)
     }
-    updateGraphHeight()
-    void nextTick(() => {
-      if (graph !== null) {
-        graph.onResize()
-      }
-    })
+    scheduleResizeSync()
   },
 )
 
@@ -142,9 +175,41 @@ onDeactivated(() => { graph?.stopPolling() })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (resizeFrame !== null) {
+    window.cancelAnimationFrame(resizeFrame)
+    resizeFrame = null
+  }
   graph?.destroy()
   graph = null
 })
+
+function setupResizeObserver (): void {
+  const container = containerRef.value
+  if (container === undefined || typeof ResizeObserver === 'undefined') {
+    return
+  }
+  resizeObserver = new ResizeObserver(() => {
+    scheduleResizeSync()
+  })
+  resizeObserver.observe(container)
+}
+
+function scheduleResizeSync (): void {
+  if (resizeFrame !== null) {
+    window.cancelAnimationFrame(resizeFrame)
+  }
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = null
+    updateGraphHeight()
+    void nextTick(() => {
+      if (graph !== null) {
+        graph.onResize()
+      }
+    })
+  })
+}
 </script>
 
 <style scoped>
@@ -155,5 +220,15 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   box-sizing: border-box;
   overflow: hidden;
+}
+
+.ntu-station-graph :deep(canvas) {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.ntu-station-graph.is-ready :deep(canvas) {
+  opacity: 1;
+  visibility: visible;
 }
 </style>
