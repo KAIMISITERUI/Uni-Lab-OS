@@ -55,6 +55,22 @@ _CREATE_INDEXES_SQL = [
 # 可写入数据库的列名集合 (不含 id, created_at, updated_at)
 _WRITABLE_COLUMNS = set(CORE_COLUMNS) | {"extra_json"}
 
+# Web 化学品表格可见字段, 用于单框模糊搜索
+_VISIBLE_SEARCH_COLUMNS = (
+    "id",
+    "smiles",
+    "substance",
+    "substance_english_name",
+    "cas_number",
+    "storage_location",
+    "physical_state",
+    "physical_form",
+    "density",
+    "molecular_weight",
+    "brand",
+    "package_size",
+)
+
 
 class ChemicalDB:
     """
@@ -371,6 +387,51 @@ class ChemicalDB:
         return cursor.rowcount > 0
 
     # ===================== 搜索 =====================
+
+    @staticmethod
+    def _escape_like_value(value: str) -> str:
+        """
+        功能:
+            转义 SQLite LIKE 模式中的通配符, 让用户输入按普通文本匹配.
+        参数:
+            value: str, 原始搜索文本.
+        返回:
+            str, 已转义的 LIKE 文本.
+        """
+        return (
+            value
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+
+    def search_visible_fields(self, query: str) -> List[Dict[str, Any]]:
+        """
+        功能:
+            在 Web 表格可见字段中执行本地模糊搜索.
+            字符串字段大小写不敏感, 数值字段转为文本匹配.
+        参数:
+            query: str, 搜索关键词.
+        返回:
+            List[Dict[str, Any]], 按 id 升序排列的匹配行列表.
+        """
+        normalized_query = str(query or "").strip()
+        if normalized_query == "":
+            return []
+
+        pattern = f"%{self._escape_like_value(normalized_query)}%"
+        where_parts = [
+            f"LOWER(CAST({column} AS TEXT)) LIKE LOWER(?) ESCAPE '\\'"
+            for column in _VISIBLE_SEARCH_COLUMNS
+        ]
+        sql = (
+            "SELECT * FROM chemicals WHERE "
+            f"{' OR '.join(where_parts)} "
+            "ORDER BY id ASC"
+        )
+        params = [pattern] * len(_VISIBLE_SEARCH_COLUMNS)
+        cursor = self._conn.execute(sql, params)
+        return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def search_by_cas(self, cas: str) -> List[Dict[str, Any]]:
         """

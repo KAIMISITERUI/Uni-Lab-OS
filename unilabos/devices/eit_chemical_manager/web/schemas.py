@@ -75,6 +75,33 @@ class ChemicalListResponse(BaseModel):
     items: List[ChemicalOut]
 
 
+class ChemicalStructureSearchRequest(BaseModel):
+    """
+    功能:
+        结构式搜索请求模型.
+    参数:
+        structure: SMILES 或 molfile 结构文本.
+        input_format: 输入格式, 支持 smiles 或 molfile.
+        match_mode: 匹配模式, exact 表示完整结构, substructure 表示子结构.
+        page/page_size: 分页参数.
+    """
+
+    structure: str = Field(..., description="SMILES 或 molfile 结构文本")
+    input_format: Literal["smiles", "molfile"] = "smiles"
+    match_mode: Literal["exact", "substructure"] = "exact"
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=500)
+
+
+class ChemicalStructureSearchResponse(ChemicalListResponse):
+    """
+    功能:
+        结构式搜索响应模型. 在普通列表响应基础上返回规范化查询 SMILES.
+    """
+
+    query_smiles: str
+
+
 class DuplicateNameGroup(BaseModel):
     """
     功能:

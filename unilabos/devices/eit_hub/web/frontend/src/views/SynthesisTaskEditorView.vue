@@ -460,7 +460,6 @@ async function loadChemicalNames(query: string): Promise<string[]> {
   try {
     const data = await listChemicals({
       q: query.trim() !== '' ? query.trim() : undefined,
-      query_type: 'name',
       page: 1,
       page_size: 50,
     })

@@ -73,52 +73,51 @@ class ChemicalManager:
     def search(
         self,
         query: str,
-        query_type: str,
     ) -> List[Dict[str, Any]]:
         """
         功能:
-            在化学品库中按 CAS / 名称 / SMILES 查询已有药品.
-            SMILES 先在线解析为 CAS 再查库.
+            在化学品库 Web 表格可见字段中执行本地模糊搜索.
         参数:
             query: str, 查询字符串.
-            query_type: str, 查询类型, 支持 "cas" / "name" / "smiles".
         返回:
             List[Dict[str, Any]], 匹配行列表, 每项包含 row_id 和 row_data.
         """
-        from ..driver.chemical_lookup import _contains_cjk, lookup_chemical_by_smiles
-
         normalized_query = str(query or "").strip()
         if normalized_query == "":
             return []
 
-        if query_type not in self._VALID_QUERY_TYPES:
-            logger.warning("化学品库查询不支持的类型: %s", query_type)
-            return []
-
-        # SMILES 需先在线解析
-        if query_type == "smiles":
-            info = lookup_chemical_by_smiles(normalized_query)
-            if info is None:
-                logger.warning("SMILES 解析失败, 无法在库中查询: %s", normalized_query)
-                return []
-            resolved_cas = str(info.cas_number or "").strip()
-            resolved_en_name = str(info.substance_english_name or "").strip()
-            if resolved_cas != "":
-                rows = self._db.search_by_cas(resolved_cas)
-            elif resolved_en_name != "":
-                rows = self._db.search_by_name(resolved_en_name, is_cjk=False)
-            else:
-                return []
-            return [{"row_id": r["id"], "row_data": r} for r in rows]
-
-        if query_type == "cas":
-            rows = self._db.search_by_cas(normalized_query)
-            return [{"row_id": r["id"], "row_data": r} for r in rows]
-
-        # 名称查询, 自动检测中英文
-        is_cjk = _contains_cjk(normalized_query)
-        rows = self._db.search_by_name(normalized_query, is_cjk=is_cjk)
+        rows = self._db.search_visible_fields(normalized_query)
         return [{"row_id": r["id"], "row_data": r} for r in rows]
+
+    def search_by_structure(
+        self,
+        structure: str,
+        input_format: str,
+        match_mode: str,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            按结构式搜索本地化学品库.
+            exact 模式按完整 InChIKey 比对, substructure 模式按子结构匹配.
+        参数:
+            structure: str, 查询结构, 支持 SMILES 或 molfile.
+            input_format: str, 输入格式, 支持 "smiles" 或 "molfile".
+            match_mode: str, 匹配模式, 支持 "exact" 或 "substructure".
+        返回:
+            Dict[str, Any], 包含 query_smiles 与 rows 两项.
+        """
+        from ..driver.structure_search import filter_rows_by_structure
+
+        query_smiles, rows = filter_rows_by_structure(
+            rows=self._db.iter_all(),
+            structure=structure,
+            input_format=input_format,
+            match_mode=match_mode,
+        )
+        return {
+            "query_smiles": query_smiles,
+            "rows": rows,
+        }
 
     # ===================== 在线查询预览与入库 =====================
 

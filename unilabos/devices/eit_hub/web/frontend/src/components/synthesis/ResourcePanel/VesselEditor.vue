@@ -120,8 +120,8 @@ function onChemicalSearch (slotIndex: number, query: string): void {
   searchLoadingMap[slotIndex] = true
   debounceTimerMap[slotIndex] = setTimeout(async () => {
     try {
-      // 仅按物质名搜索, 不再走 CAS 兜底
-      const resp = await listChemicals({ q: query, query_type: 'name', page_size: 30 })
+      // 使用化学品库统一模糊搜索, 让用户可按表格字段定位
+      const resp = await listChemicals({ q: query, page_size: 30 })
       optionsMap[slotIndex] = resp.items || []
     } catch (err) {
       console.error('[VesselEditor] listChemicals failed:', err)

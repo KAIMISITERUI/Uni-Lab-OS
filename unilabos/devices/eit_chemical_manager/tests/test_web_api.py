@@ -95,7 +95,7 @@ def test_create_get_update_delete(client: TestClient, manager: ChemicalManager) 
     assert r.json()["storage_location"] == "TB-2-5"
 
     # 列表(带搜索)
-    r = client.get("/api/chemicals", params={"q": "乙醇", "query_type": "name"})
+    r = client.get("/api/chemicals", params={"q": "乙醇"})
     assert r.status_code == 200
     listing = r.json()
     assert listing["total"] == 1
@@ -172,6 +172,188 @@ def test_list_pagination(client: TestClient) -> None:
 
     r2 = client.get("/api/chemicals", params={"page": 2, "page_size": 2})
     assert len(r2.json()["items"]) == 1
+
+
+def test_list_search_fuzzy_matches_identity_fields(client: TestClient) -> None:
+    """功能: 单框模糊搜索可命中中文名, 英文名, CAS 片段和 SMILES 片段."""
+    create_resp = client.post(
+        "/api/chemicals",
+        json=_new_chem(
+            substance="苯甲醛",
+            substance_english_name="Benzaldehyde",
+            cas_number="100-52-7",
+            smiles="O=CC1=CC=CC=C1",
+        ),
+    )
+    assert create_resp.status_code == 201
+
+    for query_text in ["苯甲", "benz", "52-7", "CC1=CC"]:
+        response = client.get("/api/chemicals", params={"q": query_text})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total"] == 1
+        assert body["items"][0]["substance"] == "苯甲醛"
+
+
+def test_list_search_fuzzy_matches_visible_table_fields(client: TestClient) -> None:
+    """功能: 单框模糊搜索可命中储位, 物态, 形态, 品牌, 规格和数值字段."""
+    create_resp = client.post(
+        "/api/chemicals",
+        json=_new_chem(
+            substance="乙腈",
+            substance_english_name="Acetonitrile",
+            cas_number="75-05-8",
+            storage_location="TB-A1",
+            physical_state="liquid",
+            physical_form="neat",
+            brand="Macklin",
+            package_size="500 mL",
+            density=0.786,
+            molecular_weight=41.05,
+        ),
+    )
+    assert create_resp.status_code == 201
+
+    for query_text in ["TB-A", "LIQ", "neat", "mack", "500", "0.786", "41.05"]:
+        response = client.get("/api/chemicals", params={"q": query_text})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total"] == 1
+        assert body["items"][0]["substance"] == "乙腈"
+
+
+def test_list_search_treats_like_wildcards_as_literals(client: TestClient) -> None:
+    """功能: 单框模糊搜索把 % 和 _ 当普通字符处理."""
+    client.post("/api/chemicals", json=_new_chem(substance="A_1%样品"))
+    client.post("/api/chemicals", json=_new_chem(substance="普通样品"))
+
+    percent_response = client.get("/api/chemicals", params={"q": "%"})
+    assert percent_response.status_code == 200
+    percent_body = percent_response.json()
+    assert percent_body["total"] == 1
+    assert percent_body["items"][0]["substance"] == "A_1%样品"
+
+    underline_response = client.get("/api/chemicals", params={"q": "_"})
+    assert underline_response.status_code == 200
+    underline_body = underline_response.json()
+    assert underline_body["total"] == 1
+    assert underline_body["items"][0]["substance"] == "A_1%样品"
+
+
+def test_list_search_smiles_does_not_call_online_lookup(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """功能: SMILES 文本搜索只匹配本地字段, 不触发在线解析."""
+
+    def fail_lookup(_smiles: str) -> None:
+        raise AssertionError("普通列表搜索不应调用在线 SMILES 解析")
+
+    monkeypatch.setattr(
+        "unilabos.devices.eit_chemical_manager.driver.chemical_lookup.lookup_chemical_by_smiles",
+        fail_lookup,
+    )
+    client.post("/api/chemicals", json=_new_chem(substance="乙醇", smiles="CCO"))
+
+    response = client.get("/api/chemicals", params={"q": "CCO"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["substance"] == "乙醇"
+
+
+def test_structure_search_exact_matches_canonical_equivalent_smiles(client: TestClient) -> None:
+    """功能: 完整结构搜索通过 InChIKey 命中等价 SMILES."""
+    client.post("/api/chemicals", json=_new_chem(substance="乙醇", smiles="CCO"))
+    client.post("/api/chemicals", json=_new_chem(substance="二甲醚", smiles="COC"))
+
+    response = client.post(
+        "/api/chemicals/structure-search",
+        json={
+            "structure": "C(C)O",
+            "input_format": "smiles",
+            "match_mode": "exact",
+            "page": 1,
+            "page_size": 20,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["query_smiles"] == "CCO"
+    assert body["total"] == 1
+    assert body["items"][0]["substance"] == "乙醇"
+
+
+def test_structure_search_substructure_hits_without_exact_false_positive(client: TestClient) -> None:
+    """功能: 苯环子结构可命中取代苯, 完整结构不误命中取代苯."""
+    client.post(
+        "/api/chemicals",
+        json=_new_chem(
+            substance="1,3,5-三异丙基苯",
+            smiles="CC(C)C1=CC(C(C)C)=CC(C(C)C)=C1",
+        ),
+    )
+
+    exact_response = client.post(
+        "/api/chemicals/structure-search",
+        json={
+            "structure": "c1ccccc1",
+            "input_format": "smiles",
+            "match_mode": "exact",
+        },
+    )
+    assert exact_response.status_code == 200, exact_response.text
+    assert exact_response.json()["total"] == 0
+
+    substructure_response = client.post(
+        "/api/chemicals/structure-search",
+        json={
+            "structure": "c1ccccc1",
+            "input_format": "smiles",
+            "match_mode": "substructure",
+        },
+    )
+    assert substructure_response.status_code == 200, substructure_response.text
+    body = substructure_response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["substance"] == "1,3,5-三异丙基苯"
+
+
+def test_structure_search_invalid_structure_returns_400(client: TestClient) -> None:
+    """功能: 无效结构式返回 400 与中文提示."""
+    response = client.post(
+        "/api/chemicals/structure-search",
+        json={
+            "structure": "not-a-smiles",
+            "input_format": "smiles",
+            "match_mode": "exact",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "结构式解析失败" in response.json()["detail"]
+
+
+def test_structure_search_skips_missing_or_invalid_row_smiles(client: TestClient) -> None:
+    """功能: 库内缺失或无效 smiles 不影响结构式搜索."""
+    client.post("/api/chemicals", json=_new_chem(substance="空结构"))
+    client.post("/api/chemicals", json=_new_chem(substance="坏结构", smiles="not-a-smiles"))
+    client.post("/api/chemicals", json=_new_chem(substance="乙醇", smiles="CCO"))
+
+    response = client.post(
+        "/api/chemicals/structure-search",
+        json={
+            "structure": "C(C)O",
+            "input_format": "smiles",
+            "match_mode": "exact",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["substance"] == "乙醇"
 
 
 def test_integrity_endpoint(client: TestClient) -> None:
@@ -281,7 +463,7 @@ def test_import_xlsx_round_trip(client: TestClient, manager: ChemicalManager) ->
     assert manager.db.count() == 2
 
     # 再查一下 /api/chemicals 确认入库
-    r2 = client.get("/api/chemicals", params={"q": "甲醇", "query_type": "name"})
+    r2 = client.get("/api/chemicals", params={"q": "甲醇"})
     assert r2.status_code == 200
     assert r2.json()["total"] == 1
 

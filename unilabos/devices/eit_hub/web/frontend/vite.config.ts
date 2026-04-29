@@ -40,6 +40,7 @@ export default {
       { find: 'vue', replacement: resolve(sharedNodeModules, 'vue') },
       { find: 'axios', replacement: resolve(sharedNodeModules, 'axios') },
       { find: 'element-plus', replacement: resolve(sharedNodeModules, 'element-plus') },
+      { find: 'openchemlib', replacement: resolve(sharedNodeModules, 'openchemlib') },
       {
         find: '@element-plus/icons-vue',
         replacement: resolve(sharedNodeModules, '@element-plus/icons-vue'),

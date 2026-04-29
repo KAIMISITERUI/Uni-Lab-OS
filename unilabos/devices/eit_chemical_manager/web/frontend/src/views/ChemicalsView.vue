@@ -1,17 +1,24 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
 import {
   type ChemicalRow,
+  type StructureSearchRequest,
+  type StructureSearchResponse,
   deleteChemical,
   exportCsvUrl,
   exportXlsxUrl,
   listChemicals,
+  searchChemicalsByStructure,
 } from '../api/chemicals'
 import ChemicalEditDialog from '../components/ChemicalEditDialog.vue'
 import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import StructurePreview from '../components/StructurePreview.vue'
+import StructureSearchDialog from '../components/StructureSearchDialog.vue'
+
+type StoredStructureSearch = Omit<StructureSearchRequest, 'page' | 'page_size'>
 
 const loading = ref(false)
 const total = ref(0)
@@ -32,7 +39,7 @@ const query = reactive<{
 const editDialog = reactive<{
   visible: boolean
   mode: 'create' | 'edit'
-  row: ChemicalRow | null
+  row: Partial<ChemicalRow> | null
 }>({ visible: false, mode: 'create', row: null })
 
 // 详情弹窗状态, 单独于编辑弹窗, 支持从详情点击进入编辑
@@ -42,10 +49,23 @@ const detailDialog = reactive<{
 }>({ visible: false, row: null })
 
 const importDialogVisible = ref(false)
+const structureSearchDialogVisible = ref(false)
+const activeStructureSearch = ref<StoredStructureSearch | null>(null)
 
 async function load() {
   loading.value = true
   try {
+    if (activeStructureSearch.value !== null) {
+      const resp = await searchChemicalsByStructure({
+        ...activeStructureSearch.value,
+        page: query.page,
+        page_size: query.page_size,
+      })
+      rows.value = resp.items
+      total.value = resp.total
+      return
+    }
+
     const params: Record<string, unknown> = {
       page: query.page,
       page_size: query.page_size,
@@ -66,6 +86,14 @@ async function load() {
 }
 
 function onSearch() {
+  activeStructureSearch.value = null
+  query.page = 1
+  load()
+}
+
+function resetSearch() {
+  activeStructureSearch.value = null
+  query.q = ''
   query.page = 1
   load()
 }
@@ -73,6 +101,12 @@ function onSearch() {
 function openCreate() {
   editDialog.mode = 'create'
   editDialog.row = null
+  editDialog.visible = true
+}
+
+function openCreateWithPreset(rowData: Record<string, unknown>) {
+  editDialog.mode = 'create'
+  editDialog.row = { id: 0, ...rowData } as Partial<ChemicalRow>
   editDialog.visible = true
 }
 
@@ -115,6 +149,18 @@ function onSaved() {
   load()
 }
 
+function onStructureSearched(
+  payload: StoredStructureSearch,
+  response: StructureSearchResponse,
+) {
+  activeStructureSearch.value = payload
+  query.q = ''
+  query.page = response.page
+  query.page_size = response.page_size
+  rows.value = response.items
+  total.value = response.total
+}
+
 function downloadCsv() {
   // 直接通过浏览器导航触发下载, 让浏览器处理 Content-Disposition 文件名
   window.location.href = exportCsvUrl()
@@ -146,7 +192,8 @@ onMounted(load)
             <el-option label="SMILES" value="smiles" />
           </el-select>
           <el-button type="primary" @click="onSearch">搜索</el-button>
-          <el-button @click="query.q = ''; onSearch()">重置</el-button>
+          <el-button @click="resetSearch">重置</el-button>
+          <el-button :icon="Search" @click="structureSearchDialogVisible = true">结构式搜索</el-button>
           <div style="flex: 1" />
           <el-button type="success" @click="openCreate">新增</el-button>
           <el-button @click="importDialogVisible = true">从文件导入</el-button>
@@ -198,6 +245,12 @@ onMounted(load)
       :mode="editDialog.mode"
       :row="editDialog.row"
       @saved="onSaved"
+    />
+    <StructureSearchDialog
+      v-model="structureSearchDialogVisible"
+      :page-size="query.page_size"
+      @searched="onStructureSearched"
+      @online-preview="openCreateWithPreset"
     />
     <ChemicalDetailDialog
       v-model="detailDialog.visible"

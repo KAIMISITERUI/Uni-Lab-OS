@@ -12,7 +12,7 @@ import StructurePreview from './StructurePreview.vue'
 interface Props {
   modelValue: boolean
   mode: 'create' | 'edit'
-  row?: ChemicalRow | null
+  row?: Partial<ChemicalRow> | null
 }
 
 const props = withDefaults(defineProps<Props>(), { row: null })
@@ -90,7 +90,7 @@ watch(
     lookupState.queryType = 'cas'
     lookupState.queryText = ''
     lookupState.loading = false
-    if (props.mode === 'edit' && props.row) {
+    if (props.row !== null && props.row !== undefined) {
       Object.keys(form).forEach((key) => {
         ;(form as Record<string, unknown>)[key] = (props.row as Record<string, unknown>)[key] ?? ''
       })
@@ -168,7 +168,7 @@ async function submit() {
       saved = await createChemical(payload as Partial<ChemicalRow>)
       ElMessage.success(`已新增: ${saved.substance}`)
     } else {
-      if (!props.row) throw new Error('编辑模式缺少 row')
+      if (props.row === null || props.row === undefined || props.row.id === undefined) throw new Error('编辑模式缺少 row')
       saved = await updateChemical(props.row.id, payload as Partial<ChemicalRow>)
       ElMessage.success(`已保存: ${saved.substance}`)
     }

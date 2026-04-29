@@ -30,6 +30,21 @@ export interface ChemicalListResponse {
   items: ChemicalRow[]
 }
 
+export type StructureSearchInputFormat = 'smiles' | 'molfile'
+export type StructureSearchMatchMode = 'exact' | 'substructure'
+
+export interface StructureSearchRequest {
+  structure: string
+  input_format: StructureSearchInputFormat
+  match_mode: StructureSearchMatchMode
+  page?: number
+  page_size?: number
+}
+
+export interface StructureSearchResponse extends ChemicalListResponse {
+  query_smiles: string
+}
+
 export interface DuplicateNameGroup {
   name: string
   rows: ChemicalRow[]
@@ -84,6 +99,16 @@ export async function listChemicals(params: {
   page_size?: number
 }): Promise<ChemicalListResponse> {
   const { data } = await http.get<ChemicalListResponse>('/api/chemicals', { params })
+  return data
+}
+
+export async function searchChemicalsByStructure(
+  payload: StructureSearchRequest,
+): Promise<StructureSearchResponse> {
+  const { data } = await http.post<StructureSearchResponse>(
+    '/api/chemicals/structure-search',
+    payload,
+  )
   return data
 }
 

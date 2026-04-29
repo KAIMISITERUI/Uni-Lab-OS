@@ -340,7 +340,6 @@ async function loadReagentChemicals(resources: Array<Record<string, unknown>>) {
       try {
         const response = await listChemicals({
           q: name,
-          query_type: 'name',
           page: 1,
           page_size: 10,
         })

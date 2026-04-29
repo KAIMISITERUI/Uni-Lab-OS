@@ -19,6 +19,7 @@
       "axios": ["../../../eit_chemical_manager/web/frontend/node_modules/axios"],
       "element-plus": ["../../../eit_chemical_manager/web/frontend/node_modules/element-plus"],
       "element-plus/*": ["../../../eit_chemical_manager/web/frontend/node_modules/element-plus/*"],
+      "openchemlib": ["../../../eit_chemical_manager/web/frontend/node_modules/openchemlib"],
       "@element-plus/icons-vue": [
         "../../../eit_chemical_manager/web/frontend/node_modules/@element-plus/icons-vue"
       ]
@@ -26,4 +27,3 @@
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"]
 }
-

@@ -19,6 +19,8 @@ from ..schemas import (
     ChemicalIn,
     ChemicalListResponse,
     ChemicalOut,
+    ChemicalStructureSearchRequest,
+    ChemicalStructureSearchResponse,
     DeleteResponse,
 )
 
@@ -30,10 +32,7 @@ router = APIRouter(prefix="/api/chemicals", tags=["chemicals"], dependencies=[To
 @router.get("", response_model=ChemicalListResponse)
 def list_chemicals(
     manager: ChemicalManager = Depends(get_manager),
-    q: Optional[str] = Query(default=None, description="按 CAS / 名称 / SMILES 搜索"),
-    query_type: Optional[str] = Query(
-        default=None, description="搜索类型, 支持 cas/name/smiles, 缺省时按名称搜索"
-    ),
+    q: Optional[str] = Query(default=None, description="按表格可见字段模糊搜索"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=500),
 ) -> ChemicalListResponse:
@@ -42,13 +41,7 @@ def list_chemicals(
         分页列表 + 搜索. q 为空时返回全表分页, 否则调用 ChemicalManager.search.
     """
     if q is not None and q.strip() != "":
-        effective_type = (query_type or "name").strip().lower()
-        if effective_type not in {"cas", "name", "smiles"}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="query_type 必须是 cas / name / smiles 之一",
-            )
-        rows = [hit["row_data"] for hit in manager.search(q, effective_type)]
+        rows = [hit["row_data"] for hit in manager.search(q)]
     else:
         rows = manager.db.iter_all()
 
@@ -61,6 +54,53 @@ def list_chemicals(
         page=page,
         page_size=page_size,
         items=[ChemicalOut(**row) for row in items],
+    )
+
+
+@router.post("/structure-search", response_model=ChemicalStructureSearchResponse)
+def search_chemicals_by_structure(
+    payload: ChemicalStructureSearchRequest,
+    manager: ChemicalManager = Depends(get_manager),
+) -> ChemicalStructureSearchResponse:
+    """
+    功能:
+        按结构式搜索本地化学品库.
+        exact 模式使用完整 InChIKey 精确比对, substructure 模式使用子结构匹配.
+    参数:
+        payload: ChemicalStructureSearchRequest, 查询结构, 输入格式, 匹配模式与分页参数.
+        manager: ChemicalManager, 化学品管理器.
+    返回:
+        ChemicalStructureSearchResponse, 分页命中结果与规范化查询 SMILES.
+    """
+    try:
+        result = manager.search_by_structure(
+            structure=payload.structure,
+            input_format=payload.input_format,
+            match_mode=payload.match_mode,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except RuntimeError as exc:
+        logger.exception("结构式搜索运行环境不可用")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+    rows = list(result.get("rows") or [])
+    total = len(rows)
+    start = (payload.page - 1) * payload.page_size
+    end = start + payload.page_size
+    items = rows[start:end]
+    return ChemicalStructureSearchResponse(
+        total=total,
+        page=payload.page,
+        page_size=payload.page_size,
+        items=[ChemicalOut(**row) for row in items],
+        query_smiles=str(result.get("query_smiles") or ""),
     )
 
 
