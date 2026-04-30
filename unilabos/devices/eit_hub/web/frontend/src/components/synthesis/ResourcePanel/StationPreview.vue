@@ -5,7 +5,7 @@
       下方挂载完整 NTU 工站 3D 等距视图 (独立 StationGraph 实例), 点击槽位切换选中状态.
   -->
   <div class="station-preview">
-    <div class="position-bar">
+    <div v-if="!hidePositionBar" class="position-bar">
       <el-input :model-value="positionLabel" placeholder="位置码" readonly :prefix-icon="iconLocation" />
       <div class="tag-list">
         <el-tag
@@ -55,10 +55,13 @@ interface Props {
   selectedCodes: string[]
   slotResources?: SlotResourcePreview[]
   visiblePrefixes?: string[]
+  // 编辑场景由父组件接管位置码栏 (可编辑+扫码), 此处隐藏内置只读栏
+  hidePositionBar?: boolean
 }
 const props = withDefaults(defineProps<Props>(), {
   slotResources: () => [],
   visiblePrefixes: () => [],
+  hidePositionBar: false,
 })
 const emit = defineEmits<{
   (e: 'slot-click', layoutCode: string): void

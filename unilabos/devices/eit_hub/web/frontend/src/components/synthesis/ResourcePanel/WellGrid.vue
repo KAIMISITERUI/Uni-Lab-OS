@@ -62,8 +62,11 @@ interface Props {
   row: number
   col: number
   wells: WellInfo[]
+  // true 时孔位点击循环 empty → filled → disabled → empty (编辑资源 3 态);
+  // false 时仅在 filled ↔ empty 之间切换 (录入资源 2 态), 默认 false 不破坏录入行为
+  allowDisabled?: boolean
 }
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { allowDisabled: false })
 const emit = defineEmits<{
   (e: 'update:wells', val: WellInfo[]): void
 }>()
@@ -99,9 +102,17 @@ function stateClass (r: number, c: number): string {
 function onWellClick (r: number, c: number): void {
   const idx = indexOf(r, c)
   const w = props.wells[idx]
-  if (w === undefined || w.state === 'disabled') { return }
+  if (w === undefined) { return }
+  if (!props.allowDisabled && w.state === 'disabled') { return }
   const next = props.wells.slice()
-  next[idx] = { ...w, state: w.state === 'filled' ? 'empty' : 'filled' }
+  let nextState: WellInfo['state']
+  if (props.allowDisabled) {
+    // 编辑模式三态循环: empty → filled → disabled → empty
+    nextState = w.state === 'empty' ? 'filled' : w.state === 'filled' ? 'disabled' : 'empty'
+  } else {
+    nextState = w.state === 'filled' ? 'empty' : 'filled'
+  }
+  next[idx] = { ...w, state: nextState }
   emit('update:wells', next)
 }
 

@@ -353,12 +353,67 @@ export async function batchOutTray(payload: BatchOutTrayPayload): Promise<Record
     layout_list: payload.layout_list,
     move_type: payload.move_type || 'main_out',
   }
-  if (payload.remark) { body.remark = payload.remark }
+  if (payload.remark !== undefined && payload.remark !== '') {
+    body.remark = payload.remark
+  }
   const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/BatchOutTray', body)
+  return data
+}
+
+// 移动资源, 与 web_code moveResourceBatch -> /api/MoveTray 字段保持一致
+export interface MoveTrayItem {
+  source_layout_code: string
+  destination_layout_code: string
+}
+
+export interface MoveTrayPayload {
+  layout_list: MoveTrayItem[]
+  remark?: string
+}
+
+export async function moveTray(payload: MoveTrayPayload): Promise<Record<string, unknown>> {
+  const body: MoveTrayPayload = {
+    layout_list: payload.layout_list,
+  }
+  if (payload.remark !== undefined && payload.remark !== '') {
+    body.remark = payload.remark
+  }
+  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/MoveTray', body)
   return data
 }
 
 export async function getResourceInfo(filters: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/GetResourceInfo', filters)
+  return data
+}
+
+// 编辑资源 (单托盘) 字段与 web_code dynamic-api/resource.ts updateResource 完全一致
+// status 来自 web_code ResourceStatus: 0=InSlot(已放入), 2=Watting(未放入), 3=Busy(禁用)
+export interface UpdateResourceItem {
+  layout_code: string
+  model: string
+  index: number
+  with_cap: boolean
+  status: number
+  substance?: string
+  chemical_id?: number | string
+  amount?: number
+  unit?: string
+  [key: string]: unknown
+}
+
+export interface UpdateResourcePayload {
+  resource_list: UpdateResourceItem[]
+  tray_layout_code: string
+  remark?: string
+}
+
+export async function updateResource(payload: UpdateResourcePayload): Promise<Record<string, unknown>> {
+  const body: UpdateResourcePayload = {
+    resource_list: payload.resource_list,
+    tray_layout_code: payload.tray_layout_code,
+    remark: payload.remark || '',
+  }
+  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/UpdateResource', body)
   return data
 }

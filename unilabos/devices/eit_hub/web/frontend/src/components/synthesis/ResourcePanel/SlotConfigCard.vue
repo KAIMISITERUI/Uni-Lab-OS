@@ -9,7 +9,7 @@
   <div class="slot-card">
     <div class="card-header">
       <span class="layout-code">{{ config.layoutCode }}</span>
-      <el-button link type="danger" size="small" @click="emit('remove')">移除位置</el-button>
+      <el-button v-if="!readonlyTrayModel" link type="danger" size="small" @click="emit('remove')">移除位置</el-button>
     </div>
     <div class="card-body">
       <div class="top-row" :class="{ 'has-editor': showVesselEditor }">
@@ -24,6 +24,7 @@
               <el-select
                 :model-value="config.trayModel"
                 filterable
+                :disabled="readonlyTrayModel"
                 placeholder="请选择托盘型号"
                 style="width: 100%"
                 popper-class="resource-tray-model-popper"
@@ -53,6 +54,7 @@
             :row="trayOption.row"
             :col="trayOption.col"
             :wells="config.wells"
+            :allow-disabled="allowDisabled"
             @update:wells="(v) => emit('update:wells', v)"
           />
           <el-empty v-else description="请先选择托盘型号" :image-size="60" />
@@ -78,8 +80,15 @@ import VesselEditor from './VesselEditor.vue'
 interface Props {
   config: SelectedSlotConfig
   trayOptions: TrayModelOption[]
+  // 编辑模式: 托盘型号只读 + 隐藏移除位置按钮
+  readonlyTrayModel?: boolean
+  // 编辑模式: WellGrid 三态 (empty/filled/disabled)
+  allowDisabled?: boolean
 }
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  readonlyTrayModel: false,
+  allowDisabled: false,
+})
 const emit = defineEmits<{
   (e: 'remove'): void
   (e: 'update:tray-model', val: string): void

@@ -9,12 +9,12 @@
   -->
   <div class="vessel-editor" v-if="filledWells.length > 0">
     <el-table :data="filledWells" size="small" border stripe :max-height="320">
-      <el-table-column label="孔位" width="64" align="center">
+      <el-table-column label="孔位" width="64" align="center" header-align="center">
         <template #default="{ row }">
           <span class="well-label">{{ row.colLabel }}{{ row.rowLabel }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="介质内物质" min-width="240">
+      <el-table-column label="介质内物质" min-width="240" header-align="center">
         <template #default="{ row }">
           <el-select
             :model-value="row.chemical_id || ''"
@@ -40,13 +40,12 @@
           </el-select>
         </template>
       </el-table-column>
-      <el-table-column label="物质的量" min-width="160">
+      <el-table-column label="物质的量" min-width="160" header-align="center">
         <template #default="{ row }">
           <div class="amount-cell">
             <el-input-number
               :model-value="row.amount"
               :min="0"
-              :precision="3"
               :controls="false"
               size="small"
               placeholder="请输入"
@@ -64,7 +63,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="60" align="center">
+      <el-table-column label="操作" width="60" align="center" header-align="center">
         <template #default="{ row }">
           <el-button link type="danger" :icon="iconRemove" size="small" @click="onRemove(row.slotIndex)" />
         </template>
