@@ -16,8 +16,14 @@ from eit_agv.config.agv_config import (
     AGV_PORT_OTHER,
     REQ_CMD_ROBOT_OTHER_SET_DO,
     REQ_CMD_ROBOT_STATUS_IO,
+    REQ_CMD_ROBOT_TASK_CANCEL,
+    REQ_CMD_ROBOT_TASK_PAUSE,
+    REQ_CMD_ROBOT_TASK_RESUME,
     RSP_CMD_ROBOT_OTHER_SET_DO,
     RSP_CMD_ROBOT_STATUS_IO,
+    RSP_CMD_ROBOT_TASK_CANCEL,
+    RSP_CMD_ROBOT_TASK_PAUSE,
+    RSP_CMD_ROBOT_TASK_RESUME,
 )
 from eit_agv.driver.agv_driver import AGVDriver, AGVDriverConfig
 
@@ -139,6 +145,60 @@ class TestAgvDo7Control(unittest.TestCase):
             payload_obj=None,
             expect_cmd_id=RSP_CMD_ROBOT_STATUS_IO,
         )
+
+    def test_navigation_control_uses_navigation_port_commands(self):
+        """
+        功能:
+            验证暂停, 继续, 取消导航使用厂商导航控制命令号, 响应号和导航端口.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        cases = [
+            ("pause_navigation", REQ_CMD_ROBOT_TASK_PAUSE, RSP_CMD_ROBOT_TASK_PAUSE),
+            ("resume_navigation", REQ_CMD_ROBOT_TASK_RESUME, RSP_CMD_ROBOT_TASK_RESUME),
+            ("cancel_navigation", REQ_CMD_ROBOT_TASK_CANCEL, RSP_CMD_ROBOT_TASK_CANCEL),
+        ]
+
+        for method_name, request_cmd, response_cmd in cases:
+            driver = _make_driver()
+            with self.subTest(method_name=method_name), patch.object(
+                driver,
+                "connect_navigation",
+            ) as mock_connect_navigation, patch.object(
+                driver,
+                "_send_and_recv_json",
+                return_value={"ret_code": 0},
+            ) as mock_send:
+                response = getattr(driver, method_name)()
+
+            self.assertEqual(response, {"ret_code": 0})
+            mock_connect_navigation.assert_called_once_with()
+            mock_send.assert_called_once_with(
+                cmd_id=request_cmd,
+                payload_obj=None,
+                expect_cmd_id=response_cmd,
+                use_navigation_port=True,
+            )
+
+    def test_navigation_control_failure_raises_clear_error(self):
+        """
+        功能:
+            验证导航控制命令返回非零 ret_code 时抛出明确中文错误.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        driver = _make_driver()
+        with patch.object(driver, "connect_navigation"), patch.object(
+            driver,
+            "_send_and_recv_json",
+            return_value={"ret_code": 5, "err_msg": "当前没有导航"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "取消导航失败: 当前没有导航"):
+                driver.cancel_navigation()
 
     def test_set_charge_control_do_maps_physical_do_status(self):
         """

@@ -32,6 +32,12 @@ from ..config.agv_config import (
     RSP_CMD_ROBOT_STATUS_IO,
     REQ_CMD_ROBOT_OTHER_SET_DO,
     RSP_CMD_ROBOT_OTHER_SET_DO,
+    REQ_CMD_ROBOT_TASK_PAUSE,
+    RSP_CMD_ROBOT_TASK_PAUSE,
+    REQ_CMD_ROBOT_TASK_RESUME,
+    RSP_CMD_ROBOT_TASK_RESUME,
+    REQ_CMD_ROBOT_TASK_CANCEL,
+    RSP_CMD_ROBOT_TASK_CANCEL,
     TASK_STATUS_MAP,
     TASK_TYPE_MAP,
     AGV_HOST,
@@ -527,6 +533,91 @@ class AGVDriver:
             status_text = "低电平"
         logger.info("已设置底盘 DO%d 为%s", do_id, status_text)
         return response
+
+    def _send_navigation_control(
+        self,
+        cmd_id: int,
+        expect_cmd_id: int,
+        action_label: str,
+    ) -> Dict[str, Any]:
+        """
+        功能:
+            向 AGV 导航端口发送当前导航控制命令. 该类命令无 JSON 数据区,
+            用于暂停, 继续或取消当前导航.
+
+        参数:
+            cmd_id: int, 厂商协议请求命令号.
+            expect_cmd_id: int, 厂商协议响应命令号.
+            action_label: str, 中文动作名称, 用于日志和错误信息.
+
+        返回:
+            Dict[str, Any], AGV 响应数据.
+        """
+        self.connect_navigation()
+        response = self._send_and_recv_json(
+            cmd_id=cmd_id,
+            payload_obj=None,
+            expect_cmd_id=expect_cmd_id,
+            use_navigation_port=True,
+        )
+        ret_code = response.get("ret_code", 0)
+        if ret_code not in (None, 0):
+            error_message = response.get("err_msg", "未知错误")
+            raise RuntimeError(f"{action_label}失败: {error_message}")
+
+        logger.info("%s命令已发送", action_label)
+        return response
+
+    def pause_navigation(self) -> Dict[str, Any]:
+        """
+        功能:
+            暂停 AGV 当前导航任务.
+
+        参数:
+            无.
+
+        返回:
+            Dict[str, Any], 暂停当前导航响应数据.
+        """
+        return self._send_navigation_control(
+            cmd_id=REQ_CMD_ROBOT_TASK_PAUSE,
+            expect_cmd_id=RSP_CMD_ROBOT_TASK_PAUSE,
+            action_label="暂停导航",
+        )
+
+    def resume_navigation(self) -> Dict[str, Any]:
+        """
+        功能:
+            继续 AGV 当前已暂停的导航任务.
+
+        参数:
+            无.
+
+        返回:
+            Dict[str, Any], 继续当前导航响应数据.
+        """
+        return self._send_navigation_control(
+            cmd_id=REQ_CMD_ROBOT_TASK_RESUME,
+            expect_cmd_id=RSP_CMD_ROBOT_TASK_RESUME,
+            action_label="继续导航",
+        )
+
+    def cancel_navigation(self) -> Dict[str, Any]:
+        """
+        功能:
+            取消 AGV 当前导航任务.
+
+        参数:
+            无.
+
+        返回:
+            Dict[str, Any], 取消当前导航响应数据.
+        """
+        return self._send_navigation_control(
+            cmd_id=REQ_CMD_ROBOT_TASK_CANCEL,
+            expect_cmd_id=RSP_CMD_ROBOT_TASK_CANCEL,
+            action_label="取消导航",
+        )
 
     def send_navigate_command(
         self,

@@ -2153,6 +2153,84 @@ class AGVController:
 
         return self._query_with_retry(_do_query, "查询导航任务状态")
 
+    def _send_navigation_control_command(self, action: str):
+        """
+        功能:
+            向 AGV 底盘下发当前导航控制命令, 用于暂停, 继续或取消当前导航.
+
+        参数:
+            action: str, 导航控制动作, 取值为 pause, resume 或 cancel.
+
+        返回:
+            dict, AGV 导航控制响应数据.
+        """
+        action_map = {
+            "pause": ("暂停导航", "pause_navigation"),
+            "resume": ("继续导航", "resume_navigation"),
+            "cancel": ("取消导航", "cancel_navigation"),
+        }
+        if action not in action_map:
+            raise ValueError(f"不支持的导航控制动作: {action}")
+
+        action_label, method_name = action_map[action]
+        agv_driver = AGVDriver(AGVDriverConfig(
+            host=AGV_HOST,
+            port=AGV_PORT,
+            port_navigation=AGV_PORT_NAVIGATION,
+            timeout_s=AGV_TIMEOUT,
+            debug_hex=False
+        ))
+
+        try:
+            logger.info("准备下发%s命令", action_label)
+            response = getattr(agv_driver, method_name)()
+            logger.info("%s命令下发成功: %s", action_label, response)
+            return response
+        except Exception as exc:
+            logger.error("%s命令下发失败: %s", action_label, exc)
+            raise
+        finally:
+            agv_driver.close()
+
+    def pause_navigation(self):
+        """
+        功能:
+            暂停 AGV 当前导航任务.
+
+        参数:
+            无.
+
+        返回:
+            dict, 暂停当前导航响应数据.
+        """
+        return self._send_navigation_control_command("pause")
+
+    def resume_navigation(self):
+        """
+        功能:
+            继续 AGV 当前已暂停的导航任务.
+
+        参数:
+            无.
+
+        返回:
+            dict, 继续当前导航响应数据.
+        """
+        return self._send_navigation_control_command("resume")
+
+    def cancel_navigation(self):
+        """
+        功能:
+            取消 AGV 当前导航任务.
+
+        参数:
+            无.
+
+        返回:
+            dict, 取消当前导航响应数据.
+        """
+        return self._send_navigation_control_command("cancel")
+
     def navigate_to_station(self, station_id):
         """
         功能:
@@ -2189,16 +2267,24 @@ class AGVController:
             logger.debug(f"正在导航到目标工站: {station_id}...")
             result = agv_driver.navigate_to_target(target_id=station_id)
 
-            # 检查导航响应
-            if result.get("ret_code") == 0:
-                logger.debug(f"导航指令发送成功, 响应: {result}")
-                # 更新当前工站
+            # 检查导航终态, 1020 状态查询通常不携带 ret_code
+            ret_code = result.get("ret_code")
+            if ret_code not in (None, 0):
+                logger.error(f"导航指令发送失败, 错误码: {ret_code}, 错误信息: {result.get('err_msg', '未知错误')}")
+                return None
+
+            task_status = result.get("task_status")
+            if task_status == 4:
+                logger.debug(f"导航已到达目标工站, 响应: {result}")
+                # 只有到达目标时才更新当前工站
                 self.current_station = station_id
                 logger.debug(f"当前工站已设置为: {station_id}")
-                return result
-            else:
-                logger.error(f"导航指令发送失败, 错误码: {result.get('ret_code')}, 错误信息: {result.get('err_msg', '未知错误')}")
-                return None
+            elif task_status == 6:
+                logger.warning("导航已取消, 目标工站: %s", station_id)
+            elif task_status == 5:
+                logger.error("导航执行失败, 目标工站: %s", station_id)
+
+            return result
 
         except Exception as e:
             logger.error(f"导航过程出错: {e}")
@@ -2317,7 +2403,7 @@ class AGVController:
         logger.debug("步骤2: AGV移动到目标工站")
         result = self.navigate_to_station(station_id)
 
-        if result is not None and station_id == "CP6":
+        if result is not None and station_id == "CP6" and result.get("task_status") == 4:
             # DO7 后处理同样属于底盘 IO, 不需要持机械臂锁
             charge_enable = self._set_charge_control_do_detailed(
                 stop_charging=False,
