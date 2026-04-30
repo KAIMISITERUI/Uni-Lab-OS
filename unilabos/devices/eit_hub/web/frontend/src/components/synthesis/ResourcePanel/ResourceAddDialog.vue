@@ -30,7 +30,9 @@
               :selected-codes="selectedCodes"
               :slot-resources="stationPreviewResources"
               :visible-prefixes="visiblePrefixes"
+              :disabled-codes="disabledCodes"
               @slot-click="onSlotToggle"
+              @disabled-slot-click="onDisabledSlotClick"
               @remove-slot="onRemoveSlot"
               @station-ready="onStationReady"
             />
@@ -109,6 +111,7 @@ const occupiedSet = reactive(new Set<string>())
 const configMap = reactive<Record<string, SelectedSlotConfig>>({})
 const selectedCodes = computed(() => Object.keys(configMap))
 const selectedConfigs = computed(() => selectedCodes.value.map((c) => configMap[c]))
+const disabledCodes = computed(() => Array.from(occupiedSet))
 const visiblePrefixes = computed(() => {
   if (loadingSide.value === 'TB') {
     return ['TB-']
@@ -139,6 +142,7 @@ const stationPreviewResources = computed<SlotResourcePreview[]>(() => {
 const REMOVED_TRAY_MODEL = '201000503'
 const W1_ONLY_TRAY_MODEL = '220000023'
 const CAPLESS_TRAY_MODELS = new Set(['220000023', '201000728'])
+const MESSAGE_ABOVE_DIALOG_CLASS = 'msg-above-dialog'
 
 // 可用托盘型号下拉选项, 来自 BaseTray 注册表
 const allTrayOptions = ref<TrayModelOption[]>([])
@@ -197,12 +201,27 @@ async function loadOccupied (): Promise<void> {
     const resp = await getResourceInfo({})
     const list = (resp?.resource_list as Array<Record<string, unknown>> | undefined) || []
     list.forEach((item) => {
-      const code = item.layout_code as string | undefined
-      if (typeof code === 'string') { occupiedSet.add(code) }
+      const code = normalizeTopLayoutCode(item.layout_code)
+      if (code !== '') { occupiedSet.add(code) }
     })
   } catch (err) {
     console.warn('[ResourceAddDialog] getResourceInfo failed:', err)
   }
+}
+
+function normalizeTopLayoutCode (layoutCode: unknown): string {
+  if (layoutCode === undefined || layoutCode === null) {
+    return ''
+  }
+  const code = String(layoutCode).trim()
+  if (code === '') {
+    return ''
+  }
+  const colonIdx = code.indexOf(':')
+  if (colonIdx === -1) {
+    return code
+  }
+  return code.slice(0, colonIdx)
 }
 
 async function onStationReady (_station: any): Promise<void> {
@@ -276,24 +295,36 @@ function resolveDefaultWithMagneton (cfg: Record<string, any>): boolean {
   return false
 }
 
+function showDialogMessage (type: 'success' | 'warning' | 'info' | 'error', message: string): void {
+  ElMessage({
+    message,
+    type,
+    customClass: MESSAGE_ABOVE_DIALOG_CLASS,
+  })
+}
+
 function onLoadingSideChange (val: string | number | boolean): void {
   const nextSide: LoadingSide = val === 'TB' ? 'TB' : 'W-1'
   loadingSide.value = nextSide
   clearSelectedConfigs()
-  ElMessage.info('已切换上料侧, 请重新选择槽位')
+  showDialogMessage('info', '已切换上料侧, 请重新选择槽位')
 }
 
 function addSlot (layoutCode: string): void {
   if (isLayoutInCurrentSide(layoutCode) === false) {
-    ElMessage.warning(`当前为 ${sideLabel(loadingSide.value)} 上料, 只能选择对应侧槽位`)
+    showDialogMessage('warning', `当前为 ${sideLabel(loadingSide.value)} 上料, 只能选择对应侧槽位`)
     return
   }
   if (occupiedSet.has(layoutCode)) {
-    ElMessage.warning(`槽位 ${layoutCode} 已被占用, 无法录入`)
+    showDialogMessage('warning', `槽位 ${layoutCode} 已被占用, 无法录入`)
     return
   }
   if (configMap[layoutCode] !== undefined) { return }
   configMap[layoutCode] = createConfig(layoutCode)
+}
+
+function onDisabledSlotClick (layoutCode: string): void {
+  showDialogMessage('warning', `槽位 ${layoutCode} 已有资源, 请先删除或移动后再录入`)
 }
 
 function createConfig (layoutCode: string): SelectedSlotConfig {
@@ -322,7 +353,7 @@ function onTrayModelChange (layoutCode: string, model: string): void {
   const cfg = configMap[layoutCode]
   if (cfg === undefined) { return }
   if (isTrayOptionAllowed(model) === false) {
-    ElMessage.warning('当前上料侧不允许选择该托盘型号')
+    showDialogMessage('warning', '当前上料侧不允许选择该托盘型号')
     return
   }
   cfg.trayModel = model
@@ -373,24 +404,24 @@ function generateWells (trayModel: string): WellInfo[] {
 
 async function onConfirm (): Promise<void> {
   if (selectedConfigs.value.length === 0) {
-    ElMessage.warning('请至少选择一个槽位')
+    showDialogMessage('warning', '请至少选择一个槽位')
     return
   }
   for (const cfg of selectedConfigs.value) {
     if (!cfg.trayModel) {
-      ElMessage.warning(`槽位 ${cfg.layoutCode} 未选择托盘型号`)
+      showDialogMessage('warning', `槽位 ${cfg.layoutCode} 未选择托盘型号`)
       return
     }
     if (isLayoutInCurrentSide(cfg.layoutCode) === false) {
-      ElMessage.warning(`槽位 ${cfg.layoutCode} 不属于当前上料侧`)
+      showDialogMessage('warning', `槽位 ${cfg.layoutCode} 不属于当前上料侧`)
       return
     }
     if (isTrayOptionAllowed(cfg.trayModel) === false) {
-      ElMessage.warning(`槽位 ${cfg.layoutCode} 的托盘型号不允许从当前侧上料`)
+      showDialogMessage('warning', `槽位 ${cfg.layoutCode} 的托盘型号不允许从当前侧上料`)
       return
     }
     if (cfg.wells.every((w) => w.state !== 'filled')) {
-      ElMessage.warning(`槽位 ${cfg.layoutCode} 未选择任何孔位`)
+      showDialogMessage('warning', `槽位 ${cfg.layoutCode} 未选择任何孔位`)
       return
     }
   }
@@ -431,12 +462,12 @@ async function onConfirm (): Promise<void> {
   submitting.value = true
   try {
     await batchInTray({ resource_req_list })
-    ElMessage.success('录入成功')
+    showDialogMessage('success', '录入成功')
     emit('success')
     emit('update:visible', false)
   } catch (err: any) {
     const detail = err?.response?.data?.detail || err?.message || '录入失败'
-    ElMessage.error(`录入失败: ${detail}`)
+    showDialogMessage('error', `录入失败: ${detail}`)
   } finally {
     submitting.value = false
   }
@@ -526,5 +557,12 @@ function onCancel (): void {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+</style>
+
+<style>
+/* 全局: 让 ElMessage 浮在 dialog (z-index=5000) 之上, 避免被遮挡看不见 */
+.msg-above-dialog {
+  z-index: 6000 !important;
 }
 </style>

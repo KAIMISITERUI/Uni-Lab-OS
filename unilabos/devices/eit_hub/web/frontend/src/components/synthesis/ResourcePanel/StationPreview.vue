@@ -55,16 +55,19 @@ interface Props {
   selectedCodes: string[]
   slotResources?: SlotResourcePreview[]
   visiblePrefixes?: string[]
+  disabledCodes?: string[]
   // 编辑场景由父组件接管位置码栏 (可编辑+扫码), 此处隐藏内置只读栏
   hidePositionBar?: boolean
 }
 const props = withDefaults(defineProps<Props>(), {
   slotResources: () => [],
   visiblePrefixes: () => [],
+  disabledCodes: () => [],
   hidePositionBar: false,
 })
 const emit = defineEmits<{
   (e: 'slot-click', layoutCode: string): void
+  (e: 'disabled-slot-click', layoutCode: string): void
   (e: 'remove-slot', layoutCode: string): void
   (e: 'station-ready', station: any): void
 }>()
@@ -135,6 +138,10 @@ function isLayoutCodeVisible (layoutCode: string): boolean {
   return props.visiblePrefixes.some((prefix) => layoutCode.startsWith(prefix))
 }
 
+function isLayoutCodeDisabled (layoutCode: string): boolean {
+  return props.disabledCodes.some((code) => code === layoutCode)
+}
+
 onMounted(async () => {
   const stationGraph = new StationGraph({
     containerId,
@@ -143,6 +150,10 @@ onMounted(async () => {
     preserveFilteredOutResources: true,
     onClickTray: (layout_code) => {
       if (isLayoutCodeVisible(layout_code) === true) {
+        if (isLayoutCodeDisabled(layout_code) === true) {
+          emit('disabled-slot-click', layout_code)
+          return
+        }
         emit('slot-click', layout_code)
       }
     },
