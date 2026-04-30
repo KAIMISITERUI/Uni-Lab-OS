@@ -260,6 +260,19 @@ export async function controlW1Shelf(payload: W1ShelfPayload): Promise<JobCreate
   return data
 }
 
+export interface CameraInfo {
+  id: string
+  name?: string
+  stream_url_sub: string
+  stream_url_main: string
+  [key: string]: unknown
+}
+
+export async function fetchCameraList(): Promise<CameraInfo[]> {
+  const { data } = await http.get<CameraInfo[]>('/api/synthesis/cameras')
+  return data
+}
+
 export async function fetchJob(jobId: string): Promise<JobState> {
   const { data } = await http.get<JobState>(`/api/synthesis/jobs/${jobId}`)
   return data
@@ -296,7 +309,7 @@ export async function stopSynthesisWorkflow(workflowId: string): Promise<Workflo
 export interface InTrayResource {
   layout_code: string
   resource_type: string
-  substance: string
+  substance?: string
   unit?: string
   amount?: number
   initial_volume?: number

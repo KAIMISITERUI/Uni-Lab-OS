@@ -18,6 +18,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '合成工站' },
   },
   {
+    path: '/synthesis/cameras',
+    name: 'synthesis-cameras',
+    component: () => import('../views/SynthesisCameraView.vue'),
+    meta: { title: '现场监控' },
+  },
+  {
     path: '/analysis',
     name: 'analysis',
     component: () => import('../views/AnalysisView.vue'),

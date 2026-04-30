@@ -22,6 +22,14 @@ const tokenDialog = ref(false)
 const tokenInput = ref('')
 const agvMenuOpen = ref(false)
 const agvMenuExpanded = computed(() => agvMenuOpen.value === true)
+const synthesisMenuOpen = ref(false)
+const synthesisMenuExpanded = computed(() => synthesisMenuOpen.value === true)
+const synthesisGroupActive = computed(() => {
+  // /synthesis 与其子路由 (如 /synthesis/cameras) 视为合成工站组高亮,
+  // 但要排除独立的 /synthesis-task-editor 与 /synthesis-workflow 路由.
+  const path = route.path
+  return path === '/synthesis' || path.startsWith('/synthesis/') === true
+})
 
 onMounted(() => {
   const savedToken = localStorage.getItem('chem_mgr_token') || ''
@@ -34,6 +42,7 @@ watch(
   () => route.path,
   (path) => {
     agvMenuOpen.value = path.startsWith('/agv') === true
+    synthesisMenuOpen.value = path === '/synthesis' || path.startsWith('/synthesis/') === true
   },
   { immediate: true },
 )
@@ -45,6 +54,10 @@ function openTokenDialog() {
 
 function toggleAgvMenu() {
   agvMenuOpen.value = agvMenuOpen.value === false
+}
+
+function toggleSynthesisMenu() {
+  synthesisMenuOpen.value = synthesisMenuOpen.value === false
 }
 
 function saveToken() {
@@ -75,32 +88,48 @@ function saveToken() {
           <el-icon><Connection /></el-icon>
           <span>设备总览</span>
         </RouterLink>
-        <RouterLink class="nav-link" to="/synthesis">
-          <svg
-            class="nav-station-icon"
-            viewBox="224 176 576 704"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="44"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
+        <div class="nav-group-control" :class="{ 'nav-group-active': synthesisGroupActive }">
+          <RouterLink class="nav-link nav-link-group-main" to="/synthesis" @click="synthesisMenuOpen = true">
+            <svg
+              class="nav-station-icon"
+              viewBox="224 176 576 704"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="44"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M408 240h208" />
+              <path d="M440 240v160" />
+              <path d="M584 240v160" />
+              <path
+                d="M440 400L272 704
+                   a72 72 0 0 0 64 108
+                   h352
+                   a72 72 0 0 0 64-108
+                   L584 400"
+              />
+              <line x1="360" y1="600" x2="664" y2="600" />
+            </svg>
+            <span>合成工站</span>
+          </RouterLink>
+          <button
+            class="nav-arrow-button"
+            type="button"
+            :aria-expanded="synthesisMenuExpanded"
+            aria-label="展开合成工站子菜单"
+            @click="toggleSynthesisMenu"
           >
-            <path d="M408 240h208" />
-            <path d="M440 240v160" />
-            <path d="M584 240v160" />
-            <path
-              d="M440 400L272 704
-                 a72 72 0 0 0 64 108
-                 h352
-                 a72 72 0 0 0 64-108
-                 L584 400"
-            />
-            <line x1="360" y1="600" x2="664" y2="600" />
-          </svg>
-          <span>合成工站</span>
-        </RouterLink>
+            <el-icon class="nav-arrow" :class="{ 'nav-arrow-open': synthesisMenuExpanded }"><ArrowDown /></el-icon>
+          </button>
+        </div>
+        <div v-if="synthesisMenuExpanded" class="nav-sub-list">
+          <RouterLink class="nav-link nav-sub" to="/synthesis/cameras">
+            <span>现场监控</span>
+          </RouterLink>
+        </div>
         <RouterLink class="nav-link" to="/analysis">
           <svg
             class="nav-station-icon"

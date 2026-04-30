@@ -27,7 +27,17 @@ from .deps import (
     get_charge_loop_service,
     get_chassis_status_sampler,
 )
-from .routers import agv, analysis, devices, label_printer, maintenance, synthesis, synthesis_proxy, task_history
+from .routers import (
+    agv,
+    analysis,
+    devices,
+    label_printer,
+    maintenance,
+    synthesis,
+    synthesis_camera,
+    synthesis_proxy,
+    task_history,
+)
 
 logger = logging.getLogger("EITHubWeb")
 
@@ -62,6 +72,7 @@ def create_app() -> FastAPI:
 
     app.include_router(synthesis.router)
     app.include_router(synthesis_proxy.router)
+    app.include_router(synthesis_camera.router)
     app.include_router(analysis.router)
     app.include_router(devices.router)
     app.include_router(agv.router)
