@@ -82,7 +82,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { batchInTray, getResourceInfo, type InTrayResource } from '@/api/synthesis'
+import { batchInTray, getResourceInfo, type BatchInTrayItem, type InTrayResource } from '@/api/synthesis'
 import { getModule } from '@/lib/dynamic-graph'
 import StationPreview, { type SlotResourcePreview } from './StationPreview.vue'
 import SlotConfigCard from './SlotConfigCard.vue'
@@ -143,6 +143,8 @@ const REMOVED_TRAY_MODEL = '201000503'
 const W1_ONLY_TRAY_MODEL = '220000023'
 const CAPLESS_TRAY_MODELS = new Set(['220000023', '201000728'])
 const MESSAGE_ABOVE_DIALOG_CLASS = 'msg-above-dialog'
+const VOLUME_UNITS = new Set(['mL', 'L'])
+const THOUSAND_SCALE_UNITS = new Set(['g', 'L'])
 
 // 可用托盘型号下拉选项, 来自 BaseTray 注册表
 const allTrayOptions = ref<TrayModelOption[]>([])
@@ -402,13 +404,70 @@ function generateWells (trayModel: string): WellInfo[] {
   return result
 }
 
+function isVolumeUnit (unit: string): boolean {
+  return VOLUME_UNITS.has(unit)
+}
+
+function parseBatchInAmount (amount: number, unit: string): number {
+  if (THOUSAND_SCALE_UNITS.has(unit)) {
+    return amount * 1000
+  }
+  return amount
+}
+
+function buildBatchInTrayItem (cfg: SelectedSlotConfig): BatchInTrayItem {
+  const opt = trayOptions.value.find((o) => o.model === cfg.trayModel)
+  const firstVesselModel = opt?.vesselModels?.[0]
+  const defaultResType = firstVesselModel !== undefined && firstVesselModel !== ''
+    ? firstVesselModel
+    : cfg.trayModel
+  const resource_list: InTrayResource[] = [
+    {
+      layout_code: `${cfg.layoutCode}:-1`,
+      resource_type: cfg.trayModel,
+    },
+  ]
+
+  cfg.wells
+    .filter((w) => w.state === 'filled')
+    .forEach((w) => {
+      const item: InTrayResource = {
+        layout_code: `${cfg.layoutCode}:${w.slotIndex}`,
+        resource_type: defaultResType,
+        substance: w.substance !== '' ? w.substance : '',
+        with_cap: w.with_cap,
+      }
+      if (w.with_magneton === true) {
+        item.with_magneton = true
+      }
+      if (w.amount !== null && w.amount !== undefined) {
+        const amount = parseBatchInAmount(w.amount, w.unit)
+        item.unit = w.unit
+        if (isVolumeUnit(w.unit)) {
+          item.initial_volume = amount
+        } else {
+          item.initial_weight = amount
+        }
+      }
+      if (w.chemical_id !== '') { item.chemical_id = w.chemical_id }
+      resource_list.push(item)
+    })
+
+  return {
+    remark: cfg.remark !== '' ? cfg.remark : '',
+    tray_layout_code: cfg.layoutCode,
+    tray_QR_code: cfg.trayQRCode !== '' ? cfg.trayQRCode : undefined,
+    resource_list,
+  }
+}
+
 async function onConfirm (): Promise<void> {
   if (selectedConfigs.value.length === 0) {
     showDialogMessage('warning', '请至少选择一个槽位')
     return
   }
   for (const cfg of selectedConfigs.value) {
-    if (!cfg.trayModel) {
+    if (cfg.trayModel === '') {
       showDialogMessage('warning', `槽位 ${cfg.layoutCode} 未选择托盘型号`)
       return
     }
@@ -426,38 +485,7 @@ async function onConfirm (): Promise<void> {
     }
   }
 
-  // 组装 payload, 形态对齐 web_code addV2 → /api/BatchInTray
-  // 仅下发实际有值的字段, 用户没填的不出现在请求体里
-  const resource_req_list = selectedConfigs.value.map((cfg) => {
-    const opt = trayOptions.value.find((o) => o.model === cfg.trayModel)
-    const defaultResType = opt?.vesselModels?.[0] || cfg.trayModel
-    const resource_list: InTrayResource[] = cfg.wells
-      .filter((w) => w.state === 'filled')
-      .map((w) => {
-        const item: InTrayResource = {
-          layout_code: `${cfg.layoutCode}:${w.slotIndex}`,
-          resource_type: defaultResType,
-          substance: w.substance || '',
-          slot_label: `${w.colLabel}${w.rowLabel}`,
-          with_cap: w.with_cap,
-        }
-        if (w.with_magneton === true) {
-          item.with_magneton = true
-        }
-        if (w.amount !== null && w.amount !== undefined) {
-          item.amount = w.amount
-          item.unit = w.unit
-        }
-        if (w.chemical_id) { item.chemical_id = w.chemical_id }
-        return item
-      })
-    return {
-      tray_layout_code: cfg.layoutCode,
-      tray_type: cfg.trayModel,
-      tray_QR_code: cfg.trayQRCode || undefined,
-      resource_list,
-    }
-  })
+  const resource_req_list = selectedConfigs.value.map((cfg) => buildBatchInTrayItem(cfg))
 
   submitting.value = true
   try {

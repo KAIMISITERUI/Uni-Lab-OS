@@ -120,12 +120,12 @@ def proxy_batch_in_tray(
     """
     功能:
         代理 dynamic-resource 前端的 BatchInTray 调用 (批量多托盘录入资源).
-        透传 resource_req_list 到设备 /api/BatchInTray.
+        通过控制器执行真实上料, 保持上料前后等待空闲与日志记录.
     参数:
         body: Dict[str, Any], 必须包含 resource_req_list 列表, 每项含 tray_layout_code 与 resource_list.
         manager: SynthesisStationManager, 由 FastAPI 依赖注入.
     返回:
-        Dict[str, Any], 设备 /api/BatchInTray 原始 JSON 响应.
+        Dict[str, Any], batch_in_tray 执行响应.
     """
     resource_req_list = body.get("resource_req_list", []) or []
     if not isinstance(resource_req_list, list):
@@ -133,7 +133,7 @@ def proxy_batch_in_tray(
     return _invoke_with_relogin(
         manager,
         "BatchInTray",
-        lambda: manager._client.batch_in_tray(resource_req_list),
+        lambda: manager.batch_in_tray(resource_req_list),
     )
 
 

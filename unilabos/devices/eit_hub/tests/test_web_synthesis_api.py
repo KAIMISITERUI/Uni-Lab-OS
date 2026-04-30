@@ -51,6 +51,16 @@ class FakeSynthesisManager:
         self.stop_task_calls: list[int] = []
         self.cancel_task_calls: list[int] = []
         self.fault_recovery_calls: list[Dict[str, Any]] = []
+        self.login_calls = 0
+        self.batch_in_tray_calls: list[list[Dict[str, Any]]] = []
+
+    def ensure_login(self) -> None:
+        """功能: 记录 synthesis_proxy 的登录校验调用."""
+        self.call_order.append("ensure_login")
+
+    def login(self) -> None:
+        """功能: 记录 synthesis_proxy 的重登调用."""
+        self.login_calls += 1
 
     def station_state(self) -> int:
         """功能: 返回测试工站状态."""
@@ -168,6 +178,18 @@ class FakeSynthesisManager:
         """
         self.workflow_calls.append(("batch_in_manual", file_path))
         return {"success": True, "mode": "manual", "file_path": file_path}
+
+    def batch_in_tray(self, resource_req_list: list[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        功能:
+            记录资源面板批量上料调用.
+        参数:
+            resource_req_list: list[Dict[str, Any]], 批量上料请求列表.
+        返回:
+            Dict[str, Any], 上料结果.
+        """
+        self.batch_in_tray_calls.append(resource_req_list)
+        return {"success": True, "mode": "resource_panel", "resource_req_list": resource_req_list}
 
     def batch_in_tray_with_agv_transfer(
         self,
@@ -452,6 +474,46 @@ def _workflow_payload(**updates: Any) -> Dict[str, Any]:
     }
     payload.update(updates)
     return payload
+
+
+def test_synthesis_proxy_batch_in_tray_uses_controller(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证资源面板 BatchInTray 代理进入控制器 batch_in_tray, 不绕过到 _client.
+    参数:
+        api_client: tuple[TestClient, FakeSynthesisManager, Path], 测试客户端与假管理器.
+    返回:
+        None.
+    """
+    client, fake_manager, _template_path = api_client
+    resource_req_list = [
+        {
+            "tray_layout_code": "TB-2-1",
+            "remark": "",
+            "resource_list": [
+                {"layout_code": "TB-2-1:-1", "resource_type": "201000502"},
+                {
+                    "layout_code": "TB-2-1:0",
+                    "resource_type": "220000005",
+                    "substance": "水杨醛",
+                    "unit": "mL",
+                    "initial_volume": 8,
+                },
+            ],
+        }
+    ]
+
+    response = client.post(
+        "/synthesis-api/api/BatchInTray",
+        json={"resource_req_list": resource_req_list},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "resource_panel"
+    assert fake_manager.batch_in_tray_calls == [resource_req_list]
+    assert "ensure_login" in fake_manager.call_order
 
 
 def test_dashboard_returns_station_snapshot(api_client: tuple[TestClient, FakeSynthesisManager, Path]) -> None:

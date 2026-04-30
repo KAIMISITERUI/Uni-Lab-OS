@@ -1099,6 +1099,65 @@ class SynthesisStationController:
             return "0"
         return text
 
+    def _build_batch_in_tray_log_resources(
+        self,
+        resource_req_list: List[JsonDict],
+        task_id: Optional[int],
+    ) -> List[JsonDict]:
+        """
+        功能:
+            从 batch_in_tray 标准 resource_req_list 中生成上料日志资源摘要.
+        参数:
+            resource_req_list: List[JsonDict], 批量上料请求列表, 每项包含 resource_list.
+            task_id: Optional[int], 任务ID, 用于写入日志记录.
+        返回:
+            List[JsonDict], 上料日志中的 resources 列表.
+        """
+        log_resources: List[JsonDict] = []
+
+        for req in resource_req_list:
+            raw_resource_list = req.get("resource_list", [])
+            if isinstance(raw_resource_list, list) is False:
+                raw_resource_list = []
+
+            resource_list: List[JsonDict] = [
+                item for item in raw_resource_list if isinstance(item, dict)
+            ]
+            layout_code = str(req.get("tray_layout_code") or "").strip()
+            tray_item: Optional[JsonDict] = None
+            media_items: List[JsonDict] = []
+
+            for item in resource_list:
+                item_layout_code = self._get_layout_code(item)
+                if (
+                    layout_code == ""
+                    and item_layout_code is not None
+                    and ":" in item_layout_code
+                ):
+                    layout_code = item_layout_code.split(":", 1)[0]
+
+                slot_index = self._extract_slot_index(item)
+                if slot_index == -1:
+                    tray_item = item
+                elif slot_index is not None:
+                    media_items.append(item)
+
+            resource_type = self._get_tray_code(tray_item)
+            substance_details = self._build_substance_details(resource_type, media_items)
+
+            log_resources.append(
+                {
+                    "layout_code": layout_code,
+                    "count": len(media_items),
+                    "resource_type": resource_type,
+                    "resource_type_name": self._get_tray_name(resource_type),
+                    "substance_details": substance_details,
+                    "task_id": task_id,
+                }
+            )
+
+        return log_resources
+
     def _safe_int(self, value: Any) -> Optional[int]:
         """
         功能:
@@ -1751,38 +1810,9 @@ class SynthesisStationController:
 
         end_time = datetime.now().isoformat()
 
-        # 保存上料日志
-        if self._data_manager:
-            # 构造日志记录格式
-            log_resources: List[JsonDict] = []
-            for req in resource_req_list:
-                layout_code = req.get("layout_code", "")
-                resource_type = req.get("resource_type")
-                resource_type_name = req.get("resource_type_name", "")
-
-                # 从 substance_list 构造 substance_details
-                substance_details = []
-                substance_list = req.get("substance_list", [])
-                for sub in substance_list:
-                    substance_details.append({
-                        "slot": sub.get("slot", 0),
-                        "well": sub.get("well", ""),
-                        "substance": sub.get("substance", ""),
-                        "value": sub.get("value", "")
-                    })
-
-                count = len(substance_list) if substance_list else req.get("count", 0)
-
-                log_resource = {
-                    "layout_code": layout_code,
-                    "count": count,
-                    "resource_type": resource_type,
-                    "resource_type_name": resource_type_name,
-                    "substance_details": substance_details,
-                    "task_id": task_id
-                }
-                log_resources.append(log_resource)
-
+        # 保存标准 resource_list 汇总后的上料日志.
+        if self._data_manager is not None:
+            log_resources = self._build_batch_in_tray_log_resources(resource_req_list, task_id)
             log_data = {
                 "start_time": start_time,
                 "end_time": end_time,
