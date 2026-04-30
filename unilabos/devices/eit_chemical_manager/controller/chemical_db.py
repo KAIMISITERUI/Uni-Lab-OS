@@ -445,26 +445,53 @@ class ChemicalDB:
         功能:
             在 Web 表格可见字段中执行本地模糊搜索.
             字符串字段大小写不敏感, 数值字段转为文本匹配.
+            按相关性排序: 任一可见字段完全相等 > 任一可见字段以查询起始 > 仅包含,
+            完全相等比较忽略大小写与字段首尾空白. 同桶内按 id 升序.
         参数:
             query: str, 搜索关键词.
         返回:
-            List[Dict[str, Any]], 按 id 升序排列的匹配行列表.
+            List[Dict[str, Any]], 按相关性桶升序, 同桶内按 id 升序排列的匹配行列表.
         """
         normalized_query = str(query or "").strip()
         if normalized_query == "":
             return []
 
-        pattern = f"%{self._escape_like_value(normalized_query)}%"
-        where_parts = [
+        escaped_query = self._escape_like_value(normalized_query)
+        contains_pattern = f"%{escaped_query}%"  # 用于 WHERE 子句的包含匹配
+        prefix_pattern = f"{escaped_query}%"  # 用于相关性桶 1 的起始匹配
+        lower_query = normalized_query.lower()  # 用于相关性桶 0 的完全相等比较
+
+        # 三组列表达式: 包含 / 完全相等 / 起始
+        contains_parts = [
             f"LOWER(CAST({column} AS TEXT)) LIKE LOWER(?) ESCAPE '\\'"
             for column in _VISIBLE_SEARCH_COLUMNS
         ]
+        exact_parts = [
+            f"LOWER(TRIM(CAST({column} AS TEXT))) = ?"
+            for column in _VISIBLE_SEARCH_COLUMNS
+        ]
+        prefix_parts = [
+            f"LOWER(CAST({column} AS TEXT)) LIKE LOWER(?) ESCAPE '\\'"
+            for column in _VISIBLE_SEARCH_COLUMNS
+        ]
+
         sql = (
-            "SELECT * FROM chemicals WHERE "
-            f"{' OR '.join(where_parts)} "
-            "ORDER BY id ASC"
+            "SELECT * FROM chemicals "
+            f"WHERE {' OR '.join(contains_parts)} "
+            "ORDER BY "
+            "(CASE "
+            f"WHEN {' OR '.join(exact_parts)} THEN 0 "
+            f"WHEN {' OR '.join(prefix_parts)} THEN 1 "
+            "ELSE 2 "
+            "END) ASC, id ASC"
         )
-        params = [pattern] * len(_VISIBLE_SEARCH_COLUMNS)
+        # 参数顺序与 SQL 占位符顺序一致: WHERE 包含 -> CASE 完全相等 -> CASE 起始
+        column_count = len(_VISIBLE_SEARCH_COLUMNS)
+        params = (
+            [contains_pattern] * column_count
+            + [lower_query] * column_count
+            + [prefix_pattern] * column_count
+        )
         cursor = self._conn.execute(sql, params)
         return [self._row_to_dict(row) for row in cursor.fetchall()]
 
