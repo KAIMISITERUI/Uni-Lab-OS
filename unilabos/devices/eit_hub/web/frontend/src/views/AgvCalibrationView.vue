@@ -961,6 +961,9 @@ onBeforeUnmount(stopAutoRefresh)
   font-size: 12px;
 }
 .offset-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
   padding: 6px 8px;
   background: #ffffff;
@@ -968,8 +971,7 @@ onBeforeUnmount(stopAutoRefresh)
   border-radius: 6px;
 }
 .offset-axis {
-  display: block;
-  margin-bottom: 3px;
+  flex: 0 0 auto;
   color: #5d6d83;
   font-family: Arial, sans-serif;
   font-size: 11px;
@@ -977,7 +979,8 @@ onBeforeUnmount(stopAutoRefresh)
   text-transform: uppercase;
 }
 .offset-metric strong {
-  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: #12325a;
   font-size: 12px;
@@ -987,8 +990,7 @@ onBeforeUnmount(stopAutoRefresh)
   white-space: nowrap;
 }
 .offset-unit {
-  display: block;
-  margin-top: 2px;
+  flex: 0 0 auto;
   color: #738196;
   font-size: 11px;
 }
