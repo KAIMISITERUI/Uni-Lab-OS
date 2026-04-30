@@ -2,7 +2,7 @@
   <!--
     功能:
       编辑资源对话框. 1:1 复刻截图布局:
-        - 左栏 资源视图预览 (50%): 顶部 位置码 输入 + 完整 NTU 工站 3D (与删除资源同款),
+        - 左栏 资源视图预览 (50%): 顶部 位置码 输入 + 完整 NTU 工站 3D (与移出资源同款),
                               支持多选: 点击有资源的托盘加入选中并染绿; 再次点击取消选中
         - 右栏 资源配置 (50%): 已选托盘列表, 每个托盘一张 SlotConfigCard (托盘类型只读 + 托盘条码 + 三态孔位 + 介质内物质表)
                               物质量从设备 cur_weight / cur_volume 字段读出
@@ -422,7 +422,7 @@ function setSlotHighlight (layoutCode: string, on: boolean): void {
   if (!station) { return }
   const slot: any = station.slots?.[layoutCode]
   if (!slot || typeof slot.setHighlight !== 'function') { return }
-  // setHighlight 给 floor 染绿渐变, 与删除资源同款选中视觉, 不出现蓝点
+  // setHighlight 给 floor 染绿渐变, 与移出资源同款选中视觉, 不出现蓝点
   slot.setHighlight(on, on ? HIGHT_COLOR : undefined)
 }
 

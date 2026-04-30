@@ -1,7 +1,7 @@
 <template>
   <!--
     功能:
-      删除资源对话框. 1:1 复刻 web_code ResourceAddV3.vue 在 op=TrayOperate.out 模式下的形态:
+      移出资源对话框. 1:1 复刻 web_code ResourceAddV3.vue 在 op=TrayOperate.out 模式下的形态:
         - 左栏 资源视图预览: 主页同款 NTUStationGraph (与 SynthesisView 视觉一致), 点击有资源的槽位将其加入待移出列表并染绿
         - 右栏 待移出资源的槽位: el-table, 列含 位置名称 / 托盘类型 / 操作 (移除)
       底部 取消 / 确定. 提交时按 web_code removeResourceBatch 逻辑组装 batchOutTray payload.
@@ -21,7 +21,7 @@
     @update:model-value="(v: boolean) => emit('update:visible', v)"
   >
     <template #header>
-      <div class="dialog-title">删除资源</div>
+      <div class="dialog-title">移出资源</div>
     </template>
     <div class="dialog-body" v-loading="loading">
       <div class="two-col">
@@ -335,7 +335,7 @@ async function onConfirm (): Promise<void> {
   try {
     await batchOutTray({ layout_list, move_type: 'main_out' })
     ElMessage({
-      message: '移除资源操作成功, 实际移动情况请以资源视图显示为准',
+      message: '移出资源操作成功, 实际移动情况请以资源视图显示为准',
       type: 'success',
       customClass: 'msg-above-dialog',
     })

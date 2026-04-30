@@ -1,8 +1,8 @@
 <template>
   <!--
     功能:
-      合成页右侧资源管理面板. 渲染 录入资源 / 移动资源 / 编辑资源 / 删除资源 入口按钮.
-      header 右侧提供 刷新 按钮, 触发父组件注入的 onRefresh 回调以同步主 3D 视图.
+      合成页右侧资源管理面板. 渲染 录入资源 / 移动资源 / 编辑资源 / 移出资源 入口按钮.
+      按钮区提供 刷新资源 按钮, 触发父组件注入的 onRefresh 回调以同步主 3D 视图.
     事件:
       success: 资源变更成功后通知父组件刷新主 3D 视图与库存
     Props:
@@ -11,19 +11,20 @@
   <div class="resource-panel">
     <div class="panel-header">
       <span class="title">资源管理</span>
+    </div>
+    <div class="panel-body">
       <el-button
-        size="small"
-        plain
+        class="resource-action-button"
         :icon="iconRefresh"
         :loading="refreshing"
         @click="handleRefresh"
-      >刷新</el-button>
-    </div>
-    <div class="panel-body">
-      <el-button type="primary" :icon="iconPlus" @click="openDialog()">录入资源</el-button>
-      <el-button type="success" :icon="iconMove" @click="openMoveDialog()">移动资源</el-button>
-      <el-button type="warning" :icon="iconEdit" @click="openEditDialog()">编辑资源</el-button>
-      <el-button type="danger" :icon="iconDelete" @click="openRemoveDialog()">删除资源</el-button>
+      >
+        刷新资源
+      </el-button>
+      <el-button class="resource-action-button" :icon="iconPlus" @click="openDialog()">录入资源</el-button>
+      <el-button class="resource-action-button" :icon="iconMove" @click="openMoveDialog()">移动资源</el-button>
+      <el-button class="resource-action-button" :icon="iconEdit" @click="openEditDialog()">编辑资源</el-button>
+      <el-button class="resource-action-button" :icon="iconDelete" @click="openRemoveDialog()">移出资源</el-button>
     </div>
     <ResourceAddDialog
       v-model:visible="dialogVisible"
@@ -131,6 +132,9 @@ defineExpose({ openDialog, openRemoveDialog, openEditDialog, openMoveDialog })
 <style scoped>
 .resource-panel {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   background: #fff;
   border-radius: 8px;
   border: 1px solid #ebeef5;
@@ -138,24 +142,51 @@ defineExpose({ openDialog, openRemoveDialog, openEditDialog, openMoveDialog })
   flex-direction: column;
 }
 .panel-header {
-  padding: 12px 16px;
+  padding: 10px;
   border-bottom: 1px solid #ebeef5;
-  background: linear-gradient(180deg, #f6f9ff 0%, #eef3fb 100%);
   border-top-left-radius: 8px;
   border-top-right-radius: 8px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 .panel-header .title {
+  overflow: hidden;
+  min-width: 0;
   font-weight: 600;
   color: #303133;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
 .panel-body {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+.resource-action-button {
+  justify-content: center;
+  width: 100%;
+  height: 42px;
+  min-height: 42px;
+  margin-left: 0;
+  padding: 0 8px;
+  color: #12325a;
+  font-weight: 600;
+  background: #f5f8fc;
+  border-color: #d6e1ee;
+}
+.resource-action-button:hover,
+.resource-action-button:focus {
+  color: #0f4f86;
+  background: #edf4fb;
+  border-color: #b9cbe0;
+}
+.resource-action-button:active {
+  color: #0f4f86;
+  background: #e5eef8;
+  border-color: #a8bdd4;
 }
 </style>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Link as LinkIcon, Refresh } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
 import {
   type DashboardData,
@@ -50,11 +50,14 @@ interface PendingOperation {
   position?: string
 }
 
-interface W1ShelfOption {
+interface W1ShelfControl {
   position: string
-  action: W1ShelfAction
+  positionLabel: string
   label: string
-  currentStatusLabel: string
+  action: W1ShelfAction | null
+  loading: boolean
+  disabled: boolean
+  buttonClass: string
 }
 
 interface OuterDoorButtonState {
@@ -72,7 +75,6 @@ const pendingOperation = ref<PendingOperation | null>(null)
 const reagentChemicalMap = ref<Record<string, ChemicalRow | null | undefined>>({})
 const reagentDetailVisible = ref(false)
 const reagentDetailChemical = ref<ChemicalRow | null>(null)
-const w1SelectedPosition = ref('W-1-1')
 // 录入资源右侧面板与主 3D 视图引用, 用于右键联动和录入后的强制刷新
 const resourcePanelRef = ref<InstanceType<typeof ResourcePanel> | null>(null)
 const stationGraphRef = ref<InstanceType<typeof NTUStationGraph> | null>(null)
@@ -122,8 +124,6 @@ const consumableCardConfigs: Array<{ resourceType: number; label: string; icon: 
   { resourceType: 201000728, label: '闪滤瓶外瓶', icon: 'filterOuterBottle' },
 ]
 const w1ShelfPositions = ['W-1-1', 'W-1-3', 'W-1-5', 'W-1-7']
-const synthesisControlUrl =
-  'http://10.40.13.51:9191/#/?$skipCheckService=true&hostname=http://10.40.13.51:4669&$view=NTU'
 
 const deviceStatusCodeMap: Record<DeviceTargetStatus, number> = {
   OPEN: 3,
@@ -245,47 +245,8 @@ const outerDoorButton = computed<OuterDoorButtonState>(() => {
   }
 })
 
-const w1ShelfExecutableOptions = computed<W1ShelfOption[]>(() => {
-  return w1ShelfPositions.flatMap((position) => {
-    const device = findW1ShelfDevice(position)
-    if (isDeviceStatus(device, 'OUTSIDE') === true) {
-      return [
-        {
-          position,
-          action: 'home' as const,
-          label: `${position} 复位`,
-          currentStatusLabel: '当前推出',
-        },
-      ]
-    }
-    if (isDeviceStatus(device, 'HOME') === true) {
-      return [
-        {
-          position,
-          action: 'outside' as const,
-          label: `${position} 推出`,
-          currentStatusLabel: '当前复位',
-        },
-      ]
-    }
-    return []
-  })
-})
-
-const selectedW1ShelfOption = computed(() => {
-  return w1ShelfExecutableOptions.value.find((option) => option.position === w1SelectedPosition.value) || null
-})
-
-const isW1Pending = computed(() => pendingOperation.value?.kind === 'w1-shelf')
-
-const w1ExecuteLabel = computed(() => {
-  if (isW1Pending.value === true) {
-    return '运行中'
-  }
-  if (selectedW1ShelfOption.value === null) {
-    return '暂无可执行 W1 操作'
-  }
-  return `执行${selectedW1ShelfOption.value.action === 'home' ? '复位' : '推出'}`
+const w1ShelfControls = computed<W1ShelfControl[]>(() => {
+  return w1ShelfPositions.map((position) => createW1ShelfControl(position))
 })
 
 const outerDoorButtonClass = computed(() => {
@@ -301,27 +262,79 @@ const outerDoorButtonClass = computed(() => {
   return 'action-button--disabled'
 })
 
-const w1ExecuteClass = computed(() => {
-  if (isW1Pending.value === true) {
-    return 'action-button--running'
+function createW1ShelfControl(position: string): W1ShelfControl {
+  const pending = pendingOperation.value
+  const isCurrentPending = pending?.kind === 'w1-shelf' && pending.position === position
+  const action = resolveW1ShelfAction(position)
+  const loading = isCurrentPending === true
+  const blocked = pending !== null && isCurrentPending === false
+  const disabled = loading === true || blocked === true || actionLoading.value === 'control_w1_shelf' || action === null
+  if (loading === true) {
+    return {
+      position,
+      positionLabel: formatW1ShelfPositionLabel(position),
+      action,
+      label: '运行中',
+      loading,
+      disabled,
+      buttonClass: 'action-button--running',
+    }
   }
-  if (selectedW1ShelfOption.value?.action === 'outside') {
-    return 'w1-action-button--outside'
+  if (action === 'outside') {
+    return {
+      position,
+      positionLabel: formatW1ShelfPositionLabel(position),
+      action,
+      label: '推出',
+      loading,
+      disabled,
+      buttonClass: 'w1-action-button--outside',
+    }
   }
-  if (selectedW1ShelfOption.value?.action === 'home') {
-    return 'w1-action-button--home'
+  if (action === 'home') {
+    return {
+      position,
+      positionLabel: formatW1ShelfPositionLabel(position),
+      action,
+      label: '复位',
+      loading,
+      disabled,
+      buttonClass: 'w1-action-button--home',
+    }
   }
-  return 'action-button--disabled'
-})
+  return {
+    position,
+    positionLabel: formatW1ShelfPositionLabel(position),
+    action: null,
+    label: '状态未知',
+    loading,
+    disabled,
+    buttonClass: 'action-button--disabled',
+  }
+}
 
-const w1ControlDisabled = computed(() => {
-  return (
-    isW1Pending.value === true ||
-    actionLoading.value === 'control_w1_shelf' ||
-    selectedW1ShelfOption.value === null ||
-    pendingOperation.value !== null
-  )
-})
+function resolveW1ShelfAction(position: string): W1ShelfAction | null {
+  const device = findW1ShelfDevice(position)
+  if (isDeviceStatus(device, 'OUTSIDE') === true) {
+    return 'home'
+  }
+  if (isDeviceStatus(device, 'HOME') === true) {
+    return 'outside'
+  }
+  return null
+}
+
+function formatW1ShelfPositionLabel(position: string): string {
+  const match = /^W-1-(\d+)$/.exec(position)
+  if (match === null) {
+    return position
+  }
+  const startIndex = Number(match[1])
+  if (Number.isFinite(startIndex) === false) {
+    return position
+  }
+  return `${position}, W-1-${startIndex + 1}`
+}
 
 async function loadDashboard() {
   dashboardLoading.value = true
@@ -399,23 +412,26 @@ async function runOuterDoor(action: OuterDoorAction) {
   }
 }
 
-async function runW1Shelf() {
-  const option = selectedW1ShelfOption.value
-  if (option === null) {
-    ElMessage.warning('当前没有可执行的 W1 操作')
+async function runW1Shelf(control: W1ShelfControl) {
+  const action = control.action
+  if (action === null) {
+    ElMessage.warning(`${control.position} 当前没有可执行的操作`)
+    return
+  }
+  if (control.disabled === true) {
     return
   }
   actionLoading.value = 'control_w1_shelf'
   pendingOperation.value = {
     kind: 'w1-shelf',
-    position: option.position,
-    action: option.action,
-    targetStatus: option.action === 'home' ? 'HOME' : 'OUTSIDE',
+    position: control.position,
+    action,
+    targetStatus: action === 'home' ? 'HOME' : 'OUTSIDE',
   }
   try {
     const data = await controlW1Shelf({
-      position: option.position,
-      action: option.action,
+      position: control.position,
+      action,
     })
     currentJobId.value = data.job_id
     ElMessage.success('W1 操作已进入后台')
@@ -635,20 +651,6 @@ function formatReagentPosition(
   return `${layoutCode} / ${well}`
 }
 
-watch(
-  w1ShelfExecutableOptions,
-  (options) => {
-    if (pendingOperation.value?.kind === 'w1-shelf') {
-      return
-    }
-    const selectedExists = options.some((option) => option.position === w1SelectedPosition.value)
-    if (selectedExists === false) {
-      w1SelectedPosition.value = options[0]?.position || ''
-    }
-  },
-  { immediate: true },
-)
-
 onActivated(startDashboardPolling)
 
 onDeactivated(stopDashboardPolling)
@@ -748,12 +750,14 @@ onBeforeUnmount(stopDashboardPolling)
                 </div>
               </div>
               <div class="resource-group station-with-panel">
-                <div class="station-graph-wrap">
-                  <NTUStationGraph
-                    ref="stationGraphRef"
-                    :margin="50"
-                    :on-context-menu-tray="onSlotContextMenu"
-                  />
+                <div class="station-main-column">
+                  <div class="station-graph-wrap">
+                    <NTUStationGraph
+                      ref="stationGraphRef"
+                      :margin="50"
+                      :on-context-menu-tray="onSlotContextMenu"
+                    />
+                  </div>
                 </div>
                 <div class="station-side-panel">
                   <ResourcePanel
@@ -761,79 +765,133 @@ onBeforeUnmount(stopDashboardPolling)
                     :on-refresh="refreshStationGraph"
                     @success="onResourceMutationSuccess"
                   />
-                </div>
-              </div>
-              <div class="resource-group">
-                <div class="table-wrap">
-                  <el-table class="reagent-table" :data="reagentDisplayRows" border stripe height="420">
-                    <el-table-column label="结构式" width="142" align="center">
-                      <template #default="{ row }">
-                        <StructurePreview
-                          :smiles="row.structureSmiles"
-                          :width="118"
-                          :height="86"
-                        />
-                      </template>
-                    </el-table-column>
-                    <el-table-column label="物质名称" min-width="260" align="center">
-                      <template #default="{ row }">
-                        <el-button
-                          v-if="row.chemical !== null"
-                          class="reagent-name-button"
-                          type="primary"
-                          link
-                          @click="openReagentDetail(row)"
-                        >
-                          {{ row.substance }}
-                        </el-button>
-                        <span v-else class="reagent-name-text">{{ row.substance }}</span>
-                      </template>
-                    </el-table-column>
-                    <el-table-column prop="physicalState" label="物态" width="90" align="center" />
-                    <el-table-column label="剩余量" width="140" align="center">
-                      <template #default="{ row }">
-                        <div class="reagent-occurrence-list">
-                          <div
-                            v-for="(item, index) in row.occurrences"
-                            :key="`${item.position}-${index}`"
+                  <div class="side-management-panel">
+                    <div class="panel-title side-panel-title">
+                      <h3>设备管理</h3>
+                    </div>
+                    <div class="device-management-actions">
+                      <el-button
+                        class="init-action-button"
+                        type="primary"
+                        :loading="actionLoading === 'device_init'"
+                        @click="runDeviceInit"
+                      >
+                        设备初始化
+                      </el-button>
+                      <div class="operation-group">
+                        <div class="operation-title">过渡舱外门</div>
+                        <div class="operation-row">
+                          <el-button
+                            class="door-action-button"
+                            :class="outerDoorButtonClass"
+                            :loading="outerDoorButton.loading"
+                            :disabled="outerDoorButton.disabled"
+                            @click="runOuterDoorButton"
                           >
-                            {{ item.amount }}
+                            {{ outerDoorButton.label }}
+                          </el-button>
+                        </div>
+                      </div>
+                      <div class="operation-group">
+                        <div class="operation-title">W1 排货架</div>
+                        <div class="w1-control-list">
+                          <div
+                            v-for="control in w1ShelfControls"
+                            :key="control.position"
+                            class="w1-control-row"
+                          >
+                            <span class="w1-position-name">{{ control.positionLabel }}</span>
+                            <el-button
+                              class="w1-control-button"
+                              :class="control.buttonClass"
+                              :loading="control.loading"
+                              :disabled="control.disabled"
+                              @click="runW1Shelf(control)"
+                            >
+                              {{ control.label }}
+                            </el-button>
                           </div>
                         </div>
-                      </template>
-                    </el-table-column>
-                    <el-table-column label="位置" width="170" align="center">
-                      <template #default="{ row }">
-                        <div class="reagent-occurrence-list">
-                          <div
-                            v-for="(item, index) in row.occurrences"
-                            :key="`${item.position}-${index}`"
-                          >
-                            {{ item.position }}
-                          </div>
-                        </div>
-                      </template>
-                    </el-table-column>
-                    <el-table-column label="托盘种类" min-width="180" align="center">
-                      <template #default="{ row }">
-                        <div class="reagent-occurrence-list">
-                          <div
-                            v-for="(item, index) in row.occurrences"
-                            :key="`${item.position}-${index}`"
-                          >
-                            {{ item.trayType }}
-                          </div>
-                        </div>
-                      </template>
-                    </el-table-column>
-                  </el-table>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           </section>
 
-          <section class="two-column overview-status-actions">
-            <div class="panel">
+          <section class="chemical-status-layout">
+            <div class="panel display-panel">
+              <div class="panel-title">
+                <h3>化学品库</h3>
+              </div>
+              <div class="table-wrap chemical-table-wrap">
+                <el-table class="reagent-table" :data="reagentDisplayRows" border stripe height="520">
+                  <el-table-column label="结构式" width="142" align="center">
+                    <template #default="{ row }">
+                      <StructurePreview
+                        :smiles="row.structureSmiles"
+                        :width="118"
+                        :height="86"
+                      />
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="物质名称" min-width="260" align="center">
+                    <template #default="{ row }">
+                      <el-button
+                        v-if="row.chemical !== null"
+                        class="reagent-name-button"
+                        type="primary"
+                        link
+                        @click="openReagentDetail(row)"
+                      >
+                        {{ row.substance }}
+                      </el-button>
+                      <span v-else class="reagent-name-text">{{ row.substance }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="physicalState" label="物态" width="90" align="center" />
+                  <el-table-column label="剩余量" width="140" align="center">
+                    <template #default="{ row }">
+                      <div class="reagent-occurrence-list">
+                        <div
+                          v-for="(item, index) in row.occurrences"
+                          :key="`${item.position}-${index}`"
+                        >
+                          {{ item.amount }}
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="位置" width="170" align="center">
+                    <template #default="{ row }">
+                      <div class="reagent-occurrence-list">
+                        <div
+                          v-for="(item, index) in row.occurrences"
+                          :key="`${item.position}-${index}`"
+                        >
+                          {{ item.position }}
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="托盘种类" min-width="180" align="center">
+                    <template #default="{ row }">
+                      <div class="reagent-occurrence-list">
+                        <div
+                          v-for="(item, index) in row.occurrences"
+                          :key="`${item.position}-${index}`"
+                        >
+                          {{ item.trayType }}
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+            </div>
+
+            <div class="panel display-panel">
               <div class="panel-title">
                 <h3>设备状态</h3>
               </div>
@@ -850,93 +908,20 @@ onBeforeUnmount(stopDashboardPolling)
                 </div>
               </div>
             </div>
-
-            <div class="panel">
-              <div class="panel-title">
-                <h3>其它操作</h3>
-              </div>
-              <div class="other-actions">
-                <el-button
-                  class="init-action-button"
-                  type="primary"
-                  :loading="actionLoading === 'device_init'"
-                  @click="runDeviceInit"
-                >
-                  设备初始化
-                </el-button>
-                <div class="operation-group">
-                  <div class="operation-title">过渡舱外门</div>
-                  <div class="operation-row">
-                    <el-button
-                      class="door-action-button"
-                      :class="outerDoorButtonClass"
-                      :loading="outerDoorButton.loading"
-                      :disabled="outerDoorButton.disabled"
-                      @click="runOuterDoorButton"
-                    >
-                      {{ outerDoorButton.label }}
-                    </el-button>
-                  </div>
-                </div>
-                <div class="operation-group">
-                  <div class="operation-title">W1 排货架</div>
-                  <el-form label-position="top">
-                    <div class="w1-form">
-                      <el-form-item>
-                        <el-select
-                          class="w1-position-select"
-                          v-model="w1SelectedPosition"
-                          :disabled="pendingOperation !== null || w1ShelfExecutableOptions.length === 0"
-                          popper-class="w1-position-popper"
-                          placeholder="暂无可执行 W1 操作"
-                        >
-                          <el-option
-                            v-for="option in w1ShelfExecutableOptions"
-                            :key="option.position"
-                            :label="option.position"
-                            :value="option.position"
-                          />
-                        </el-select>
-                      </el-form-item>
-                      <el-button
-                        class="w1-execute-button"
-                        :class="w1ExecuteClass"
-                        :loading="isW1Pending || actionLoading === 'control_w1_shelf'"
-                        :disabled="w1ControlDisabled"
-                        @click="runW1Shelf"
-                      >
-                        {{ w1ExecuteLabel }}
-                      </el-button>
-                    </div>
-                  </el-form>
-                  <div class="operation-title">后台控制</div>
-                  <el-button
-                    class="external-control-button"
-                    type="primary"
-                    tag="a"
-                    :icon="LinkIcon"
-                    :href="synthesisControlUrl"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    访问合成工站控制页面
-                  </el-button>
-                </div>
-              </div>
-            </div>
           </section>
 
-    <JobPanel
-      :job-id="currentJobId"
-      title="运行结果"
-      @updated="onJobUpdated"
-      @finished="onJobFinished"
-    />
-    <ChemicalDetailDialog
-      v-model="reagentDetailVisible"
-      :chemical="reagentDetailChemical"
-      :show-edit="false"
-    />
+          <JobPanel
+            :job-id="currentJobId"
+            title="运行结果"
+            @updated="onJobUpdated"
+            @finished="onJobFinished"
+          />
+
+          <ChemicalDetailDialog
+            v-model="reagentDetailVisible"
+            :chemical="reagentDetailChemical"
+            :show-edit="false"
+          />
   </div>
 </template>
 
@@ -953,9 +938,15 @@ onBeforeUnmount(stopDashboardPolling)
 }
 
 .station-with-panel {
-  grid-template-columns: 1fr 320px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  gap: 14px;
   align-items: start;
+}
+
+.station-main-column {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
 }
 
 .station-graph-wrap {
@@ -964,9 +955,34 @@ onBeforeUnmount(stopDashboardPolling)
 }
 
 .station-side-panel {
-  width: 320px;
-  position: sticky;
-  top: 16px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  width: 100%;
+}
+
+.side-management-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+}
+
+.side-panel-title {
+  margin-bottom: 0;
+  padding: 10px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.side-panel-title h3 {
+  overflow: hidden;
+  min-width: 0;
+  color: #303133;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .consumable-card-grid {
@@ -1064,20 +1080,31 @@ onBeforeUnmount(stopDashboardPolling)
   overflow-wrap: anywhere;
 }
 
-.overview-status-actions {
-  grid-template-columns: minmax(560px, 1.35fr) minmax(320px, 0.65fr);
+.chemical-status-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 16px;
   align-items: stretch;
+  min-width: 0;
 }
 
-.overview-status-actions > .panel {
+.display-panel {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-width: 0;
+}
+
+.chemical-table-wrap {
+  min-height: 520px;
 }
 
 .device-status-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  grid-template-columns: 1fr;
+  align-content: start;
   gap: 10px;
-  max-height: 300px;
+  height: 520px;
   overflow: auto;
 }
 
@@ -1102,12 +1129,13 @@ onBeforeUnmount(stopDashboardPolling)
   white-space: nowrap;
 }
 
-.other-actions {
+.device-management-actions {
   display: grid;
   gap: 14px;
+  padding: 10px;
 }
 
-.other-actions .el-button {
+.device-management-actions .el-button {
   justify-content: flex-start;
   min-height: 40px;
   margin-left: 0;
@@ -1115,7 +1143,7 @@ onBeforeUnmount(stopDashboardPolling)
 
 .init-action-button,
 .door-action-button,
-.w1-execute-button {
+.w1-control-button {
   justify-content: center !important;
 }
 
@@ -1137,43 +1165,47 @@ onBeforeUnmount(stopDashboardPolling)
   gap: 10px;
 }
 
-.w1-form {
+.w1-control-list {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) minmax(144px, 0.72fr);
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.w1-control-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 54px;
+  gap: 20px;
   align-items: center;
+  min-width: 0;
 }
 
-.w1-form :deep(.el-form-item) {
-  margin-bottom: 0;
+.w1-position-name {
+  color: #34445d;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
 }
 
-.w1-execute-button {
+.w1-control-button {
   width: 100%;
-  min-height: 44px;
-  height: 44px;
-}
-
-.w1-position-select {
-  width: 100%;
-}
-
-.w1-position-select :deep(.el-select__wrapper) {
-  min-height: 44px;
+  min-width: 0;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 8px;
   text-align: center;
 }
 
-.w1-position-select :deep(.el-select__selected-item) {
+.w1-control-button :deep(span) {
+  display: inline-block;
   width: 100%;
-  justify-content: center;
-}
-
-.w1-position-select :deep(.el-select__placeholder) {
-  justify-content: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .door-action-button,
-.w1-execute-button {
+.w1-control-button {
   color: #ffffff;
   border-color: transparent;
 }
@@ -1231,22 +1263,15 @@ onBeforeUnmount(stopDashboardPolling)
   border-color: transparent;
 }
 
-.external-control-button {
-  justify-content: center !important;
-  width: 100%;
-  min-height: 40px;
-}
-
-:global(.w1-position-popper .el-select-dropdown__item) {
-  text-align: center;
-}
-
 @media (max-width: 860px) {
-  .overview-status-actions,
-  .device-status-grid,
-  .operation-row,
-  .w1-form {
+  .chemical-status-layout,
+  .station-with-panel,
+  .operation-row {
     grid-template-columns: 1fr;
+  }
+
+  .station-side-panel {
+    width: 100%;
   }
 }
 </style>

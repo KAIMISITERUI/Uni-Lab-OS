@@ -557,7 +557,7 @@ async function onConfirm (): Promise<void> {
     }
     if (row.destination_layout_code.startsWith('TB') === true) {
       activeSourceCode.value = row.source_layout_code
-      ElMessage.warning('目标槽位不能选择 TB 交换仓, 请使用删除资源移出')
+      ElMessage.warning('目标槽位不能选择 TB 交换仓, 请使用移出资源')
       return
     }
     if (isTargetUsed(row.destination_layout_code, row.source_layout_code) === true) {
