@@ -341,6 +341,7 @@ export async function prepareLoadedTrayCalibration(payload: {
   return data
 }
 
+// 仅计算带托盘校准应保存的位姿, 不写盘, 保存统一走 saveTrayCalibration.
 export async function recordLoadedTrayPose(trayName: string): Promise<{ tray_name: string; pose: number[] }> {
   const { data } = await http.post<{ tray_name: string; pose: number[] }>(
     '/api/agv/calibration/loaded-tray/record',

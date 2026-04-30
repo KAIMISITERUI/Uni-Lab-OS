@@ -28,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
+  saved: []
 }>()
 
 const dialogVisible = computed({
@@ -139,12 +140,11 @@ async function handleSave() {
   busy.value = true
   step.value = 'finishing'
   try {
+    await saveTrayCalibration({ tray_name: tray, pose: preview.value.pose_to_save })
+    emit('saved')
     if (mode.value === 'loaded') {
-      // 带托盘场景: complete 内部已写盘并松爪回零
       const resp = await completeLoadedTrayCalibration(tray)
       await pollJob(resp.job_id)
-    } else {
-      await saveTrayCalibration({ tray_name: tray, pose: preview.value.pose_to_save })
     }
     ElMessage.success('已保存校准结果')
     dialogVisible.value = false

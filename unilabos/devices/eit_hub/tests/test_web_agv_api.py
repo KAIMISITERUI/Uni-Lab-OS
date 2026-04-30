@@ -190,6 +190,68 @@ class FakeConnectedAgvContext:
         return True
 
 
+class FakeTraySavePositionManager:
+    """
+    功能:
+        提供托盘校准保存接口测试所需的位置管理器.
+    """
+
+    def __init__(self) -> None:
+        self.reload_count = 0
+
+    def reload(self) -> None:
+        """
+        功能:
+            记录配置重载次数.
+        返回:
+            None.
+        """
+        self.reload_count += 1
+
+
+class FakeTraySaveController:
+    """
+    功能:
+        提供托盘校准保存接口测试所需的控制器.
+    """
+
+    def __init__(self) -> None:
+        self.position_manager = FakeTraySavePositionManager()
+        self.saved_calls: List[Dict[str, Any]] = []
+
+    def save_calibrated_tray_position(self, tray_name: str, pose: List[float]) -> bool:
+        """
+        功能:
+            记录托盘点位保存调用.
+        参数:
+            tray_name: str, 托盘点位名称.
+            pose: List[float], 待保存 TCP 位姿.
+        返回:
+            bool, True 表示保存成功.
+        """
+        self.saved_calls.append({"tray_name": tray_name, "pose": pose})
+        return True
+
+
+class FakeTraySaveContext:
+    """
+    功能:
+        提供托盘校准保存接口测试所需的 AGV 上下文.
+    """
+
+    def __init__(self) -> None:
+        self.controller = FakeTraySaveController()
+
+    def get_or_create(self) -> FakeTraySaveController:
+        """
+        功能:
+            返回测试控制器.
+        返回:
+            FakeTraySaveController, 测试控制器.
+        """
+        return self.controller
+
+
 def _charging_api_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -575,3 +637,27 @@ def test_tray_options_use_agv_points_for_unknown_station(api_client: TestClient)
     option_names = [item["name"] for item in body["options"]]
     assert len(option_names) > 0
     assert all(name.startswith("agv") for name in option_names) is True
+
+
+def test_tray_calibration_save_calls_controller_after_reload() -> None:
+    """
+    功能:
+        验证 /api/agv/calibration/tray/save 会先重载点位配置, 再调用控制器保存校准位姿.
+    """
+    context = FakeTraySaveContext()
+    app = create_app()
+    app.dependency_overrides[deps.get_agv_context] = lambda: context
+    client = TestClient(app)
+    pose = [1.0, 2.0, 3.0, 0.1, 0.2, 0.3]
+
+    response = client.post(
+        "/api/agv/calibration/tray/save",
+        json={"tray_name": "synthesis_station_tray_1-1", "pose": pose},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"tray_name": "synthesis_station_tray_1-1", "ok": True}
+    assert context.controller.position_manager.reload_count == 1
+    assert context.controller.saved_calls == [
+        {"tray_name": "synthesis_station_tray_1-1", "pose": pose}
+    ]

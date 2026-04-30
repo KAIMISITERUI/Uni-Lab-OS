@@ -1294,11 +1294,11 @@ def calibration_loaded_tray_record(
 ) -> JsonDict:
     """
     功能:
-        带托盘校准: 根据当前 TCP 位姿计算并保存托盘点位.
+        带托盘校准: 根据当前 TCP 位姿计算应保存的托盘点位, 不写入配置文件.
     参数:
         request: TrayNameRequest, 托盘名称请求.
     返回:
-        Dict[str, Any], 包含保存的位姿.
+        Dict[str, Any], 包含待保存的位姿.
     """
     _require_arm(context)
     _reload_positions(context)

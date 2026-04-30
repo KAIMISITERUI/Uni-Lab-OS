@@ -678,6 +678,7 @@ onBeforeUnmount(stopAutoRefresh)
       :tray-options="trayOptions"
       :tcp-pose="status?.tcp_pose ?? null"
       :joints="status?.joints ?? null"
+      @saved="loadPositions"
     />
     <StationOffsetDialog
       v-model:visible="stationOffsetDialogVisible"
