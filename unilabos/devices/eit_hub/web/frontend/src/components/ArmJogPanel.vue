@@ -676,35 +676,41 @@ defineExpose<{
 }
 
 .pose-card {
-  display: grid;
-  align-content: start;
-  gap: 8px;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  column-gap: 48px;
   flex: 1;
   padding: 12px 14px;
   background: #ffffff;
   border: 1px solid #d7e0eb;
   border-radius: 12px;
   min-height: 92px;
+  overflow-x: auto;
 }
 
 .pose-line {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
+  display: grid;
+  flex: 0 0 max-content;
+  gap: 4px;
+  min-width: max-content;
+  width: max-content;
 }
 
 .pose-title {
-  min-width: 40px;
   color: #2b3a4f;
   font-size: 12px;
   font-weight: 700;
 }
 
 .pose-value {
+  display: block;
+  width: max-content;
   color: #34445d;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
-  word-break: break-all;
+  overflow-x: visible;
+  white-space: nowrap;
 }
 
 @media (max-width: 1200px) {
@@ -714,6 +720,20 @@ defineExpose<{
 }
 
 @media (max-width: 900px) {
+  .pose-card {
+    flex-direction: column;
+    row-gap: 8px;
+  }
+
+  .pose-line {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .pose-value {
+    overflow-x: auto;
+  }
+
   .tcp-grid {
     grid-template-columns: 1fr;
   }

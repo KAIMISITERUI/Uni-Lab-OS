@@ -947,17 +947,17 @@ onBeforeUnmount(stopAutoRefresh)
   padding: 14px 16px;
 }
 .status-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: nowrap;
   gap: 14px 24px;
+  overflow-x: auto;
 }
 .status-item {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   gap: 4px;
-}
-.joint-status-item {
-  grid-column: span 2;
 }
 .status-label {
   color: #5d6d83;
@@ -970,14 +970,16 @@ onBeforeUnmount(stopAutoRefresh)
   font-weight: 600;
 }
 .pose-mono {
+  display: block;
+  width: max-content;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
   font-weight: 500;
+  overflow-x: visible;
+  white-space: nowrap;
 }
 .joint-line {
-  display: block;
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow-x: visible;
 }
 .info-row {
   display: flex;
@@ -1203,8 +1205,16 @@ onBeforeUnmount(stopAutoRefresh)
   }
 }
 @media (max-width: 720px) {
-  .joint-status-item {
-    grid-column: 1 / -1;
+  .status-grid {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+  .status-item {
+    flex: 1 1 100%;
+  }
+  .pose-mono {
+    width: auto;
+    overflow-x: auto;
   }
   .offset-grid,
   .pick-put-fields {
