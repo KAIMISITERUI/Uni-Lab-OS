@@ -278,8 +278,33 @@ class ApiClient:
         body = {"layout_list": layout_list, "move_type": move_type}
         return self._request("POST", "/api/BatchOutTray", json_body=body)
 
+    # 8. 编辑资源
+    def update_resource(
+        self,
+        resource_list: List[JsonDict],
+        tray_layout_code: Optional[str] = None,
+        remark: Optional[str] = None,
+    ) -> JsonDict:
+        """
+        功能:
+            编辑现有托盘资源, 对应设备 /api/UpdateResource. 入参与 web_code
+            packages/dynamic-api/src/api/resource/resource.ts updateResource 完全一致.
+        参数:
+            resource_list: List[JsonDict], 单托盘的 resource 数组,
+                每项含 layout_code, model, index, with_cap, substance, chemical_id, amount, unit, status 等.
+            tray_layout_code: Optional[str], 托盘 layout_code, 例如 "W-4-1".
+            remark: Optional[str], 备注, 默认空字符串.
+        返回:
+            Dict, 设备 /api/UpdateResource 原始 JSON.
+        """
+        body: JsonDict = {"resource_list": resource_list}
+        if tray_layout_code is not None:
+            body["tray_layout_code"] = tray_layout_code
+        body["remark"] = remark or ""
+        return self._request("POST", "/api/UpdateResource", json_body=body)
+
     # 移动托盘
-    def move_tray(self, layout_list: List[JsonDict]) -> JsonDict:
+    def move_tray(self, layout_list: List[JsonDict], remark: Optional[str] = None) -> JsonDict:
         """
         功能:
             移动托盘位置, 对应 MoveTray.
@@ -297,7 +322,10 @@ class ApiClient:
             if "destination_layout_code" not in item:
                 raise ValidationError("layout_list 中每项都必须包含 destination_layout_code.")
 
-        return self._request("POST", "/api/MoveTray", json_body={"layout_list": layout_list})
+        body: JsonDict = {"layout_list": layout_list}
+        if remark is not None and remark != "":
+            body["remark"] = remark
+        return self._request("POST", "/api/MoveTray", json_body=body)
     
     # 8. 获取化学品
     def get_chemical_list(

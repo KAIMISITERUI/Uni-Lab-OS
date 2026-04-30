@@ -162,3 +162,59 @@ def proxy_batch_out_tray(
         "BatchOutTray",
         lambda: manager._client.batch_out_tray(layout_list, move_type),
     )
+
+
+@router.post("/MoveTray")
+def proxy_move_tray(
+    body: Dict[str, Any] = Body(...),
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> Dict[str, Any]:
+    """
+    功能:
+        代理 dynamic-resource 前端的 MoveTray 调用 (移动资源).
+        透传 layout_list 与 remark 到设备 /api/MoveTray,
+        与 web_code moveResourceBatch 入参完全一致.
+    参数:
+        body: Dict[str, Any], 必须包含 layout_list 列表,
+              每项含 source_layout_code 与 destination_layout_code; 可选 remark.
+        manager: SynthesisStationManager, 由 FastAPI 依赖注入.
+    返回:
+        Dict[str, Any], 设备 /api/MoveTray 原始 JSON 响应.
+    """
+    layout_list = body.get("layout_list", []) or []
+    if isinstance(layout_list, list) is False:
+        raise HTTPException(status_code=400, detail="layout_list 必须为数组")
+    remark = body.get("remark")
+    return _invoke_with_relogin(
+        manager,
+        "MoveTray",
+        lambda: manager._client.move_tray(layout_list, remark),
+    )
+
+
+@router.post("/UpdateResource")
+def proxy_update_resource(
+    body: Dict[str, Any] = Body(...),
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> Dict[str, Any]:
+    """
+    功能:
+        代理 dynamic-resource 前端的 UpdateResource 调用 (单托盘编辑资源).
+        透传 resource_list / tray_layout_code / remark 到设备 /api/UpdateResource,
+        与 web_code packages/dynamic-api/src/api/resource/resource.ts updateResource 入参完全一致.
+    参数:
+        body: Dict[str, Any], 必须包含 resource_list (数组), 可选 tray_layout_code 与 remark.
+        manager: SynthesisStationManager, 由 FastAPI 依赖注入.
+    返回:
+        Dict[str, Any], 设备 /api/UpdateResource 原始 JSON 响应.
+    """
+    resource_list = body.get("resource_list", []) or []
+    if not isinstance(resource_list, list):
+        raise HTTPException(status_code=400, detail="resource_list 必须为数组")
+    tray_layout_code = body.get("tray_layout_code")
+    remark = body.get("remark")
+    return _invoke_with_relogin(
+        manager,
+        "UpdateResource",
+        lambda: manager._client.update_resource(resource_list, tray_layout_code, remark),
+    )
