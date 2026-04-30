@@ -21,6 +21,10 @@ const streamActive = ref(true)
 const zoomedSlot = ref<CameraSlot | null>(null)
 const zoomedReloadToken = ref(0)
 const zoomedFailed = ref(false)
+// 弹窗主码流 <img> DOM 引用, 关闭弹窗时显式置空 src 强制释放 MJPEG 连接
+const zoomImgEl = ref<HTMLImageElement | null>(null)
+// 缩略图 <img> DOM 引用 Map, 离开页面时显式置空 src 强制释放 sub 流连接
+const thumbImgEls = new Map<string, HTMLImageElement>()
 
 const hasCameras = computed(() => cameras.value.length > 0)
 const dialogVisible = computed({
@@ -35,6 +39,35 @@ const dialogVisible = computed({
 function buildSrc(url: string, token: number): string {
   const separator = url.includes('?') ? '&' : '?'
   return `${url}${separator}_t=${token}`
+}
+
+function clearImgConnection(el: HTMLImageElement | null | undefined): void {
+  if (el === null || el === undefined) {
+    return
+  }
+  // 关键: 置空 src 并移除属性, 浏览器会立即 abort MJPEG 请求并释放 socket,
+  // 否则 Chromium 在元素 detach 后仍可能保留连接, 累计撑满同源连接数上限,
+  // 导致弹窗放大几次后第 N 次点开呈黑屏.
+  el.src = ''
+  el.removeAttribute('src')
+}
+
+function registerThumbEl(id: string, el: HTMLImageElement | null): void {
+  if (el === null) {
+    thumbImgEls.delete(id)
+  } else {
+    thumbImgEls.set(id, el)
+  }
+}
+
+function releaseZoomConnection(): void {
+  clearImgConnection(zoomImgEl.value)
+}
+
+function releaseAllThumbConnections(): void {
+  for (const el of thumbImgEls.values()) {
+    clearImgConnection(el)
+  }
 }
 
 async function loadCameras(): Promise<void> {
@@ -100,13 +133,19 @@ onActivated(() => {
   }
 })
 
-// 离开页面时主动停止拉流, 同时关闭放大对话框, 避免后台仍占用带宽
+// 离开页面时主动停止拉流, 同时关闭放大对话框, 避免后台仍占用带宽.
+// 先显式清空 <img> 的 src 强制浏览器释放 MJPEG socket,
+// 再让 Vue 通过 v-if 移除元素, 避免连接残留撑满同源连接池.
 onDeactivated(() => {
+  releaseAllThumbConnections()
+  releaseZoomConnection()
   streamActive.value = false
   zoomedSlot.value = null
 })
 
 onBeforeUnmount(() => {
+  releaseAllThumbConnections()
+  releaseZoomConnection()
   streamActive.value = false
   zoomedSlot.value = null
 })
@@ -164,6 +203,7 @@ onBeforeUnmount(() => {
           >
             <img
               v-if="streamActive"
+              :ref="(el) => registerThumbEl(slot.info.id, el as HTMLImageElement | null)"
               :src="buildSrc(slot.info.stream_url_sub, slot.reloadToken)"
               :alt="slot.info.id"
               class="camera-image"
@@ -200,9 +240,11 @@ onBeforeUnmount(() => {
       destroy-on-close
       append-to-body
       class="camera-zoom-dialog"
+      @close="releaseZoomConnection"
     >
       <div v-if="zoomedSlot !== null" class="zoom-frame">
         <img
+          ref="zoomImgEl"
           :src="buildSrc(zoomedSlot.info.stream_url_main, zoomedReloadToken)"
           :alt="zoomedSlot.info.id"
           class="zoom-image"
