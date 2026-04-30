@@ -268,6 +268,75 @@ class FakeManualChargeLoopApiService:
         return {"running": self.running, "config": dict(DEFAULT_CHARGE_LOOP_CONFIG), "last_action": None}
 
 
+class FakeNavigationController:
+    """
+    功能:
+        提供导航控制 API 测试所需的最小控制器.
+    """
+
+    def __init__(self) -> None:
+        self.calls: List[str] = []
+
+    def pause_navigation(self) -> Dict[str, Any]:
+        """
+        功能:
+            记录暂停导航调用并返回测试响应.
+        返回:
+            Dict[str, Any], 测试响应.
+        """
+        self.calls.append("pause")
+        return {"ret_code": 0}
+
+    def resume_navigation(self) -> Dict[str, Any]:
+        """
+        功能:
+            记录继续导航调用并返回测试响应.
+        返回:
+            Dict[str, Any], 测试响应.
+        """
+        self.calls.append("resume")
+        return {"ret_code": 0}
+
+    def cancel_navigation(self) -> Dict[str, Any]:
+        """
+        功能:
+            记录取消导航调用并返回测试响应.
+        返回:
+            Dict[str, Any], 测试响应.
+        """
+        self.calls.append("cancel")
+        return {"ret_code": 0}
+
+
+class FakeNavigationContext:
+    """
+    功能:
+        提供导航控制 API 测试所需的 AGV 上下文.
+    """
+
+    def __init__(self, chassis_connected: bool = True) -> None:
+        self.chassis_connected = chassis_connected
+        self.controller = FakeNavigationController()
+
+    def is_chassis_connected(self) -> bool:
+        """
+        功能:
+            返回底盘连接状态.
+        返回:
+            bool, True 表示已连接.
+        """
+        return self.chassis_connected
+
+    def get_or_create(self) -> FakeNavigationController:
+        """
+        功能:
+            返回测试控制器.
+        返回:
+            FakeNavigationController, 测试控制器.
+        """
+        return self.controller
+
+
 class FakeTraySavePositionManager:
     """
     功能:
@@ -714,6 +783,48 @@ def test_charging_do7_api_rejects_when_loop_running(
     assert response.status_code == 409
     assert "请先停止循环" in response.json()["detail"]
     assert context.controller.set_calls == []
+
+
+def test_navigation_control_api_calls_controller(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    功能:
+        验证暂停, 继续, 取消导航 API 调用对应控制器方法并返回动作名称.
+    """
+    charger = FakeManualChargeLoopApiService(running=False)
+    context = FakeNavigationContext(chassis_connected=True)
+    client = _charging_api_client(monkeypatch, tmp_path, charger, context=context)
+
+    pause_response = client.post("/api/agv/navigation/pause")
+    resume_response = client.post("/api/agv/navigation/resume")
+    cancel_response = client.post("/api/agv/navigation/cancel")
+
+    assert pause_response.status_code == 200
+    assert pause_response.json()["ok"] is True
+    assert pause_response.json()["action"] == "pause"
+    assert resume_response.status_code == 200
+    assert resume_response.json()["action"] == "resume"
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["action"] == "cancel"
+    assert context.controller.calls == ["pause", "resume", "cancel"]
+
+
+def test_navigation_control_api_rejects_without_chassis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    功能:
+        验证底盘未连接时导航控制 API 返回 409 且不调用控制器.
+    """
+    charger = FakeManualChargeLoopApiService(running=False)
+    context = FakeNavigationContext(chassis_connected=False)
+    client = _charging_api_client(monkeypatch, tmp_path, charger, context=context)
+
+    response = client.post("/api/agv/navigation/cancel")
+
+    assert response.status_code == 409
+    assert "AGV 底盘未连接" in response.json()["detail"]
+    assert context.controller.calls == []
 
 
 def test_agv_status_returns_charge_control(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

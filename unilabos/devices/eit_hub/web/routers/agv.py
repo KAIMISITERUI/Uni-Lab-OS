@@ -963,6 +963,71 @@ def arm_gripper(
 # ==================== 分节 B: 导航与转运 ====================
 
 
+def _navigation_control_response(action: str, context: AgvContext) -> JsonDict:
+    """
+    功能:
+        下发 AGV 当前导航控制命令, 用于暂停, 继续或取消当前导航.
+        该接口不占用后台 Job 槽, 确保导航任务运行期间仍可取消.
+    参数:
+        action: str, 导航控制动作, 取值为 pause, resume 或 cancel.
+        context: AgvContext, AGV 上下文.
+    返回:
+        Dict[str, Any], 导航控制执行结果.
+    """
+    action_map = {
+        "pause": ("暂停导航", "pause_navigation"),
+        "resume": ("继续导航", "resume_navigation"),
+        "cancel": ("取消导航", "cancel_navigation"),
+    }
+    if action not in action_map:
+        raise _json_error(f"不支持的导航控制动作: {action}")
+
+    _require_chassis(context)
+    action_label, method_name = action_map[action]
+    try:
+        response = getattr(context.get_or_create(), method_name)()
+    except Exception as exc:
+        raise _json_error(f"{action_label}失败: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {
+        "ok": True,
+        "action": action,
+        "response": response,
+    }
+
+
+@router.post("/navigation/pause")
+def pause_navigation(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+    """
+    功能:
+        暂停 AGV 当前导航. 同步执行, 不占 Job 槽.
+    返回:
+        Dict[str, Any], 导航暂停响应.
+    """
+    return _navigation_control_response("pause", context)
+
+
+@router.post("/navigation/resume")
+def resume_navigation(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+    """
+    功能:
+        继续 AGV 当前已暂停导航. 同步执行, 不占 Job 槽.
+    返回:
+        Dict[str, Any], 导航继续响应.
+    """
+    return _navigation_control_response("resume", context)
+
+
+@router.post("/navigation/cancel")
+def cancel_navigation(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+    """
+    功能:
+        取消 AGV 当前导航. 同步执行, 不占 Job 槽.
+    返回:
+        Dict[str, Any], 导航取消响应.
+    """
+    return _navigation_control_response("cancel", context)
+
+
 @router.get("/tray-options")
 def get_tray_options(
     station_id: Optional[str] = Query(default=None),

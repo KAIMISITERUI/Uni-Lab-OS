@@ -139,6 +139,14 @@ export interface JobCreateResponse {
   status?: string
 }
 
+export type AgvNavigationControlAction = 'pause' | 'resume' | 'cancel'
+
+export interface AgvNavigationControlResponse {
+  ok: boolean
+  action: AgvNavigationControlAction
+  response: Record<string, unknown>
+}
+
 export interface ShelfSlotInfo {
   material_type: string
   source: string
@@ -258,6 +266,21 @@ export async function armGripper(action: GripperAction): Promise<JobCreateRespon
 
 export async function navigateToStation(stationId: string): Promise<JobCreateResponse> {
   const { data } = await http.post<JobCreateResponse>('/api/agv/navigate', { station_id: stationId })
+  return data
+}
+
+export async function pauseNavigation(): Promise<AgvNavigationControlResponse> {
+  const { data } = await http.post<AgvNavigationControlResponse>('/api/agv/navigation/pause')
+  return data
+}
+
+export async function resumeNavigation(): Promise<AgvNavigationControlResponse> {
+  const { data } = await http.post<AgvNavigationControlResponse>('/api/agv/navigation/resume')
+  return data
+}
+
+export async function cancelNavigation(): Promise<AgvNavigationControlResponse> {
+  const { data } = await http.post<AgvNavigationControlResponse>('/api/agv/navigation/cancel')
   return data
 }
 

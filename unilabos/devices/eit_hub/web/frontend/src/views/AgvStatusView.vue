@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { CircleClose, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import {
   type AgvMapStation,
   type AgvMapResponse,
@@ -16,6 +17,7 @@ import {
   armPowerOn,
   armQuickChange,
   armStop,
+  cancelNavigation,
   connectArm,
   connectChassis,
   disconnectArm,
@@ -27,6 +29,8 @@ import {
   fetchTrayOptions,
   fetchTrayPositions,
   navigateToStation,
+  pauseNavigation,
+  resumeNavigation,
   saveAgvMapLayout,
   saveChargingConfig,
   setChargeControlDo7,
@@ -58,6 +62,7 @@ const actionLoading = ref('')
 type ArmStateField = 'drive_ready' | 'quick_change_locked' | 'gripper_open'
 type HardwareActionGroup = 'drive' | 'quick-change' | 'gripper'
 type ControlButtonType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
+type NavigationControlAction = 'pause' | 'resume' | 'cancel'
 
 interface SlotDisplayItem {
   key: string
@@ -218,6 +223,13 @@ const displayStations = computed(() => {
   }
   return mapData.value?.stations ?? []
 })
+const navTaskStatusCode = computed(() => {
+  const taskStatus = status.value?.nav_task?.task_status
+  if (typeof taskStatus === 'number') {
+    return taskStatus
+  }
+  return null
+})
 
 watch(
   () => [
@@ -348,6 +360,25 @@ function slotStatusText(occupied: boolean | null): string {
 
 function isActionLoading(key: string): boolean {
   return actionLoading.value === key || pendingHardwareAction.value?.key === key
+}
+
+function isNavigationActionDisabled(action: NavigationControlAction): boolean {
+  const actionKey = `nav-${action}`
+  if (actionLoading.value !== '' && actionLoading.value !== actionKey) {
+    return true
+  }
+  if (isChassisConnected.value === false) {
+    return true
+  }
+
+  const taskStatus = navTaskStatusCode.value
+  if (action === 'pause') {
+    return taskStatus !== 2
+  }
+  if (action === 'resume') {
+    return taskStatus !== 3
+  }
+  return taskStatus !== 1 && taskStatus !== 2 && taskStatus !== 3
 }
 
 function isHardwareActionDisabled(key: string, group: HardwareActionGroup): boolean {
@@ -684,12 +715,55 @@ function handleArmHome() {
   runJobAction('arm-home', armHome)
 }
 
-async function handleArmStop() {
+async function handleImmediateStop() {
+  if (isArmConnected.value === false && isChassisConnected.value === false) {
+    ElMessage.warning('机械臂和 AGV 底盘均未连接')
+    return
+  }
+
+  actionLoading.value = 'immediate-stop'
+  const successMessages: string[] = []
+  const errorMessages: string[] = []
+  const stopTasks: Array<Promise<void>> = []
+
+  if (isArmConnected.value === true) {
+    stopTasks.push(
+      armStop()
+        .then(() => {
+          successMessages.push('机械臂停止指令已发送')
+        })
+        .catch((error) => {
+          errorMessages.push(`机械臂停止失败: ${getErrorMessage(error)}`)
+        }),
+    )
+  }
+
+  if (isChassisConnected.value === true) {
+    stopTasks.push(
+      cancelNavigation()
+        .then(() => {
+          successMessages.push('AGV 取消导航指令已发送')
+        })
+        .catch((error) => {
+          errorMessages.push(`AGV 取消导航失败: ${getErrorMessage(error)}`)
+        }),
+    )
+  }
+
   try {
-    await armStop()
-    ElMessage.success('已发送停止指令')
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error))
+    await Promise.all(stopTasks)
+    await loadStatus()
+    await loadMap()
+
+    if (errorMessages.length > 0 && successMessages.length > 0) {
+      ElMessage.warning(`${successMessages.join(', ')}. ${errorMessages.join('; ')}`)
+    } else if (errorMessages.length > 0) {
+      ElMessage.error(errorMessages.join('; '))
+    } else {
+      ElMessage.success(successMessages.join(', '))
+    }
+  } finally {
+    actionLoading.value = ''
   }
 }
 
@@ -741,6 +815,39 @@ async function handleStationSelect(stationId: string) {
     return
   }
   runJobAction(`navigate-${stationId}`, () => navigateToStation(stationId))
+}
+
+async function runNavigationControl(
+  key: string,
+  fn: () => Promise<unknown>,
+  successMessage: string,
+) {
+  if (actionLoading.value !== '') {
+    return
+  }
+  actionLoading.value = key
+  try {
+    await fn()
+    ElMessage.success(successMessage)
+    await loadStatus()
+    await loadMap()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+function handleNavigationPause() {
+  runNavigationControl('nav-pause', pauseNavigation, '已发送暂停导航指令')
+}
+
+function handleNavigationResume() {
+  runNavigationControl('nav-resume', resumeNavigation, '已发送继续导航指令')
+}
+
+function handleNavigationCancel() {
+  runNavigationControl('nav-cancel', cancelNavigation, '已发送取消导航指令')
 }
 
 function beginMapEdit() {
@@ -1019,6 +1126,41 @@ onBeforeUnmount(() => {
           <h3>工站地图</h3>
           <div class="panel-title-actions">
             <el-tag v-if="isCharging" type="warning">循环运行中, 手动导航不可用</el-tag>
+            <div class="navigation-actions">
+              <el-button
+                size="small"
+                type="warning"
+                plain
+                :icon="VideoPause"
+                :loading="isActionLoading('nav-pause')"
+                :disabled="isNavigationActionDisabled('pause')"
+                @click="handleNavigationPause"
+              >
+                暂停导航
+              </el-button>
+              <el-button
+                size="small"
+                type="success"
+                plain
+                :icon="VideoPlay"
+                :loading="isActionLoading('nav-resume')"
+                :disabled="isNavigationActionDisabled('resume')"
+                @click="handleNavigationResume"
+              >
+                继续导航
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                plain
+                :icon="CircleClose"
+                :loading="isActionLoading('nav-cancel')"
+                :disabled="isNavigationActionDisabled('cancel')"
+                @click="handleNavigationCancel"
+              >
+                取消导航
+              </el-button>
+            </div>
             <el-button v-if="mapEditing === false" size="small" @click="beginMapEdit" :disabled="(mapData?.stations.length ?? 0) === 0">
               编辑
             </el-button>
@@ -1076,8 +1218,9 @@ onBeforeUnmount(() => {
             <el-button
               class="control-action-button"
               type="danger"
-              @click="handleArmStop"
-              :disabled="isArmConnected === false"
+              :loading="isActionLoading('immediate-stop')"
+              @click="handleImmediateStop"
+              :disabled="isArmConnected === false && isChassisConnected === false"
             >立即停止</el-button>
           </div>
         </section>
@@ -1468,6 +1611,17 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.navigation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.navigation-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 .control-actions {
