@@ -53,6 +53,8 @@ class FakeSynthesisManager:
         self.fault_recovery_calls: list[Dict[str, Any]] = []
         self.login_calls = 0
         self.batch_in_tray_calls: list[list[Dict[str, Any]]] = []
+        self.batch_update_resource_calls: list[list[Dict[str, Any]]] = []
+        self._client = self
 
     def ensure_login(self) -> None:
         """功能: 记录 synthesis_proxy 的登录校验调用."""
@@ -190,6 +192,18 @@ class FakeSynthesisManager:
         """
         self.batch_in_tray_calls.append(resource_req_list)
         return {"success": True, "mode": "resource_panel", "resource_req_list": resource_req_list}
+
+    def batch_update_resource(self, resource_req_list: list[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        功能:
+            记录资源面板批量编辑资源调用.
+        参数:
+            resource_req_list: list[Dict[str, Any]], 批量编辑资源请求列表.
+        返回:
+            Dict[str, Any], 编辑资源结果.
+        """
+        self.batch_update_resource_calls.append(resource_req_list)
+        return {"success": True, "mode": "resource_panel_update", "resource_req_list": resource_req_list}
 
     def batch_in_tray_with_agv_transfer(
         self,
@@ -513,6 +527,55 @@ def test_synthesis_proxy_batch_in_tray_uses_controller(
     assert response.status_code == 200
     assert response.json()["mode"] == "resource_panel"
     assert fake_manager.batch_in_tray_calls == [resource_req_list]
+    assert "ensure_login" in fake_manager.call_order
+
+
+def test_synthesis_proxy_batch_update_resource_uses_device_client(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证资源面板 BatchUpdateResource 代理透传 resource_req_list 到设备客户端.
+    参数:
+        api_client: tuple[TestClient, FakeSynthesisManager, Path], 测试客户端与假管理器.
+    返回:
+        None.
+    """
+    client, fake_manager, _template_path = api_client
+    resource_req_list = [
+        {
+            "tray_layout_code": "W-4-1",
+            "remark": "",
+            "resource_list": [
+                {
+                    "layout_code": "W-4-1:-1",
+                    "slot_index": -1,
+                    "with_cap": False,
+                    "resource_type": "201000600",
+                },
+                {
+                    "layout_code": "W-4-1:1",
+                    "resource_type": "201000816",
+                    "substance": "碳酸铯",
+                    "chemical_id": 385,
+                    "unit": "mg",
+                    "cur_weight": 328.7,
+                    "with_cap": False,
+                    "with_magneton": False,
+                    "content": "",
+                },
+            ],
+        }
+    ]
+
+    response = client.post(
+        "/synthesis-api/api/BatchUpdateResource",
+        json={"resource_req_list": resource_req_list},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "resource_panel_update"
+    assert fake_manager.batch_update_resource_calls == [resource_req_list]
     assert "ensure_login" in fake_manager.call_order
 
 

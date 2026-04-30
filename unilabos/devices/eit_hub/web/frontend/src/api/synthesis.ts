@@ -339,6 +339,33 @@ export interface BatchInTrayPayload {
   remark?: string
 }
 
+export interface BatchUpdateResourceItem {
+  layout_code: string
+  resource_type: string
+  slot_index?: number
+  cur_weight?: number
+  cur_volume?: number
+  unit?: string
+  substance?: string
+  chemical_id?: number | string | null
+  with_cap?: boolean
+  with_magneton?: boolean
+  content?: string
+  status?: number
+  [key: string]: unknown
+}
+
+export interface BatchUpdateResourceTray {
+  tray_layout_code: string
+  resource_list: BatchUpdateResourceItem[]
+  remark?: string
+  [key: string]: unknown
+}
+
+export interface BatchUpdateResourcePayload {
+  resource_req_list: BatchUpdateResourceTray[]
+}
+
 export async function inTray(payload: InTrayPayload): Promise<Record<string, unknown>> {
   const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/InTray', payload)
   return data
@@ -346,6 +373,15 @@ export async function inTray(payload: InTrayPayload): Promise<Record<string, unk
 
 export async function batchInTray(payload: BatchInTrayPayload): Promise<Record<string, unknown>> {
   const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/BatchInTray', payload)
+  return data
+}
+
+// 批量编辑资源, 请求体与设备 /api/BatchUpdateResource 保持一致
+export async function batchUpdateResource(payload: BatchUpdateResourcePayload): Promise<Record<string, unknown>> {
+  const body: BatchUpdateResourcePayload = {
+    resource_req_list: payload.resource_req_list,
+  }
+  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/BatchUpdateResource', body)
   return data
 }
 
@@ -397,36 +433,5 @@ export async function moveTray(payload: MoveTrayPayload): Promise<Record<string,
 
 export async function getResourceInfo(filters: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/GetResourceInfo', filters)
-  return data
-}
-
-// 编辑资源 (单托盘) 字段与 web_code dynamic-api/resource.ts updateResource 完全一致
-// status 来自 web_code ResourceStatus: 0=InSlot(已放入), 2=Watting(未放入), 3=Busy(禁用)
-export interface UpdateResourceItem {
-  layout_code: string
-  model: string
-  index: number
-  with_cap: boolean
-  status: number
-  substance?: string
-  chemical_id?: number | string
-  amount?: number
-  unit?: string
-  [key: string]: unknown
-}
-
-export interface UpdateResourcePayload {
-  resource_list: UpdateResourceItem[]
-  tray_layout_code: string
-  remark?: string
-}
-
-export async function updateResource(payload: UpdateResourcePayload): Promise<Record<string, unknown>> {
-  const body: UpdateResourcePayload = {
-    resource_list: payload.resource_list,
-    tray_layout_code: payload.tray_layout_code,
-    remark: payload.remark || '',
-  }
-  const { data } = await http.post<Record<string, unknown>>('/synthesis-api/api/UpdateResource', body)
   return data
 }

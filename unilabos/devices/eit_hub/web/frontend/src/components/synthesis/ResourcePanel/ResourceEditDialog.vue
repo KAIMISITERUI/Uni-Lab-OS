@@ -7,7 +7,7 @@
         - 右栏 资源配置 (50%): 已选托盘列表, 每个托盘一张 SlotConfigCard (托盘类型只读 + 托盘条码 + 三态孔位 + 介质内物质表)
                               物质量从设备 cur_weight / cur_volume 字段读出
         - 底部红色警告: 为避免溶剂交叉污染, 请放置溶剂瓶前清洁溶剂库盖板!
-      提交逻辑: 对每张已选托盘单独调用 /UpdateResource (web_code updateResource 单托盘语义), 全部成功后关闭弹窗.
+      提交逻辑: 将已选托盘组装为 resource_req_list, 调用 /BatchUpdateResource 一次提交.
   -->
   <el-dialog
     :model-value="visible"
@@ -73,7 +73,7 @@
               :config="configMap[code]"
               :tray-options="trayOptions"
               :readonly-tray-model="true"
-              :allow-disabled="true"
+              :allow-disabled="allowDisabledForConfig(configMap[code])"
               @remove="onDeselect(code)"
               @update:tray-qr="(v) => onTrayQRChange(code, v)"
               @update:wells="(v) => onWellsChange(code, v)"
@@ -102,9 +102,10 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Location } from '@element-plus/icons-vue'
 import {
+  batchUpdateResource,
   getResourceInfo,
-  updateResource,
-  type UpdateResourceItem,
+  type BatchUpdateResourceItem,
+  type BatchUpdateResourceTray,
 } from '@/api/synthesis'
 import { getModule } from '@/lib/dynamic-graph'
 import { HIGHT_COLOR } from '@/lib/dynamic-graph/utils/consts'
@@ -262,6 +263,23 @@ function pickAmountAndUnit (item: Record<string, unknown>): { amount: number | n
   return { amount, unit }
 }
 
+function isVolumeUnit (unit: string): boolean {
+  const normalized = unit.trim().toLowerCase()
+  return ['ml', 'l', 'ul', 'μl', 'µl', 'nl'].includes(normalized)
+}
+
+function isCountConsumableTray (trayOption: TrayModelOption | undefined): boolean {
+  if (trayOption === undefined) { return false }
+  return trayOption.editSubstanceCreate === false && trayOption.vesselModels.length > 0
+}
+
+function normalizeChemicalId (chemicalId: string): number | string | null {
+  const trimmed = chemicalId.trim()
+  if (trimmed === '') { return null }
+  const numericId = Number(trimmed)
+  return Number.isFinite(numericId) ? numericId : trimmed
+}
+
 function buildConfigFromTarget (targetCode: string): SelectedSlotConfig | null {
   if (allResources.value.length === 0) {
     ElMessage.warning('工站资源为空, 无法编辑')
@@ -298,6 +316,7 @@ function buildConfigFromTarget (targetCode: string): SelectedSlotConfig | null {
   }
 
   // 用托盘维度生成完整 wells, 再把 wellEntries 合并进去
+  const isCountConsumable = isCountConsumableTray(opt)
   const wells: WellInfo[] = []
   for (let c = 1; c <= opt.col; c++) {
     for (let r = 1; r <= opt.row; r++) {
@@ -314,6 +333,8 @@ function buildConfigFromTarget (targetCode: string): SelectedSlotConfig | null {
         chemical_id: '',
         with_cap: opt.defaultWithCap,
         with_magneton: opt.defaultWithMagneton,
+        resourceType: opt.vesselModels[0] || '',
+        content: '',
       })
     }
   }
@@ -323,10 +344,10 @@ function buildConfigFromTarget (targetCode: string): SelectedSlotConfig | null {
     if (!Number.isFinite(idx) || idx < 0 || idx >= wells.length) { return }
     const status = Number(item.status)
     let nextState: WellState = 'filled'
-    if (status === 3) { nextState = 'disabled' }
+    if (status === 3) { nextState = isCountConsumable ? 'empty' : 'disabled' }
     else if (status === 2) { nextState = 'empty' }
     const { amount, unit } = pickAmountAndUnit(item)
-    wells[idx] = {
+    const mergedWell: WellInfo = {
       ...wells[idx],
       state: nextState,
       substance: String(item.substance || ''),
@@ -335,7 +356,10 @@ function buildConfigFromTarget (targetCode: string): SelectedSlotConfig | null {
       chemical_id: item.chemical_id !== undefined && item.chemical_id !== null ? String(item.chemical_id) : '',
       with_cap: typeof item.with_cap === 'boolean' ? item.with_cap : wells[idx].with_cap,
       with_magneton: item.with_magneton === true,
+      resourceType: String(item.resource_type || wells[idx].resourceType || ''),
+      content: item.content !== undefined && item.content !== null ? String(item.content) : '',
     }
+    wells[idx] = mergedWell
   })
 
   return {
@@ -408,6 +432,12 @@ function onTrayQRChange (layoutCode: string, val: string): void {
   cfg.trayQRCode = val
 }
 
+function allowDisabledForConfig (cfg: SelectedSlotConfig | undefined): boolean {
+  if (cfg === undefined) { return true }
+  const trayOption = allTrayOptions.value.find((opt) => opt.model === cfg.trayModel)
+  return isCountConsumableTray(trayOption) === false
+}
+
 function onWellsChange (layoutCode: string, wells: WellInfo[]): void {
   const cfg = configMap[layoutCode]
   if (cfg === undefined) { return }
@@ -418,26 +448,74 @@ function onCancel (): void {
   emit('update:visible', false)
 }
 
-// 组装单托盘 UpdateResource payload
-function buildResourceList (cfg: SelectedSlotConfig): UpdateResourceItem[] {
-  return cfg.wells
-    .filter((w) => w.state !== 'empty')
-    .map((w) => {
-      const item: UpdateResourceItem = {
+// 组装单托盘 BatchUpdateResource payload
+function buildBatchUpdateTray (cfg: SelectedSlotConfig): BatchUpdateResourceTray {
+  const trayOption = allTrayOptions.value.find((opt) => opt.model === cfg.trayModel)
+  const isCountConsumable = isCountConsumableTray(trayOption)
+  const resourceList: BatchUpdateResourceItem[] = [
+    {
+      layout_code: `${cfg.layoutCode}:-1`,
+      slot_index: -1,
+      with_cap: false,
+      resource_type: cfg.trayModel,
+    },
+  ]
+
+  cfg.wells
+    .filter((w) => isCountConsumable ? w.state === 'filled' : w.state !== 'empty')
+    .forEach((w) => {
+      const resourceType = w.resourceType || trayOption?.vesselModels[0] || ''
+      if (resourceType === '') {
+        throw new Error(`托盘 ${cfg.layoutCode} 的 ${w.colLabel}${w.rowLabel} 缺少孔位资源类型`)
+      }
+
+      if (isCountConsumable) {
+        const item: BatchUpdateResourceItem = {
+          cur_weight: 0,
+          unit: 'mg',
+          substance: '',
+          chemical_id: null,
+          resource_type: resourceType,
+          with_cap: false,
+          with_magneton: false,
+          layout_code: `${cfg.layoutCode}:${w.slotIndex}`,
+          content: '',
+        }
+        resourceList.push(item)
+        return
+      }
+
+      const unit = (w.unit || '').trim() || 'mg'
+      const amount = w.amount !== null && w.amount !== undefined
+        ? w.amount
+        : null
+      const item: BatchUpdateResourceItem = {
         layout_code: `${cfg.layoutCode}:${w.slotIndex}`,
-        model: cfg.trayModel,
-        index: w.slotIndex,
+        resource_type: resourceType,
+        substance: w.substance || '',
+        chemical_id: normalizeChemicalId(w.chemical_id),
         with_cap: w.with_cap,
-        status: w.state === 'disabled' ? 3 : 0,
+        with_magneton: w.with_magneton,
+        unit,
+        content: w.content || '',
       }
-      if (w.substance) { item.substance = w.substance }
-      if (w.chemical_id) { item.chemical_id = w.chemical_id }
-      if (w.amount !== null && w.amount !== undefined) {
-        item.amount = w.amount
-        item.unit = w.unit
+
+      if (amount !== null) {
+        if (isVolumeUnit(unit)) {
+          item.cur_volume = amount
+        } else {
+          item.cur_weight = amount
+        }
       }
-      return item
+      if (w.state === 'disabled') { item.status = 3 }
+      resourceList.push(item)
     })
+
+  return {
+    remark: cfg.remark || '',
+    tray_layout_code: cfg.layoutCode,
+    resource_list: resourceList,
+  }
 }
 
 async function onConfirm (): Promise<void> {
@@ -447,16 +525,14 @@ async function onConfirm (): Promise<void> {
   }
   submitting.value = true
   try {
-    // 按顺序逐张托盘提交, 任何一张失败就中断并提示哪张失败
+    // 按当前选择顺序组装 resource_req_list, 由 BatchUpdateResource 一次提交.
+    const resourceReqList: BatchUpdateResourceTray[] = []
     for (const code of selectedCodes.value) {
       const cfg = configMap[code]
       if (cfg === undefined) { continue }
-      await updateResource({
-        resource_list: buildResourceList(cfg),
-        tray_layout_code: cfg.layoutCode,
-        remark: '',
-      })
+      resourceReqList.push(buildBatchUpdateTray(cfg))
     }
+    await batchUpdateResource({ resource_req_list: resourceReqList })
     ElMessage.success('编辑资源成功')
     emit('success')
     emit('update:visible', false)

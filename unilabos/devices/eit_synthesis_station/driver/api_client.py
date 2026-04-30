@@ -252,6 +252,18 @@ class ApiClient:
         """
         return self._request("POST", "/api/BatchInTray", json_body={"resource_req_list": resource_req_list})
 
+    # 6. 批量编辑资源
+    def batch_update_resource(self, resource_req_list: List[JsonDict]) -> JsonDict:
+        """
+        功能:
+            批量编辑现有托盘资源, 对应设备 /api/BatchUpdateResource.
+        参数:
+            resource_req_list: 每个托盘的资源更新请求列表, 每项包含 tray_layout_code 与 resource_list.
+        返回:
+            Dict, 设备 /api/BatchUpdateResource 原始 JSON.
+        """
+        return self._request("POST", "/api/BatchUpdateResource", json_body={"resource_req_list": resource_req_list})
+
     # 6. 下料
     def out_tray(self, layout_list: List[JsonDict]) -> JsonDict:
         """

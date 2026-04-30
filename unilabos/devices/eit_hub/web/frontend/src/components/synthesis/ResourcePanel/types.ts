@@ -22,6 +22,8 @@ export interface WellInfo {
   chemical_id: string
   with_cap: boolean
   with_magneton: boolean
+  resourceType?: string
+  content?: string
 }
 
 // 托盘型号下拉选项, 由 BaseTray.getAllModels() 派生

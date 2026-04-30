@@ -137,6 +137,31 @@ def proxy_batch_in_tray(
     )
 
 
+@router.post("/BatchUpdateResource")
+def proxy_batch_update_resource(
+    body: Dict[str, Any] = Body(...),
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> Dict[str, Any]:
+    """
+    功能:
+        代理 dynamic-resource 前端的 BatchUpdateResource 调用. 透传 resource_req_list 到设备
+        /api/BatchUpdateResource, 复用 SynthesisStationManager 鉴权与 401 重登逻辑.
+    参数:
+        body: Dict[str, Any], 必须包含 resource_req_list 列表, 每项包含 tray_layout_code 与 resource_list.
+        manager: SynthesisStationManager, 由 FastAPI 依赖注入.
+    返回:
+        Dict[str, Any], 设备 /api/BatchUpdateResource 原始 JSON 响应.
+    """
+    resource_req_list = body.get("resource_req_list", []) or []
+    if not isinstance(resource_req_list, list):
+        raise HTTPException(status_code=400, detail="resource_req_list 必须为数组")
+    return _invoke_with_relogin(
+        manager,
+        "BatchUpdateResource",
+        lambda: manager._client.batch_update_resource(resource_req_list),
+    )
+
+
 @router.post("/BatchOutTray")
 def proxy_batch_out_tray(
     body: Dict[str, Any] = Body(...),
@@ -189,32 +214,4 @@ def proxy_move_tray(
         manager,
         "MoveTray",
         lambda: manager._client.move_tray(layout_list, remark),
-    )
-
-
-@router.post("/UpdateResource")
-def proxy_update_resource(
-    body: Dict[str, Any] = Body(...),
-    manager: SynthesisStationManager = Depends(get_synthesis_manager),
-) -> Dict[str, Any]:
-    """
-    功能:
-        代理 dynamic-resource 前端的 UpdateResource 调用 (单托盘编辑资源).
-        透传 resource_list / tray_layout_code / remark 到设备 /api/UpdateResource,
-        与 web_code packages/dynamic-api/src/api/resource/resource.ts updateResource 入参完全一致.
-    参数:
-        body: Dict[str, Any], 必须包含 resource_list (数组), 可选 tray_layout_code 与 remark.
-        manager: SynthesisStationManager, 由 FastAPI 依赖注入.
-    返回:
-        Dict[str, Any], 设备 /api/UpdateResource 原始 JSON 响应.
-    """
-    resource_list = body.get("resource_list", []) or []
-    if not isinstance(resource_list, list):
-        raise HTTPException(status_code=400, detail="resource_list 必须为数组")
-    tray_layout_code = body.get("tray_layout_code")
-    remark = body.get("remark")
-    return _invoke_with_relogin(
-        manager,
-        "UpdateResource",
-        lambda: manager._client.update_resource(resource_list, tray_layout_code, remark),
     )
