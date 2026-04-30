@@ -22,8 +22,11 @@ interface Props {
   // 是否启用 StationGraph 内部的"点击自动单选"行为 (互斥单选+自动 setSelected/setHighlight)
   // 默认 true 保持主合成页 SynthesisView 现有行为; 多选场景 (如删除资源对话框) 应传 false 让父组件自行控制选中视觉
   autoSelectOnClick?: boolean
-  onClickTray?: (layout_code: string, x: number, y: number) => void
+  // selected: 点击后该托盘的选中态 (true=切换到选中, false=同一托盘再次点击触发取消选中)
+  onClickTray?: (layout_code: string, x: number, y: number, selected: boolean) => void
   onContextMenuTray?: (layout_code: string, x: number, y: number) => void
+  // 内部资源轮询每次 refresh 完成后回调一次, 父组件可借此同步自有的 resource_list 缓存
+  onAfterRefresh?: () => void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -140,9 +143,9 @@ onMounted(async () => {
     containerId,
     viewportPadding: normalizeGraphMargin(),
     autoSelectOnClick: props.autoSelectOnClick,
-    onClickTray: (layout_code, x, y) => {
+    onClickTray: (layout_code, x, y, selected) => {
       if (typeof props.onClickTray === 'function') {
-        props.onClickTray(layout_code, x, y)
+        props.onClickTray(layout_code, x, y, selected)
       }
     },
     onContextMenuTray: (layout_code, x, y) => {
@@ -152,6 +155,9 @@ onMounted(async () => {
     },
     onAfterRefresh: () => {
       void syncGraphLayout()
+      if (typeof props.onAfterRefresh === 'function') {
+        props.onAfterRefresh()
+      }
     },
   })
   graph = stationGraph

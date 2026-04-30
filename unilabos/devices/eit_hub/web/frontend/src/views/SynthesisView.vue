@@ -11,6 +11,7 @@ import {
   fetchDashboard,
   controlOuterDoor,
   controlW1Shelf,
+  getResourceInfo,
   initSynthesisDevice,
 } from '../api/synthesis'
 import { listChemicals, type ChemicalRow } from '../api/chemicals'
@@ -19,6 +20,10 @@ import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
 import StructurePreview from '../components/StructurePreview.vue'
 import NTUStationGraph from '../components/NTUStationGraph.vue'
 import ResourcePanel from '../components/synthesis/ResourcePanel/ResourcePanel.vue'
+import TrayDetailPopover from '../components/synthesis/StationDetail/TrayDetailPopover.vue'
+import { buildTrayDetail, type TrayDetail } from '../components/synthesis/StationDetail/buildTrayDetail'
+import type { TrayModelOption } from '../components/synthesis/ResourcePanel/types'
+import { getModule } from '../lib/dynamic-graph'
 
 interface ReagentOccurrence {
   amount: string
@@ -78,12 +83,119 @@ const reagentDetailChemical = ref<ChemicalRow | null>(null)
 // 录入资源右侧面板与主 3D 视图引用, 用于右键联动和录入后的强制刷新
 const resourcePanelRef = ref<InstanceType<typeof ResourcePanel> | null>(null)
 const stationGraphRef = ref<InstanceType<typeof NTUStationGraph> | null>(null)
+// 主 3D 视图外层容器, 用于将 zrender 的 (offsetX, offsetY) 转为 viewport 坐标给浮卡定位
+const stationGraphWrapRef = ref<HTMLDivElement | null>(null)
+// 工站资源全量列表, 浮卡解析与点击查看共用. mounted / 资源变更 / 内部刷新后同步
+const latestResourceList = ref<Array<Record<string, unknown>>>([])
+// 托盘型号选项 (BaseTray.getAllModels() 派生), 仅在第一次需要时加载, 之后复用
+const trayOptions = ref<TrayModelOption[]>([])
+// 浮卡可见状态: null 表示关闭
+interface PopoverState {
+  detail: TrayDetail
+  anchor: { x: number; y: number }
+}
+const popoverState = ref<PopoverState | null>(null)
 
 // 主 3D 视图右键命中槽位时, 携带 layout_code 打开录入对话框
 function onSlotContextMenu (layoutCode: string, _x: number, _y: number): void {
   if (resourcePanelRef.value !== null) {
     resourcePanelRef.value.openDialog(layoutCode)
   }
+}
+
+// 加载托盘型号选项, 与 ResourceEditDialog 同款 BaseTray 派生逻辑.
+// 静默失败回退空数组 (浮卡解析失败 → 不显示, 与空托盘表现一致)
+function ensureTrayOptions (): void {
+  if (trayOptions.value.length > 0) {
+    return
+  }
+  try {
+    const module = getModule()
+    const all = module.BaseTray.getAllModels?.() || []
+    const opts: TrayModelOption[] = []
+    all.forEach((tray: { config?: Record<string, unknown>; model?: string }) => {
+      const cfg = (tray.config || {}) as Record<string, unknown>
+      const model = tray.model || (cfg.model as string)
+      if (!model) {
+        return
+      }
+      const editSubstance = cfg.editSubstance as Record<string, unknown> | undefined
+      const withCapVal = cfg.with_cap as boolean | Record<string, unknown> | undefined
+      opts.push({
+        model: String(model),
+        name: String(cfg.name || model),
+        row: Number(cfg.row) || 0,
+        col: Number(cfg.col) || 0,
+        childrenCount: Number(cfg.children_count) || ((Number(cfg.row) || 0) * (Number(cfg.col) || 0)),
+        vesselModels: Array.isArray(cfg.vessel_models) ? (cfg.vessel_models as string[]) : [],
+        noAddin: cfg.noAddin === true,
+        defaultWithCap: typeof withCapVal === 'boolean'
+          ? withCapVal
+          : (typeof (withCapVal as Record<string, unknown> | undefined)?.NTU === 'boolean'
+            ? (withCapVal as Record<string, unknown>).NTU as boolean
+            : true),
+        defaultWithMagneton: cfg.isMagnetonTray === true || cfg.with_magneton === true,
+        editSubstanceCreate: editSubstance?.create === true,
+      })
+    })
+    trayOptions.value = opts
+  } catch (err) {
+    console.warn('[SynthesisView] loadTrayOptions failed:', err)
+    trayOptions.value = []
+  }
+}
+
+// 同步全量资源列表给浮卡使用. 静默失败 (浮卡找不到对应数据 → 自然不显示)
+async function syncResourceList (): Promise<void> {
+  try {
+    const resp = await getResourceInfo({})
+    const list = (resp?.resource_list as Array<Record<string, unknown>> | undefined) || []
+    latestResourceList.value = list
+  } catch (err) {
+    console.warn('[SynthesisView] syncResourceList failed:', err)
+  }
+  // 浮卡仍打开时按新数据重渲染当前 layout_code
+  refreshOpenPopover()
+}
+
+// 数据变化后, 若浮卡仍指向某个 layout_code, 重新解析并替换 detail (空托盘则关闭)
+function refreshOpenPopover (): void {
+  const cur = popoverState.value
+  if (cur === null) {
+    return
+  }
+  const detail = buildTrayDetail(latestResourceList.value, cur.detail.layoutCode, trayOptions.value)
+  if (detail === null) {
+    popoverState.value = null
+    return
+  }
+  popoverState.value = { detail, anchor: cur.anchor }
+}
+
+// 主 3D 视图左键命中槽位回调.
+// selected=false 表示同一托盘再次点击触发 toggle off → 关闭浮卡.
+// selected=true 时, 用 latestResourceList 解析 detail; 空托盘 (返回 null) 不弹.
+function onSlotClick (layoutCode: string, x: number, y: number, selected: boolean): void {
+  if (selected === false) {
+    popoverState.value = null
+    return
+  }
+  ensureTrayOptions()
+  const detail = buildTrayDetail(latestResourceList.value, layoutCode, trayOptions.value)
+  if (detail === null) {
+    popoverState.value = null
+    return
+  }
+  // 把容器内 offset 转为 viewport (浮卡用 position: fixed)
+  const wrap = stationGraphWrapRef.value
+  let clientX = x
+  let clientY = y
+  if (wrap !== null) {
+    const rect = wrap.getBoundingClientRect()
+    clientX = rect.left + x
+    clientY = rect.top + y
+  }
+  popoverState.value = { detail, anchor: { x: clientX, y: clientY } }
 }
 
 // 强制刷新主 3D 视图. 供资源变更成功回调和 ResourcePanel 手动刷新按钮共同复用
@@ -108,6 +220,8 @@ async function onResourceMutationSuccess (): Promise<void> {
   } catch {
     // 静默吞掉, 错误已在 refreshStationGraph 中打日志
   }
+  // 资源变更后同步浮卡数据源, 若浮卡仍打开则刷新内容
+  await syncResourceList()
 }
 let dashboardTimer: number | undefined
 let actionRefreshTimer: number | undefined
@@ -472,6 +586,8 @@ function onJobUpdated(_job: JobState) {
 function startDashboardPolling() {
   stopDashboardPolling()
   loadDashboard()
+  // 主 3D 视图浮卡所需资源列表与 dashboard 解耦, 但激活时一并拉取以保证首次点击就有数据
+  void syncResourceList()
   dashboardTimer = window.setInterval(loadDashboard, 5000)
 }
 
@@ -751,11 +867,19 @@ onBeforeUnmount(stopDashboardPolling)
               </div>
               <div class="resource-group station-with-panel">
                 <div class="station-main-column">
-                  <div class="station-graph-wrap">
+                  <div ref="stationGraphWrapRef" class="station-graph-wrap">
                     <NTUStationGraph
                       ref="stationGraphRef"
                       :margin="50"
                       :on-context-menu-tray="onSlotContextMenu"
+                      :on-click-tray="onSlotClick"
+                      :on-after-refresh="syncResourceList"
+                    />
+                    <TrayDetailPopover
+                      v-if="popoverState !== null"
+                      :detail="popoverState.detail"
+                      :anchor="popoverState.anchor"
+                      @close="popoverState = null"
                     />
                   </div>
                 </div>

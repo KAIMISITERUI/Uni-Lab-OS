@@ -18,7 +18,9 @@ export interface StationGraphParams {
   hostname?: string
   pollingIntervalMs?: number
   viewportPadding?: number
-  onClickTray?: (layout_code: string, x: number, y: number) => void
+  // selected: true 表示该托盘点击后处于选中态, false 表示点击触发了取消选中 (toggle off)
+  // 当 autoSelectOnClick 为 false 时, selected 始终为 true (保留旧行为)
+  onClickTray?: (layout_code: string, x: number, y: number, selected: boolean) => void
   onContextMenuTray?: (layout_code: string, x: number, y: number) => void
   onAfterRefresh?: () => void
   resourceLayoutFilter?: (layout_code: string) => boolean
@@ -77,13 +79,27 @@ export class StationGraph {
     this.station.create(this.zr, {
       clickTray: (layout_code: string, x: number, y: number) => {
         const slot = this.station.getSlot(layout_code) as TraySlot
+        // toggle 行为: 同一托盘再次点击 → 取消选中; 否则切换至该托盘
+        // selected 标志透传给上层, 用于决定详情浮卡是显示还是关闭
+        let selectedAfter = true
         if (this.params.autoSelectOnClick !== false) {
-          // 选中态高亮(等距视图绿框)
-          Object.values(this.station.slots).forEach((s: TraySlot) => { if (s.selected) s.setSelected(false) })
-          slot?.setSelected?.(true, '#0dbf75')
+          const wasSelected = slot?.selected === true
+          // 先清掉其他绿框, 保证全局单选语义
+          Object.values(this.station.slots).forEach((s: TraySlot) => {
+            if (s !== slot && s.selected) {
+              s.setSelected(false)
+            }
+          })
+          if (wasSelected === true) {
+            slot?.setSelected?.(false)
+            selectedAfter = false
+          } else {
+            slot?.setSelected?.(true, '#0dbf75')
+            selectedAfter = true
+          }
         }
         if (typeof this.params.onClickTray === 'function') {
-          this.params.onClickTray(layout_code, x, y)
+          this.params.onClickTray(layout_code, x, y, selectedAfter)
         }
       },
       contextMenuTray: (layout_code: string, x: number, y: number) => {

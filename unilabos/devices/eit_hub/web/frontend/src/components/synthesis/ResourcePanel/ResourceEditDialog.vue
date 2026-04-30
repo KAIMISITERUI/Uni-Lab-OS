@@ -111,7 +111,13 @@ import { getModule } from '@/lib/dynamic-graph'
 import { HIGHT_COLOR } from '@/lib/dynamic-graph/utils/consts'
 import NTUStationGraph from '@/components/NTUStationGraph.vue'
 import SlotConfigCard from './SlotConfigCard.vue'
-import type { SelectedSlotConfig, TrayModelOption, WellInfo, WellState } from './types'
+import type { SelectedSlotConfig, TrayModelOption, WellInfo } from './types'
+import {
+  buildSlotConfig,
+  isCountConsumableTray,
+  isVolumeUnit,
+  normalizeChemicalId,
+} from '../StationDetail/buildTrayDetail'
 
 interface Props {
   visible: boolean
@@ -222,153 +228,22 @@ async function fetchAllResources (): Promise<void> {
   }
 }
 
-// 从 well 条目中提取 当前量 与 单位:
-//   1) 用响应里的 unit 字段决定走 weight 还是 volume 维度 (设备权威标记)
-//      - mg / g / kg / μg / ng → weight, 取 cur_weight
-//      - mL / L / μL / nL      → volume, 取 cur_volume
-//   2) 0 是合法当前量 (耗尽), 不能被回落到 available_* / initial_* 覆盖掉;
-//      回落仅发生在 cur_* 字段缺失 (undefined / null / '') 的场景.
-function pickAmountAndUnit (item: Record<string, unknown>): { amount: number | null, unit: string } {
-  const rawUnit = typeof item.unit === 'string' ? item.unit.trim() : ''
-  const isVolumeUnit = /^(?:[mμuµn]?l)$/i.test(rawUnit)
-  const isWeightUnit = /^(?:[mμuµn]?g|kg)$/i.test(rawUnit)
-  const kind: 'weight' | 'volume' | 'unknown' =
-    isVolumeUnit ? 'volume' : isWeightUnit ? 'weight' : 'unknown'
-
-  // 把 unknown 转 number | null, 严格区分 "字段缺失" 与 "字段为 0"
-  const toNum = (v: unknown): number | null => {
-    if (v === undefined || v === null || v === '') { return null }
-    const n = typeof v === 'number' ? v : Number(v)
-    return Number.isFinite(n) ? n : null
-  }
-
-  let amount: number | null = null
-  if (kind === 'weight') {
-    amount = toNum(item.cur_weight)
-    if (amount === null) { amount = toNum(item.available_weight) }
-    if (amount === null) { amount = toNum(item.initial_weight) }
-  } else if (kind === 'volume') {
-    amount = toNum(item.cur_volume)
-    if (amount === null) { amount = toNum(item.available_volume) }
-    if (amount === null) { amount = toNum(item.initial_volume) }
-  } else {
-    // unit 缺失或不识别: 取响应中实际存在的那个字段
-    const w = toNum(item.cur_weight)
-    const v = toNum(item.cur_volume)
-    amount = w !== null ? w : v
-    if (amount === null) { amount = toNum(item.amount) }
-  }
-
-  const unit = rawUnit || (kind === 'volume' ? 'mL' : 'mg')
-  return { amount, unit }
-}
-
-function isVolumeUnit (unit: string): boolean {
-  const normalized = unit.trim().toLowerCase()
-  return ['ml', 'l', 'ul', 'μl', 'µl', 'nl'].includes(normalized)
-}
-
-function isCountConsumableTray (trayOption: TrayModelOption | undefined): boolean {
-  if (trayOption === undefined) { return false }
-  return trayOption.editSubstanceCreate === false && trayOption.vesselModels.length > 0
-}
-
-function normalizeChemicalId (chemicalId: string): number | string | null {
-  const trimmed = chemicalId.trim()
-  if (trimmed === '') { return null }
-  const numericId = Number(trimmed)
-  return Number.isFinite(numericId) ? numericId : trimmed
-}
-
+// 解析 resource_list 为 SelectedSlotConfig, 失败时根据原因给中文提示
 function buildConfigFromTarget (targetCode: string): SelectedSlotConfig | null {
   if (allResources.value.length === 0) {
     ElMessage.warning('工站资源为空, 无法编辑')
     return null
   }
-
-  // 拆分托盘级条目 (slot_index === -1 或不带冒号) 与 孔位级条目 (slot_index >= 0)
-  let trayEntry: Record<string, unknown> | null = null
-  const wellEntries: Array<Record<string, unknown>> = []
-  allResources.value.forEach((item) => {
-    const code = String(item.layout_code || '')
-    if (code === '') { return }
-    const colonIdx = code.indexOf(':')
-    const topCode = colonIdx === -1 ? code : code.slice(0, colonIdx)
-    if (topCode !== targetCode) { return }
-    const isTrayLevel = colonIdx === -1 || Number(code.slice(colonIdx + 1)) === -1
-    if (isTrayLevel) {
-      trayEntry = item
-    } else {
-      wellEntries.push(item)
+  const result = buildSlotConfig(allResources.value, targetCode, allTrayOptions.value)
+  if (result.ok === false) {
+    if (result.reason === 'tray-not-found') {
+      ElMessage.warning(`位置 ${targetCode} 无资源, 无法编辑`)
+    } else if (result.reason === 'unknown-tray-model') {
+      ElMessage.warning(`未识别托盘型号 ${result.trayModel || ''}`)
     }
-  })
-
-  if (trayEntry === null) {
-    ElMessage.warning(`位置 ${targetCode} 无资源, 无法编辑`)
     return null
   }
-
-  const trayModel = String((trayEntry as Record<string, unknown>).resource_type || '')
-  const opt = allTrayOptions.value.find((o) => o.model === trayModel)
-  if (!opt) {
-    ElMessage.warning(`未识别托盘型号 ${trayModel}`)
-    return null
-  }
-
-  // 用托盘维度生成完整 wells, 再把 wellEntries 合并进去
-  const isCountConsumable = isCountConsumableTray(opt)
-  const wells: WellInfo[] = []
-  for (let c = 1; c <= opt.col; c++) {
-    for (let r = 1; r <= opt.row; r++) {
-      wells.push({
-        slotIndex: (c - 1) * opt.row + (r - 1),
-        rowIndex: r,
-        colIndex: c,
-        rowLabel: String(r),
-        colLabel: String.fromCharCode(64 + c),
-        state: 'empty',
-        substance: '',
-        unit: 'mg',
-        amount: null,
-        chemical_id: '',
-        with_cap: opt.defaultWithCap,
-        with_magneton: opt.defaultWithMagneton,
-        resourceType: opt.vesselModels[0] || '',
-        content: '',
-      })
-    }
-  }
-  wellEntries.forEach((item) => {
-    const code = String(item.layout_code || '')
-    const idx = Number(code.slice(code.indexOf(':') + 1))
-    if (!Number.isFinite(idx) || idx < 0 || idx >= wells.length) { return }
-    const status = Number(item.status)
-    let nextState: WellState = 'filled'
-    if (status === 3) { nextState = isCountConsumable ? 'empty' : 'disabled' }
-    else if (status === 2) { nextState = 'empty' }
-    const { amount, unit } = pickAmountAndUnit(item)
-    const mergedWell: WellInfo = {
-      ...wells[idx],
-      state: nextState,
-      substance: String(item.substance || ''),
-      unit,
-      amount,
-      chemical_id: item.chemical_id !== undefined && item.chemical_id !== null ? String(item.chemical_id) : '',
-      with_cap: typeof item.with_cap === 'boolean' ? item.with_cap : wells[idx].with_cap,
-      with_magneton: item.with_magneton === true,
-      resourceType: String(item.resource_type || wells[idx].resourceType || ''),
-      content: item.content !== undefined && item.content !== null ? String(item.content) : '',
-    }
-    wells[idx] = mergedWell
-  })
-
-  return {
-    layoutCode: targetCode,
-    trayModel,
-    trayQRCode: String((trayEntry as Record<string, unknown>).tray_QR_code || ''),
-    remark: '',
-    wells,
-  }
+  return result.config
 }
 
 // 尝试把一个 layout_code 加入已选 (前置校验: 必须有资源 + 不重复)
