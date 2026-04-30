@@ -3,7 +3,7 @@
     功能:
       已选孔位的物质表格. 4 列对齐 web_code 截图: 孔位 / 介质内物质 / 物质的量 / 操作.
         - 介质内物质: el-select remote 化学品搜索 (调 listChemicals API)
-        - 物质的量: el-input 数字 + 后缀单位下拉
+        - 物质的量: el-input 数字 + 后缀单位只读显示
         - 操作: 移除按钮, 把该 well state 重置为 empty
       托盘 vessel_models 为空 (Tip 类) 时父组件不挂载本组件.
   -->
@@ -52,14 +52,7 @@
               class="amount-input"
               @update:model-value="(v: number | null | undefined) => updateWell(row.slotIndex, 'amount', v ?? null)"
             />
-            <el-select
-              :model-value="row.unit"
-              size="small"
-              class="unit-select"
-              @update:model-value="(v: string) => updateWell(row.slotIndex, 'unit', v)"
-            >
-              <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
-            </el-select>
+            <span class="unit-display">{{ row.unit }}</span>
           </div>
         </template>
       </el-table-column>
@@ -87,7 +80,6 @@ const emit = defineEmits<{
 }>()
 
 const iconRemove = Remove
-const unitOptions = ['mg', 'g', 'mL', 'L', 'mmol', 'mol']
 
 const filledWells = computed(() => props.wells.filter((w) => w.state === 'filled'))
 
@@ -196,8 +188,16 @@ function onRemove (slotIndex: number): void {
   flex: 1 1 auto;
   width: auto;
 }
-.unit-select {
-  flex: 0 0 70px;
+.unit-display {
+  flex: 0 0 42px;
+  height: 24px;
+  line-height: 24px;
+  color: #606266;
+  font-size: 12px;
+  text-align: center;
+  background: #f5f7fa;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
 }
 .amount-cell :deep(.el-input-number .el-input__inner) {
   text-align: left;

@@ -141,6 +141,9 @@ const stationPreviewResources = computed<SlotResourcePreview[]>(() => {
 
 const REMOVED_TRAY_MODEL = '201000503'
 const W1_ONLY_TRAY_MODEL = '220000023'
+const POWDER_TRAY_MODEL = '201000600'
+const POWDER_UNIT = 'mg'
+const LIQUID_UNIT = 'mL'
 const CAPLESS_TRAY_MODELS = new Set(['220000023', '201000728'])
 const MESSAGE_ABOVE_DIALOG_CLASS = 'msg-above-dialog'
 const VOLUME_UNITS = new Set(['mL', 'L'])
@@ -297,6 +300,13 @@ function resolveDefaultWithMagneton (cfg: Record<string, any>): boolean {
   return false
 }
 
+function resolveDefaultUnit (model: string): string {
+  if (model === POWDER_TRAY_MODEL) {
+    return POWDER_UNIT
+  }
+  return LIQUID_UNIT
+}
+
 function showDialogMessage (type: 'success' | 'warning' | 'info' | 'error', message: string): void {
   ElMessage({
     message,
@@ -381,6 +391,7 @@ function generateWells (trayModel: string): WellInfo[] {
   // 物料/Tip 托盘 (editSubstanceCreate=false): 默认满盘, 用户从满到取
   // 试剂托盘 (editSubstanceCreate=true): 默认空盘, 用户逐个录入
   const initialState: WellState = opt.editSubstanceCreate ? 'empty' : 'filled'
+  const defaultUnit = resolveDefaultUnit(opt.model)
   // 列优先 (column-major) 索引: 与 ntu-model.json layout {start:"lb", direction:"y"} 物理排布一致
   // 即 slotIndex 0=A1(底左), 1=A2(A 列向上), ..., row-1=A_top, row=B1, ...
   for (let c = 1; c <= opt.col; c++) {
@@ -393,7 +404,7 @@ function generateWells (trayModel: string): WellInfo[] {
         colLabel: String.fromCharCode(64 + c),
         state: initialState,
         substance: '',
-        unit: 'mg',
+        unit: defaultUnit,
         amount: null,
         chemical_id: '',
         with_cap: opt.defaultWithCap,
