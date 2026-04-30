@@ -29,6 +29,7 @@ import {
   navigateToStation,
   saveAgvMapLayout,
   saveChargingConfig,
+  setChargeControlDo7,
   startCharging,
   stopCharging,
   batchTransferMaterials,
@@ -199,6 +200,16 @@ const chargeControlText = computed(() => {
     return 'DO7 打开, 停止充电'
   }
   return 'DO7 状态未知'
+})
+const chargeControlDo7Value = computed(() => chargeControl.value?.do_status === true)
+const chargeControlDo7Disabled = computed(() => {
+  const doStatus = chargeControl.value?.do_status
+  return (
+    isChassisConnected.value === false ||
+    isCharging.value === true ||
+    typeof doStatus !== 'boolean' ||
+    actionLoading.value !== ''
+  )
 })
 const currentStationId = computed(() => status.value?.station?.station_id ?? mapData.value?.current_station_id ?? null)
 const displayStations = computed(() => {
@@ -856,6 +867,29 @@ function handleStopCharging() {
   runSimpleAction('charging-stop', stopCharging, '充电循环已停止')
 }
 
+function handleChargeControlDo7Change(value: string | number | boolean) {
+  if (isChassisConnected.value === false) {
+    ElMessage.warning('AGV 底盘未连接, 无法切换 DO7')
+    return
+  }
+  if (isCharging.value === true) {
+    ElMessage.warning('充电循环运行中, 请先停止循环后再手动切换 DO7')
+    return
+  }
+
+  const doStatus = value === true
+  runSimpleAction(
+    'charging-do7',
+    async () => {
+      const result = await setChargeControlDo7(doStatus)
+      if (status.value !== null) {
+        status.value = { ...status.value, charge_control: result }
+      }
+    },
+    doStatus ? 'DO7 已打开, 停止充电' : 'DO7 已关闭, 允许充电',
+  )
+}
+
 function handleArmJogEmergencyStop() {
   armJogPanelRef.value?.emergencyStop()
 }
@@ -1125,6 +1159,18 @@ onBeforeUnmount(() => {
           <el-tag :type="chargeControlTagType" effect="plain">
             {{ chargeControlText }}
           </el-tag>
+          <div class="charge-do7-switch">
+            <span class="charge-do7-label">DO7输出</span>
+            <el-switch
+              :model-value="chargeControlDo7Value"
+              :loading="isActionLoading('charging-do7')"
+              :disabled="chargeControlDo7Disabled"
+              active-text="打开"
+              inactive-text="关闭"
+              inline-prompt
+              @change="handleChargeControlDo7Change"
+            />
+          </div>
         </div>
 
         <el-form class="charge-form" size="default" label-width="94px">
@@ -1555,6 +1601,25 @@ onBeforeUnmount(() => {
   margin: -4px 0 14px;
   color: #66758a;
   font-size: 12px;
+}
+
+.charge-do7-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.charge-do7-label {
+  color: #3e5068;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.charge-do7-switch :deep(.el-switch) {
+  --el-switch-on-color: #d97706;
+  --el-switch-off-color: #16a34a;
+  --el-switch-width: 58px;
 }
 
 .charge-form {

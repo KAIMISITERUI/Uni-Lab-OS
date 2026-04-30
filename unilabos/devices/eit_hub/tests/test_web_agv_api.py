@@ -190,6 +190,84 @@ class FakeConnectedAgvContext:
         return True
 
 
+class FakeManualChargeController:
+    """
+    功能:
+        提供 DO7 手动控制 API 测试所需的最小控制器.
+    """
+
+    def __init__(self) -> None:
+        self.set_calls: List[bool] = []
+
+    def set_charge_control_do(self, do_status: bool) -> Dict[str, Any]:
+        """
+        功能:
+            记录 DO7 手动设置调用并返回状态数据.
+        参数:
+            do_status: bool, DO7 输出状态.
+        返回:
+            Dict[str, Any], DO7 状态数据.
+        """
+        self.set_calls.append(do_status)
+        return {
+            "do_id": 7,
+            "do_status": do_status,
+            "stop_charging": do_status,
+            "charging_enabled": do_status is False,
+            "source": "agv_other_port",
+            "valid": True,
+            "message": "DO7 打开, 停止充电" if do_status is True else "DO7 关闭, 允许充电",
+        }
+
+
+class FakeManualChargeContext:
+    """
+    功能:
+        提供 DO7 手动控制 API 测试所需的 AGV 上下文.
+    """
+
+    def __init__(self, chassis_connected: bool = True) -> None:
+        self.chassis_connected = chassis_connected
+        self.controller = FakeManualChargeController()
+
+    def is_chassis_connected(self) -> bool:
+        """
+        功能:
+            返回底盘连接状态.
+        返回:
+            bool, True 表示已连接.
+        """
+        return self.chassis_connected
+
+    def get_or_create(self) -> FakeManualChargeController:
+        """
+        功能:
+            返回测试控制器.
+        返回:
+            FakeManualChargeController, 测试控制器.
+        """
+        return self.controller
+
+
+class FakeManualChargeLoopApiService:
+    """
+    功能:
+        提供 DO7 手动控制 API 测试所需的充电循环状态.
+    """
+
+    def __init__(self, running: bool = False) -> None:
+        self.running = running
+
+    def status(self) -> Dict[str, Any]:
+        """
+        功能:
+            返回充电循环运行状态.
+        返回:
+            Dict[str, Any], 服务状态.
+        """
+        return {"running": self.running, "config": dict(DEFAULT_CHARGE_LOOP_CONFIG), "last_action": None}
+
+
 class FakeTraySavePositionManager:
     """
     功能:
@@ -596,6 +674,46 @@ def test_charging_start_api_uses_submitted_config(monkeypatch: pytest.MonkeyPatc
         "full_battery_pct": 96,
     }
     assert charger.config == body["config"]
+
+
+def test_charging_do7_api_sets_manual_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    功能:
+        验证 /api/agv/charging/do7 按物理 DO7 电平语义调用控制器并返回状态.
+    """
+    charger = FakeManualChargeLoopApiService(running=False)
+    context = FakeManualChargeContext(chassis_connected=True)
+    client = _charging_api_client(monkeypatch, tmp_path, charger, context=context)
+
+    open_response = client.post("/api/agv/charging/do7", json={"do_status": True})
+    close_response = client.post("/api/agv/charging/do7", json={"do_status": False})
+
+    assert open_response.status_code == 200
+    assert open_response.json()["do_status"] is True
+    assert open_response.json()["charging_enabled"] is False
+    assert close_response.status_code == 200
+    assert close_response.json()["do_status"] is False
+    assert close_response.json()["charging_enabled"] is True
+    assert context.controller.set_calls == [True, False]
+
+
+def test_charging_do7_api_rejects_when_loop_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    功能:
+        验证充电循环运行时 /api/agv/charging/do7 返回 409 且不写 DO7.
+    """
+    charger = FakeManualChargeLoopApiService(running=True)
+    context = FakeManualChargeContext(chassis_connected=True)
+    client = _charging_api_client(monkeypatch, tmp_path, charger, context=context)
+
+    response = client.post("/api/agv/charging/do7", json={"do_status": True})
+
+    assert response.status_code == 409
+    assert "请先停止循环" in response.json()["detail"]
+    assert context.controller.set_calls == []
 
 
 def test_agv_status_returns_charge_control(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

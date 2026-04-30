@@ -311,6 +311,13 @@ export async function stopCharging(): Promise<ChargeLoopStatus> {
   return data
 }
 
+export async function setChargeControlDo7(doStatus: boolean): Promise<AgvChargeControlInfo> {
+  const { data } = await http.post<AgvChargeControlInfo>('/api/agv/charging/do7', {
+    do_status: doStatus,
+  })
+  return data
+}
+
 export async function chargingCheckOnce(payload: {
   low_battery_pct: number
   full_battery_pct: number

@@ -402,6 +402,17 @@ class ChargingStartRequest(BaseModel):
     full_battery_pct: int = Field(default=95, ge=11, le=100)
 
 
+class ChargeControlDoRequest(BaseModel):
+    """
+    功能:
+        手动设置底盘 DO7 充电控制输出请求.
+    参数:
+        do_status: bool, True 表示打开 DO7 停止充电, False 表示关闭 DO7 允许充电.
+    """
+
+    do_status: bool
+
+
 class TrayNameRequest(BaseModel):
     """
     功能:
@@ -1148,6 +1159,36 @@ def charging_stop(
         Dict[str, Any], 停止后的服务状态.
     """
     return charger.stop()
+
+
+@router.post("/charging/do7")
+def charging_do7_set(
+    request: ChargeControlDoRequest,
+    context: AgvContext = Depends(get_agv_context),
+    charger: ChargeLoopService = Depends(get_charge_loop_service),
+) -> JsonDict:
+    """
+    功能:
+        手动设置底盘 DO7 充电控制输出. 自动充电循环运行时禁止手动切换.
+    参数:
+        request: ChargeControlDoRequest, DO7 输出状态请求.
+    返回:
+        Dict[str, Any], DO7 设置后的状态数据.
+    """
+    _require_chassis(context)
+    charge_loop_status = charger.status()
+    if charge_loop_status.get("running") is True:
+        raise _json_error("充电循环运行中, 请先停止循环后再手动切换 DO7.", status.HTTP_409_CONFLICT)
+
+    try:
+        return context.get_or_create().set_charge_control_do(request.do_status)
+    except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY) from exc
+    except RuntimeError as exc:
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    except Exception as exc:
+        logger.exception("手动设置 DO7 失败")
+        raise _json_error(f"手动设置 DO7 失败: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
 
 
 @router.post("/charging/check-once")

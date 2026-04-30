@@ -539,6 +539,34 @@ class AGVController:
         finally:
             agv_driver.close()
 
+    def set_charge_control_do(self, do_status: bool) -> Dict[str, Any]:
+        """
+        功能:
+            手动设置底盘 DO7 充电控制输出, 供 Hub 充电管理开关调用.
+
+        参数:
+            do_status: bool, True 表示打开 DO7 停止充电, False 表示关闭 DO7 允许充电.
+
+        返回:
+            Dict[str, Any], DO7 设置后的状态数据.
+        """
+        if isinstance(do_status, bool) is False:
+            raise ValueError("DO7 状态必须是布尔值")
+
+        result = self._set_charge_control_do_detailed(
+            stop_charging=do_status,
+            error_stage="manual_charge_control.set_do7",
+        )
+        if result["ok"] is False:
+            failure = result.get("failure") or {}
+            message = failure.get("message", "设置 DO7 失败")
+            raise RuntimeError(message)
+
+        data = result.get("data")
+        if isinstance(data, dict) is False:
+            raise RuntimeError("设置 DO7 后未返回状态数据")
+        return data
+
     def _build_charge_control_status_unknown(self, message: str, **extra: Any) -> Dict[str, Any]:
         """
         功能:

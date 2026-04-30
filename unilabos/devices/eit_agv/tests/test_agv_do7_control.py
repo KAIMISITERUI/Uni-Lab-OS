@@ -9,7 +9,7 @@
 """
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from eit_agv.config.agv_config import (
     AGV_CHARGE_CONTROL_DO_ID,
@@ -138,6 +138,52 @@ class TestAgvDo7Control(unittest.TestCase):
             cmd_id=REQ_CMD_ROBOT_STATUS_IO,
             payload_obj=None,
             expect_cmd_id=RSP_CMD_ROBOT_STATUS_IO,
+        )
+
+    def test_set_charge_control_do_maps_physical_do_status(self):
+        """
+        功能:
+            验证控制器公开方法按物理 DO7 电平语义写入 True/False.
+        参数:
+            无.
+        返回:
+            无.
+        """
+        controller = _make_controller()
+        open_data = {
+            "do_id": AGV_CHARGE_CONTROL_DO_ID,
+            "do_status": True,
+            "stop_charging": True,
+            "charging_enabled": False,
+            "message": "已打开 DO7, 停止充电",
+        }
+        close_data = {
+            "do_id": AGV_CHARGE_CONTROL_DO_ID,
+            "do_status": False,
+            "stop_charging": False,
+            "charging_enabled": True,
+            "message": "已关闭 DO7, 允许充电",
+        }
+
+        with patch.object(
+            controller,
+            "_set_charge_control_do_detailed",
+            side_effect=[
+                {"ok": True, "data": open_data, "failure": None},
+                {"ok": True, "data": close_data, "failure": None},
+            ],
+        ) as mock_set_do:
+            open_result = controller.set_charge_control_do(True)
+            close_result = controller.set_charge_control_do(False)
+
+        self.assertEqual(open_result, open_data)
+        self.assertEqual(close_result, close_data)
+        self.assertEqual(
+            mock_set_do.call_args_list,
+            [
+                call(stop_charging=True, error_stage="manual_charge_control.set_do7"),
+                call(stop_charging=False, error_stage="manual_charge_control.set_do7"),
+            ],
         )
 
     def test_query_charge_control_status_parses_do7_false(self):
