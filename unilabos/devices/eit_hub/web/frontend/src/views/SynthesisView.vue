@@ -84,14 +84,27 @@ function onSlotContextMenu (layoutCode: string, _x: number, _y: number): void {
   }
 }
 
+// 强制刷新主 3D 视图. 供资源变更成功回调和 ResourcePanel 手动刷新按钮共同复用
+// 异常会向上抛出, 由调用方决定是否提示 (手动刷新会在子组件捕获并提示)
+async function refreshStationGraph (): Promise<void> {
+  if (stationGraphRef.value === null) {
+    return
+  }
+  try {
+    await stationGraphRef.value.refresh()
+  } catch (err) {
+    console.error('[SynthesisView] graph refresh failed:', err)
+    throw err
+  }
+}
+
 // 录入成功后强制刷新主 3D 视图, 同步显示新增试管
+// 资源变更链路保留原有静默策略 (refreshStationGraph 内部已 console.error), 不打断各 Dialog 的 success 流程
 async function onResourceMutationSuccess (): Promise<void> {
-  if (stationGraphRef.value !== null) {
-    try {
-      await stationGraphRef.value.refresh()
-    } catch (err) {
-      console.error('[SynthesisView] graph refresh after mutation failed:', err)
-    }
+  try {
+    await refreshStationGraph()
+  } catch {
+    // 静默吞掉, 错误已在 refreshStationGraph 中打日志
   }
 }
 let dashboardTimer: number | undefined
@@ -743,7 +756,11 @@ onBeforeUnmount(stopDashboardPolling)
                   />
                 </div>
                 <div class="station-side-panel">
-                  <ResourcePanel ref="resourcePanelRef" @success="onResourceMutationSuccess" />
+                  <ResourcePanel
+                    ref="resourcePanelRef"
+                    :on-refresh="refreshStationGraph"
+                    @success="onResourceMutationSuccess"
+                  />
                 </div>
               </div>
               <div class="resource-group">
