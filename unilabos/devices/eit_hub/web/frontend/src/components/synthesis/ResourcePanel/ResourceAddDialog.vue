@@ -139,7 +139,6 @@ const stationPreviewResources = computed<SlotResourcePreview[]>(() => {
   })
 })
 
-const REMOVED_TRAY_MODEL = '201000503'
 const W1_ONLY_TRAY_MODEL = '220000023'
 const POWDER_TRAY_MODEL = '201000600'
 const POWDER_UNIT = 'mg'
@@ -176,7 +175,6 @@ function loadTrayOptions (): void {
       const cfg = tray.config || {}
       const model = tray.model || cfg.model
       if (cfg.noAddin === true) { return }
-      if (model === REMOVED_TRAY_MODEL) { return }
       // SVG 资源必须就绪, 否则不展示在下拉
       if (!cfg.tray_front) { return }
       opts.push({
@@ -265,9 +263,6 @@ function sideLabel (side: LoadingSide): string {
 }
 
 function isTrayOptionAllowed (model: string): boolean {
-  if (model === REMOVED_TRAY_MODEL) {
-    return false
-  }
   if (loadingSide.value === 'TB' && model === W1_ONLY_TRAY_MODEL) {
     return false
   }

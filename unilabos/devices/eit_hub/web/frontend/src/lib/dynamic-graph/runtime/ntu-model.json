@@ -8538,7 +8538,7 @@
     "201000503": {
       "model": "201000503",
       "vessel_info": 1,
-      "name": "20mL轻托盘",
+      "name": "40mL试剂瓶托盘",
       "vessel_models": ["220000092"],
       "WUTEle": {
         "vessel_info": 1,
@@ -8581,8 +8581,8 @@
         "update": true
       },
       "max_amount": {
-        "mL": 20,
-        "L": 0.02,
+        "mL": 40,
+        "L": 0.04,
         "mg": null,
         "g": null
       },
