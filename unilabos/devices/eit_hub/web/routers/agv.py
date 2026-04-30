@@ -18,15 +18,21 @@ from unilabos.devices.eit_agv.utils.position_manager import PositionManager
 
 from ..deps import (
     get_agv_context,
+    get_agv_status_cache,
     get_battery_sampler_service,
     get_charge_loop_service,
 )
 from ..jobs import JobBusyError, job_manager
 from ..log_entry import level_from_record, source_from_record
 from ..services.agv_context import AgvContext
+from ..services.agv_status_cache import AgvStatusCache
 from ..services.battery_sampler import BatterySamplerService
 from ..services.charge_loop import ChargeLoopService
 from ..services.station_map import build_map_payload, save_station_layout
+
+# 字段新鲜度阈值, 取 1.5 倍采样周期, 既能容忍单次采样抖动, 又能在两次失败后过期降级
+CHASSIS_FIELD_MAX_AGE_S = 7.5
+ARM_FIELD_MAX_AGE_S = 3.0
 
 logger = logging.getLogger("EITHubAgvRouter")
 
@@ -187,18 +193,18 @@ def _derive_drive_ready(robot_status: Any) -> Optional[bool]:
     return True
 
 
-def _build_arm_state(controller: Any, robot_status: Any) -> JsonDict:
+def _build_arm_state(robot_status: Any, quick_change_output: Any, gripper_output: Any) -> JsonDict:
     """
     功能:
         汇总机械臂当前可执行动作状态, 供前端只展示当前可执行的配对动作.
+        所有输入均来自 AgvStatusCache, 不在此函数中触发任何底层 RPC.
     参数:
-        controller: Any, AGVController 实例.
-        robot_status: Any, 已查询的底层 RobotStatus 对象, 复用避免重复 RPC.
+        robot_status: Any, 缓存中的底层 RobotStatus 对象.
+        quick_change_output: Any, DO1 输出值, True 表示松开, False 表示锁定.
+        gripper_output: Any, DO2 输出值, True 表示张开.
     返回:
         Dict[str, Any], 包含 drive_ready/quick_change_locked/gripper_open.
     """
-    quick_change_output = _safe_call(lambda: controller.arm.get_digital_output(1))
-    gripper_output = _safe_call(lambda: controller.arm.get_digital_output(2))
     return {
         "drive_ready": _derive_drive_ready(robot_status),
         "quick_change_locked": None if _bool_or_none(quick_change_output) is None else quick_change_output is False,
@@ -224,19 +230,20 @@ def _build_collision_info(robot_status: Any) -> JsonDict:
     return {"active": active, "axis": axis}
 
 
-def _add_current_station(payload: JsonDict, context: AgvContext) -> JsonDict:
+def _add_current_station(payload: JsonDict, context: AgvContext, cache: AgvStatusCache) -> JsonDict:
     """
     功能:
-        给地图 payload 添加当前 AGV 工站 ID.
+        给地图 payload 添加当前 AGV 工站 ID. 数据来自 AgvStatusCache, 不触发底层 IO.
     参数:
         payload: Dict[str, Any], 地图响应体.
         context: AgvContext, AGV 上下文.
+        cache: AgvStatusCache, 实时状态缓存.
     返回:
         Dict[str, Any], 带 current_station_id 的地图响应体.
     """
     current_station_id: Optional[str] = None
     if context.is_chassis_connected() is True:
-        station = _safe_call(context.get_or_create().query_current_station)
+        station = cache.get("station", CHASSIS_FIELD_MAX_AGE_S)
         if isinstance(station, dict) is True:
             current_station_id = station.get("station_id")
     payload["current_station_id"] = current_station_id
@@ -634,65 +641,50 @@ class TrayPositionUpdateRequest(BaseModel):
 @router.get("/status")
 def get_status(
     context: AgvContext = Depends(get_agv_context),
+    cache: AgvStatusCache = Depends(get_agv_status_cache),
     sampler: BatterySamplerService = Depends(get_battery_sampler_service),
     charger: ChargeLoopService = Depends(get_charge_loop_service),
 ) -> JsonDict:
     """
     功能:
-        返回 AGV 综合状态快照. 底盘或机械臂未连接时, 对应字段以 None 降级.
+        返回 AGV 综合状态快照. 数据全部来自 AgvStatusCache, 由后台 ChassisSampler
+        和 ArmSampler 持续写入. 本路由不触发任何底层 IO 调用, 不参与 arm_lock 竞争.
+        缓存超出新鲜度阈值的字段返回 None, 强制保证 "最近 N 秒内的真实值".
     返回:
         Dict[str, Any], 包含 connections/station/battery/nav_task/slots/gripper/poses 等.
     """
     connections = context.status_snapshot()
+
+    # 从 cache 读取所有字段, 过期或未写入均返回 None
+    robot_status = cache.get("robot_status", ARM_FIELD_MAX_AGE_S)
+    digital_output_1 = cache.get("digital_output_1", ARM_FIELD_MAX_AGE_S)
+    digital_output_2 = cache.get("digital_output_2", ARM_FIELD_MAX_AGE_S)
+
     result: JsonDict = {
         "connections": connections,
-        "station": None,
-        "battery": None,
+        "station": cache.get("station", CHASSIS_FIELD_MAX_AGE_S),
+        "battery": cache.get("battery", CHASSIS_FIELD_MAX_AGE_S),
         "battery_latest": sampler.get_latest(),
-        "charge_control": None,
-        "nav_task": None,
-        "slots": None,
-        "gripper_state": None,
-        "current_gripper": None,
-        "tcp_pose": None,
-        "joints": None,
-        "is_moving": None,
-        "arm_state": _empty_arm_state(),
-        "collision": {"active": False, "axis": None},
+        "charge_control": cache.get("charge_control", CHASSIS_FIELD_MAX_AGE_S),
+        "nav_task": cache.get("nav_task", CHASSIS_FIELD_MAX_AGE_S),
+        "slots": cache.get("slots", ARM_FIELD_MAX_AGE_S),
+        "gripper_state": cache.get("gripper_state", ARM_FIELD_MAX_AGE_S),
+        "current_gripper": cache.get("current_gripper", ARM_FIELD_MAX_AGE_S),
+        "tcp_pose": cache.get("tcp_pose", ARM_FIELD_MAX_AGE_S),
+        "joints": cache.get("joints", ARM_FIELD_MAX_AGE_S),
+        "is_moving": cache.get("is_moving", ARM_FIELD_MAX_AGE_S),
+        "arm_state": _build_arm_state(robot_status, digital_output_1, digital_output_2),
+        "collision": _build_collision_info(robot_status),
         "charge_loop": charger.status(),
     }
-
-    if connections.get("chassis_connected") is True:
-        controller = context.get_or_create()
-        result["station"] = _safe_call(controller.query_current_station)
-        result["battery"] = _safe_call(lambda: controller.query_battery_status(simple=False))
-        result["charge_control"] = _safe_call(controller.query_charge_control_status)
-        result["nav_task"] = _safe_call(controller.query_nav_task_status)
-
-    if connections.get("arm_connected") is True:
-        controller = context.get_or_create()
-        # 机械臂 Thrift 非线程安全, 获取锁后再串行查询, 避免与 Job 线程冲突
-        if context.arm_lock.acquire(timeout=0.5) is True:
-            try:
-                result["slots"] = _safe_call(controller.arm.get_all_slots_status)
-                result["gripper_state"] = _safe_call(controller.arm.get_gripper_state)
-                result["current_gripper"] = _safe_call(controller.arm.get_current_gripper)
-                result["tcp_pose"] = _safe_call(controller.arm.get_tcp_pose)
-                result["joints"] = _safe_call(controller.arm.get_joints_position)
-                result["is_moving"] = _safe_call(controller.arm.is_moving)
-                # 单次查询 RobotStatus, 同时驱动 arm_state 和 collision 派生字段
-                robot_status = _safe_call(controller.arm.get_robot_status)
-                result["arm_state"] = _build_arm_state(controller, robot_status)
-                result["collision"] = _build_collision_info(robot_status)
-            finally:
-                context.arm_lock.release()
-        # 锁超时则跳过, 本轮保留上次值为 None, 下一轮轮询继续尝试
-
     return result
 
 
 @router.get("/map")
-def get_station_map(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+def get_station_map(
+    context: AgvContext = Depends(get_agv_context),
+    cache: AgvStatusCache = Depends(get_agv_status_cache),
+) -> JsonDict:
     """
     功能:
         返回 AGV 工站地图布局和当前站点.
@@ -700,13 +692,14 @@ def get_station_map(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
         Dict[str, Any], 包含 stations 列表和 current_station_id.
     """
     payload = build_map_payload()
-    return _add_current_station(payload, context)
+    return _add_current_station(payload, context, cache)
 
 
 @router.post("/map/layout")
 def save_station_map_layout(
     request: MapLayoutSaveRequest,
     context: AgvContext = Depends(get_agv_context),
+    cache: AgvStatusCache = Depends(get_agv_status_cache),
 ) -> JsonDict:
     """
     功能:
@@ -714,6 +707,7 @@ def save_station_map_layout(
     参数:
         request: MapLayoutSaveRequest, 工站地图布局保存请求.
         context: AgvContext, AGV 上下文.
+        cache: AgvStatusCache, 实时状态缓存.
     返回:
         Dict[str, Any], 更新后的地图 payload.
     """
@@ -721,7 +715,7 @@ def save_station_map_layout(
         payload = save_station_layout([item.model_dump() for item in request.stations])
     except ValueError as exc:
         raise _json_error(str(exc)) from exc
-    return _add_current_station(payload, context)
+    return _add_current_station(payload, context, cache)
 
 
 @router.post("/chassis/connect")
@@ -740,14 +734,19 @@ def connect_chassis(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
 
 
 @router.post("/chassis/disconnect")
-def disconnect_chassis(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+def disconnect_chassis(
+    context: AgvContext = Depends(get_agv_context),
+    cache: AgvStatusCache = Depends(get_agv_status_cache),
+) -> JsonDict:
     """
     功能:
-        断开 AGV 底盘连接.
+        断开 AGV 底盘连接, 并立即清空缓存中的底盘字段, 避免新鲜度窗口内仍展示旧值.
     返回:
         Dict[str, Any], 连接状态.
     """
     context.disconnect_chassis()
+    for field in ("station", "battery", "charge_control", "nav_task"):
+        cache.invalidate(field)
     return context.status_snapshot()
 
 
@@ -767,14 +766,29 @@ def connect_arm(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
 
 
 @router.post("/arm/disconnect")
-def disconnect_arm(context: AgvContext = Depends(get_agv_context)) -> JsonDict:
+def disconnect_arm(
+    context: AgvContext = Depends(get_agv_context),
+    cache: AgvStatusCache = Depends(get_agv_status_cache),
+) -> JsonDict:
     """
     功能:
-        断开机械臂连接.
+        断开机械臂连接, 并立即清空缓存中的机械臂字段, 避免新鲜度窗口内仍展示旧值.
     返回:
         Dict[str, Any], 连接状态.
     """
     context.disconnect_arm()
+    for field in (
+        "slots",
+        "gripper_state",
+        "current_gripper",
+        "tcp_pose",
+        "joints",
+        "is_moving",
+        "robot_status",
+        "digital_output_1",
+        "digital_output_2",
+    ):
+        cache.invalidate(field)
     return context.status_snapshot()
 
 
@@ -987,9 +1001,9 @@ def navigate(
 
     def _target(log: Callable[[str], None]) -> Any:
         log(f"准备导航到工站 {station_id}.")
-        # 导航内部包含机械臂回零, 必须持有 arm_lock 避免与状态查询冲突
-        with context.arm_lock:
-            result = context.get_or_create().safe_navigate_to_station(station_id)
+        # 不再外包 arm_lock, 由 safe_navigate_to_station 内部仅在回零阶段持锁,
+        # 让状态采样器在底盘移动数十秒内能正常刷新机械臂字段
+        result = context.get_or_create().safe_navigate_to_station(station_id)
         log(f"导航任务完成, 结果={result}.")
         return {"result": result}
 

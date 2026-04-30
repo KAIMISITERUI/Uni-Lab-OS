@@ -225,18 +225,18 @@ class ChargeLoopService:
         """
         功能:
             循环执行充电检查. 每轮结束后按执行结果挑选等待时长.
-            充电检查内部可能触发导航和机械臂回零, 必须持 arm_lock.
+            机械臂回零的锁保护已下沉到 _safe_navigate_to_station_detailed 内部,
+            本循环不再外包 arm_lock, 避免在数分钟的 PP5/CP6 移动期间阻塞状态采样器.
         返回:
             None.
         """
         controller = self._context.get_or_create()
         while self._stop_event.is_set() is False:
             try:
-                with self._context.arm_lock:
-                    result = controller.auto_charge_pp5_cp6_check(
-                        low_battery_pct=self._config["low_battery_pct"],
-                        full_battery_pct=self._config["full_battery_pct"],
-                    )
+                result = controller.auto_charge_pp5_cp6_check(
+                    low_battery_pct=self._config["low_battery_pct"],
+                    full_battery_pct=self._config["full_battery_pct"],
+                )
                 action = {
                     "at": datetime.now().isoformat(timespec="seconds"),
                     **(result if isinstance(result, dict) else {"status": "unknown", "raw": str(result)}),

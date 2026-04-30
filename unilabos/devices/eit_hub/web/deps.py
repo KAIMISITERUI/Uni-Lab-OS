@@ -19,6 +19,8 @@ from unilabos.devices.eit_synthesis_station.manager.station_manager import (
 )
 
 from .services.agv_context import AgvContext
+from .services.agv_status_cache import AgvStatusCache
+from .services.agv_status_sampler import ArmSampler, ChassisSampler
 from .services.battery_sampler import BatterySamplerService
 from .services.charge_loop import ChargeLoopService
 
@@ -133,3 +135,66 @@ def get_charge_loop_service() -> ChargeLoopService:
         ChargeLoopService, 充电循环服务实例.
     """
     return _get_shared_charge_loop_service()
+
+
+@lru_cache(maxsize=1)
+def _get_shared_agv_status_cache() -> AgvStatusCache:
+    """
+    功能:
+        创建并缓存 AGV 实时状态字段缓存. 由后台采样线程写入, 由 /agv/status 路由读取.
+    返回:
+        AgvStatusCache, 单例实例.
+    """
+    return AgvStatusCache()
+
+
+def get_agv_status_cache() -> AgvStatusCache:
+    """
+    功能:
+        FastAPI 依赖, 返回 AGV 状态缓存.
+    返回:
+        AgvStatusCache, 单例实例.
+    """
+    return _get_shared_agv_status_cache()
+
+
+@lru_cache(maxsize=1)
+def _get_shared_chassis_sampler() -> ChassisSampler:
+    """
+    功能:
+        创建并缓存底盘字段采样器. 与 AgvContext / AgvStatusCache 共用单例.
+    返回:
+        ChassisSampler, 单例实例.
+    """
+    return ChassisSampler(_get_shared_agv_context(), _get_shared_agv_status_cache())
+
+
+def get_chassis_status_sampler() -> ChassisSampler:
+    """
+    功能:
+        FastAPI 依赖, 返回底盘采样器.
+    返回:
+        ChassisSampler, 单例实例.
+    """
+    return _get_shared_chassis_sampler()
+
+
+@lru_cache(maxsize=1)
+def _get_shared_arm_sampler() -> ArmSampler:
+    """
+    功能:
+        创建并缓存机械臂字段采样器.
+    返回:
+        ArmSampler, 单例实例.
+    """
+    return ArmSampler(_get_shared_agv_context(), _get_shared_agv_status_cache())
+
+
+def get_arm_status_sampler() -> ArmSampler:
+    """
+    功能:
+        FastAPI 依赖, 返回机械臂采样器.
+    返回:
+        ArmSampler, 单例实例.
+    """
+    return _get_shared_arm_sampler()

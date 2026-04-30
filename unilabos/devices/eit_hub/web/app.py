@@ -21,7 +21,12 @@ from unilabos.devices.eit_chemical_manager.web.routers import (
     prepare as chemical_prepare,
 )
 
-from .deps import get_battery_sampler_service, get_charge_loop_service
+from .deps import (
+    get_arm_status_sampler,
+    get_battery_sampler_service,
+    get_charge_loop_service,
+    get_chassis_status_sampler,
+)
 from .routers import agv, analysis, devices, label_printer, maintenance, synthesis, synthesis_proxy, task_history
 
 logger = logging.getLogger("EITHubWeb")
@@ -72,17 +77,20 @@ def create_app() -> FastAPI:
     def _on_startup() -> None:
         """
         功能:
-            应用启动时拉起 AGV 电量采样服务.
+            应用启动时拉起 AGV 电量采样和实时状态采样.
         返回:
             None.
         """
         get_battery_sampler_service().start()
+        # 实时状态采样器为 /agv/status 路由提供数据源, 必须在应用启动即拉起
+        get_chassis_status_sampler().start()
+        get_arm_status_sampler().start()
 
     @app.on_event("shutdown")
     def _on_shutdown() -> None:
         """
         功能:
-            应用停止时关闭 AGV 电量采样和充电循环.
+            应用停止时关闭 AGV 电量采样, 实时状态采样和充电循环.
         返回:
             None.
         """
@@ -90,6 +98,14 @@ def create_app() -> FastAPI:
             get_charge_loop_service().stop()
         except Exception as exc:
             logger.warning("关闭充电循环失败: %s", exc)
+        try:
+            get_chassis_status_sampler().stop()
+        except Exception as exc:
+            logger.warning("关闭底盘状态采样失败: %s", exc)
+        try:
+            get_arm_status_sampler().stop()
+        except Exception as exc:
+            logger.warning("关闭机械臂状态采样失败: %s", exc)
         try:
             get_battery_sampler_service().stop()
         except Exception as exc:

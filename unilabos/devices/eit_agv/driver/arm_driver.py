@@ -6,6 +6,7 @@
 """
 
 import logging
+import threading
 
 try:
     from devices_logging import configure_root_logging
@@ -46,6 +47,10 @@ class ArmDriver:
         self.last_error_message = None
         self.last_error_repr = None
         self.current_gripper = "gripper_type_a"  # 当前安装的夹爪名称,目前夹爪有问题，先默认是type as
+        # Thrift socket 非线程安全, 该锁保护所有 self.robot 调用. 锁跟随驱动资源,
+        # 调用方与状态采样器统一通过 with arm.lock: 串行化访问, 避免外部锁与内部锁分离造成的
+        # 粗粒度持锁问题, 详见 safe_navigate_to_station / auto_charge_pp5_cp6_check 分段策略.
+        self.lock = threading.RLock()
 
         # 运动参数最大值配置
         self.max_joint_velocity = 2.5 * 3.14159  # 最大关节角速度 rad/s

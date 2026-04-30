@@ -28,8 +28,18 @@ class AgvContext:
         self._lock = threading.RLock()
         self._chassis_connected = False
         self._arm_connected = False
-        # 机械臂 Thrift 连接非线程安全, 必须序列化所有对 arm 的调用
-        self.arm_lock = threading.RLock()
+
+    @property
+    def arm_lock(self) -> threading.RLock:
+        """
+        功能:
+            返回 ArmDriver 自身持有的可重入锁. 锁的所有权位于驱动层,
+            controller 内部和 hub 各调用方均通过该锁串行化对 ArmDriver 的访问.
+            首次访问会触发 AGVController 懒加载.
+        返回:
+            threading.RLock, ArmDriver 上的锁实例.
+        """
+        return self.get_or_create().arm.lock
 
     def get_or_create(self) -> AGVController:
         """
@@ -154,3 +164,28 @@ class AgvContext:
                 "chassis_connected": self._chassis_connected,
                 "arm_connected": self._arm_connected,
             }
+
+    def _set_chassis_connected(self, value: bool) -> None:
+        """
+        功能:
+            供后台采样器在连续成功/失败达到阈值时翻转底盘连接标记.
+            非用户主动连接路径, 不进行 IO 探测.
+        参数:
+            value: bool, 新的连接状态.
+        返回:
+            None.
+        """
+        with self._lock:
+            self._chassis_connected = bool(value)
+
+    def _set_arm_connected(self, value: bool) -> None:
+        """
+        功能:
+            供后台采样器在连续成功/失败达到阈值时翻转机械臂连接标记.
+        参数:
+            value: bool, 新的连接状态.
+        返回:
+            None.
+        """
+        with self._lock:
+            self._arm_connected = bool(value)

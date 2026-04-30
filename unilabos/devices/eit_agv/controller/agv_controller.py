@@ -2284,7 +2284,9 @@ class AGVController:
     def safe_navigate_to_station(self, station_id):
         """
         功能:
-            安全移动AGV到指定工站, 移动前先执行机械臂回零操作(固定回home_1)
+            安全移动AGV到指定工站, 移动前先执行机械臂回零操作(固定回home_1).
+            机械臂回零阶段持 arm.lock 串行化 Thrift 调用, 底盘移动阶段不持锁,
+            避免长时间阻塞状态采样器对机械臂字段的刷新.
         参数:
             station_id: 工站ID, 例如"LM1", "LM2"等, 从配置文件STATION_POSITIONS中读取
         返回:
@@ -2292,6 +2294,7 @@ class AGVController:
         """
         logger.info(f"开始安全移动到工站: {station_id}")
 
+        # DO7 充电控制属于底盘 IO, 不需要持机械臂锁
         charge_prepare = self._prepare_charge_control_before_navigation(
             station_id=station_id,
             stage_prefix="safe_navigate",
@@ -2300,19 +2303,22 @@ class AGVController:
             logger.error("导航前切换 DO7 失败: %s", charge_prepare["failure"].get("message"))
             return None
 
-        # 步骤1: 机械臂回零到home_1
+        # 步骤1: 机械臂回零到home_1, 仅此段需要 arm.lock
         logger.debug("步骤1: 执行机械臂回零操作(home_1)")
-        home_result = self.arm_go_home(block=True, home_name="home_1")
+        with self.arm.lock:
+            home_result = self.arm_go_home(block=True, home_name="home_1")
         if home_result is None:
             logger.error("机械臂回零失败, 取消AGV移动")
             return None
         logger.debug(f"机械臂回零完成: {home_result}")
 
-        # 步骤2: AGV移动到目标工站
+        # 步骤2: AGV底盘移动到目标工站, 不持 arm.lock,
+        # 让状态采样器在数十秒底盘移动期间正常刷新机械臂字段
         logger.debug("步骤2: AGV移动到目标工站")
         result = self.navigate_to_station(station_id)
 
         if result is not None and station_id == "CP6":
+            # DO7 后处理同样属于底盘 IO, 不需要持机械臂锁
             charge_enable = self._set_charge_control_do_detailed(
                 stop_charging=False,
                 error_stage="safe_navigate.close_do7_after_arrive_cp6",
@@ -2451,6 +2457,7 @@ class AGVController:
         """
         功能:
             执行带详细诊断信息的安全导航, 将机械臂回零和AGV导航拆分记录.
+            机械臂回零段持 arm.lock, 底盘移动段不持锁, 同 safe_navigate_to_station 分段策略.
 
         参数:
             station_id: 目标工站ID.
@@ -2469,7 +2476,9 @@ class AGVController:
             logger.error("导航前切换 DO7 失败: %s", charge_prepare["failure"].get("message"))
             return charge_prepare
 
-        home_result = self.arm_go_home(block=True, home_name="home_1")
+        # 机械臂回零段: 持 arm.lock
+        with self.arm.lock:
+            home_result = self.arm_go_home(block=True, home_name="home_1")
         if home_result is None:
             failure = dict(self._last_arm_home_failure or {})
             if len(failure) == 0:
@@ -2491,6 +2500,7 @@ class AGVController:
                 "failure": failure,
             }
 
+        # 底盘移动段: 不持 arm.lock, 让状态采样器在数十秒内能正常刷新机械臂字段
         navigate_result = self._navigate_to_station_detailed(
             station_id=station_id,
             error_stage=f"{stage_prefix}.navigate",
