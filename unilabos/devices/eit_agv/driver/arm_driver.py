@@ -12,6 +12,8 @@ try:
 except ImportError:
     from unilabos.devices.devices_logging import configure_root_logging
 
+from thrift.transport.TTransport import TTransportException
+
 from .DucoCobot.DucoCobot import DucoCobot
 from .DucoCobot.gen_py.robot.ttypes import Op, PointOp
 
@@ -161,14 +163,22 @@ class ArmDriver:
     def power_on(self, block=True):
         """
         功能:
-            机械臂上电
+            机械臂上电. AGV 断电重启会让旧 Thrift socket 变为陈旧句柄,
+            检测到传输层异常时通过 reconnect 重建底层 DucoCobot 后再次发送上电指令.
         参数:
             block: 是否阻塞, True表示阻塞执行, False表示非阻塞
         返回:
             阻塞执行返回任务状态, 非阻塞执行返回任务ID
         """
         logger.info("机械臂上电")
-        return self.robot.power_on(block)
+        try:
+            return self.robot.power_on(block)
+        except TTransportException as exc:
+            # AGV 断电重启后旧 socket 已失效, 重建底层连接后重试一次
+            logger.warning("机械臂上电检测到 Thrift 传输层异常, 触发重连后重试: %s", exc)
+            if not self.reconnect():
+                raise
+            return self.robot.power_on(block)
 
     def power_off(self, block=True):
         """
