@@ -1092,17 +1092,22 @@ class AGVController:
     def _collect_station_middle_tray_updates(
         self,
         station_name: str,
+        row_index: Optional[int] = None,
     ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
         """
         功能:
-            收集指定工站的中间托盘点位预览结果与跳过信息.
+            收集指定工站或指定行的中间托盘点位预览结果与跳过信息.
 
         参数:
             station_name: 工站名称, 如 shelf 或 synthesis_station.
+            row_index: 可选行号, 为None时计算该工站全部行.
 
         返回:
             Tuple[List[Dict[str, object]], List[Dict[str, object]]], 第1项为可更新点位列表, 第2项为跳过排信息.
         """
+        if row_index is not None and row_index <= 0:
+            raise ValueError("行号必须大于0.")
+
         tray_positions = self.position_manager.get_category("tray_position")
         if tray_positions is None or len(tray_positions) == 0:
             logger.warning("未找到托盘位置配置, 无法计算工站中间点位: %s", station_name)
@@ -1117,19 +1122,24 @@ class AGVController:
             if parsed_result["station_name"] != station_name:
                 continue
 
-            row_index = parsed_result["row_index"]
+            parsed_row_index = parsed_result["row_index"]
             col_index = parsed_result["col_index"]
+            if row_index is not None and parsed_row_index != row_index:
+                continue
 
-            if row_index not in row_position_map:
-                row_position_map[row_index] = {}
+            if parsed_row_index not in row_position_map:
+                row_position_map[parsed_row_index] = {}
 
-            row_position_map[row_index][col_index] = {
+            row_position_map[parsed_row_index][col_index] = {
                 "tray_name": tray_name,
                 "config": tray_config,
             }
 
         if len(row_position_map) == 0:
-            logger.info("工站 %s 没有符合命名规则的托盘点位", station_name)
+            if row_index is None:
+                logger.info("工站 %s 没有符合命名规则的托盘点位", station_name)
+            else:
+                logger.info("工站 %s 第%s行没有符合命名规则的托盘点位", station_name, row_index)
             return [], []
 
         preview_items: List[Dict[str, object]] = []
@@ -1221,20 +1231,116 @@ class AGVController:
 
         return preview_items
 
-    def apply_station_middle_tray_updates(self, station_name: str) -> Dict[str, object]:
+    def preview_middle_tray_row_updates(
+        self,
+        station_name: str,
+        row_index: int,
+    ) -> List[Dict[str, object]]:
         """
         功能:
-            将指定工站的中间托盘点位自动计算结果写入配置文件.
+            预览指定工站指定行的中间托盘点位自动计算结果.
 
         参数:
             station_name: 工站名称, 如 shelf 或 synthesis_station.
+            row_index: 行号, 例如 1.
+
+        返回:
+            List[Dict[str, object]], 指定行的中间点位预览结果列表.
+        """
+        preview_items, skipped_rows = self._collect_station_middle_tray_updates(
+            station_name,
+            row_index=row_index,
+        )
+        if len(preview_items) == 0:
+            logger.info("工站 %s 第%s行没有可自动计算的中间托盘点位", station_name, row_index)
+
+        for skipped_row in skipped_rows:
+            logger.info(
+                "工站 %s 第%s行跳过: %s",
+                station_name,
+                skipped_row["row_index"],
+                skipped_row["reason"],
+            )
+
+        return preview_items
+
+    def list_middle_tray_calibratable_rows(self) -> List[Dict[str, object]]:
+        """
+        功能:
+            列出所有可自动计算中间托盘点位的行, 用于前端下拉菜单.
+
+        参数:
+            无.
+
+        返回:
+            List[Dict[str, object]], 每项包含工站名, 行号, 端点和待计算数量.
+        """
+        tray_positions = self.position_manager.get_category("tray_position")
+        if tray_positions is None or len(tray_positions) == 0:
+            return []
+
+        station_names = set()
+        for tray_name in tray_positions.keys():
+            parsed_result = self._parse_middle_tray_name(tray_name)
+            if parsed_result is None:
+                continue
+            station_names.add(parsed_result["station_name"])
+
+        row_options: List[Dict[str, object]] = []
+        for station_name in sorted(station_names):
+            preview_items, _ = self._collect_station_middle_tray_updates(station_name)
+            grouped_items: Dict[int, List[Dict[str, object]]] = {}
+            for preview_item in preview_items:
+                current_row_index = preview_item["row_index"]
+                if current_row_index not in grouped_items:
+                    grouped_items[current_row_index] = []
+                grouped_items[current_row_index].append(preview_item)
+
+            for current_row_index in sorted(grouped_items.keys()):
+                row_items = grouped_items[current_row_index]
+                first_item = row_items[0]
+                update_count = sum(1 for item in row_items if item["exists"] is True)
+                create_count = len(row_items) - update_count
+                row_options.append({
+                    "station_name": station_name,
+                    "row_index": current_row_index,
+                    "left_tray": first_item["left_tray"],
+                    "right_tray": first_item["right_tray"],
+                    "target_count": len(row_items),
+                    "update_count": update_count,
+                    "create_count": create_count,
+                    "label": (
+                        f"{station_name} 第{current_row_index}行: "
+                        f"{first_item['left_tray']} -> {first_item['right_tray']}, "
+                        f"{len(row_items)}个中间点位"
+                    ),
+                })
+
+        return row_options
+
+    def apply_station_middle_tray_updates(
+        self,
+        station_name: str,
+        row_index: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """
+        功能:
+            将指定工站或指定行的中间托盘点位自动计算结果写入配置文件.
+
+        参数:
+            station_name: 工站名称, 如 shelf 或 synthesis_station.
+            row_index: 可选行号, 为None时写入该工站全部行.
 
         返回:
             Dict[str, object], 包含更新汇总信息.
         """
-        preview_items, skipped_rows = self._collect_station_middle_tray_updates(station_name)
+        preview_items, skipped_rows = self._collect_station_middle_tray_updates(
+            station_name,
+            row_index=row_index,
+        )
         result_summary = {
             "station_name": station_name,
+            "row_index": row_index,
             "updated_count": 0,
             "created_count": 0,
             "skipped_rows": skipped_rows,
@@ -1268,6 +1374,20 @@ class AGVController:
             result_summary["created_count"],
         )
         return result_summary
+
+    def apply_middle_tray_row_updates(self, station_name: str, row_index: int) -> Dict[str, object]:
+        """
+        功能:
+            将指定工站指定行的中间托盘点位自动计算结果写入配置文件.
+
+        参数:
+            station_name: 工站名称, 如 shelf 或 synthesis_station.
+            row_index: 行号, 例如 1.
+
+        返回:
+            Dict[str, object], 包含更新汇总信息.
+        """
+        return self.apply_station_middle_tray_updates(station_name, row_index=row_index)
 
     def _get_tray_position_context(self, tray_name):
         """

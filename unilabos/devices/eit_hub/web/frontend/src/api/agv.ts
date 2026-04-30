@@ -156,14 +156,27 @@ export interface MiddleTrayRow {
   target_tray: string
   left_tray: string
   right_tray: string
+  target_col: number
   ratio: number
   old_pose?: number[] | null
   new_pose?: number[] | null
   exists: boolean
 }
 
+export interface MiddleTrayRowOption {
+  station_name: string
+  row_index: number
+  left_tray: string
+  right_tray: string
+  target_count: number
+  update_count: number
+  create_count: number
+  label: string
+}
+
 export interface MiddleTrayPreviewResponse {
   station_name: string
+  row_index: number
   rows: MiddleTrayRow[]
 }
 
@@ -357,15 +370,24 @@ export async function completeLoadedTrayCalibration(trayName: string): Promise<J
   return data
 }
 
-export async function previewMiddleTray(station: string): Promise<MiddleTrayPreviewResponse> {
+export async function fetchMiddleTrayRows(): Promise<MiddleTrayRowOption[]> {
+  const { data } = await http.get<{ rows: MiddleTrayRowOption[] }>('/api/agv/calibration/middle-tray/rows')
+  return data.rows
+}
+
+export async function previewMiddleTray(
+  stationName: string,
+  rowIndex: number,
+): Promise<MiddleTrayPreviewResponse> {
   const { data } = await http.get<MiddleTrayPreviewResponse>('/api/agv/calibration/middle-tray/preview', {
-    params: { station },
+    params: { station_name: stationName, row_index: rowIndex },
   })
   return data
 }
 
-export async function applyMiddleTray(stationName: string): Promise<{
+export async function applyMiddleTray(stationName: string, rowIndex: number): Promise<{
   station_name: string
+  row_index: number
   updated_count: number
   created_count: number
   affected_trays: string[]
@@ -373,6 +395,7 @@ export async function applyMiddleTray(stationName: string): Promise<{
 }> {
   const { data } = await http.post('/api/agv/calibration/middle-tray/apply', {
     station_name: stationName,
+    row_index: rowIndex,
   })
   return data
 }

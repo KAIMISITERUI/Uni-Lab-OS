@@ -5,6 +5,7 @@ import {
   type AgvStatusResponse,
   type MaterialOption,
   type MiddleTrayRow,
+  type MiddleTrayRowOption,
   type StationCalibrationOffset,
   type TrayPointOption,
   type TrayPositionRecord,
@@ -14,6 +15,7 @@ import {
   deleteTrayPosition,
   fetchAgvStatus,
   fetchMaterials,
+  fetchMiddleTrayRows,
   fetchStationOffset,
   fetchTrayOptions,
   fetchTrayPositions,
@@ -75,8 +77,12 @@ const createDialogVisible = ref(false)
 const createForm = ref<CreateForm>(emptyCreateForm())
 const createBusy = ref(false)
 
-const middleTrayForm = ref({ station_name: '' })
+const middleTrayOptions = ref<MiddleTrayRowOption[]>([])
+const middleTraySelectedKey = ref('')
 const middleTrayRows = ref<MiddleTrayRow[]>([])
+const middleTrayOptionsLoading = ref(false)
+const middleTrayPreviewLoading = ref(false)
+const middleTrayApplyLoading = ref(false)
 
 const filteredPositions = computed(() => {
   const keyword = filterText.value.trim().toLowerCase()
@@ -97,7 +103,19 @@ const allTrayOptions = computed<TrayPointOption[]>(() =>
   })),
 )
 
+const selectedMiddleTrayOption = computed<MiddleTrayRowOption | null>(() => {
+  const selectedKey = middleTraySelectedKey.value
+  if (selectedKey === '') {
+    return null
+  }
+  return middleTrayOptions.value.find((option) => buildMiddleTrayRowKey(option) === selectedKey) ?? null
+})
+
 const poseLabels = ['x (mm)', 'y (mm)', 'z (mm)', 'rx (rad)', 'ry (rad)', 'rz (rad)']
+
+function buildMiddleTrayRowKey(option: Pick<MiddleTrayRowOption, 'station_name' | 'row_index'>): string {
+  return `${option.station_name}::${option.row_index}`
+}
 
 function emptyEditForm(): EditForm {
   return {
@@ -214,6 +232,10 @@ watch(currentStationName, () => {
   loadTrayOptions()
 })
 
+watch(middleTraySelectedKey, () => {
+  middleTrayRows.value = []
+})
+
 async function handleTestExecute() {
   const trayName = testForm.value.tray_name.trim()
   if (trayName === '') {
@@ -315,6 +337,28 @@ async function loadPositions() {
   }
 }
 
+async function loadMiddleTrayRows() {
+  middleTrayOptionsLoading.value = true
+  try {
+    const rows = await fetchMiddleTrayRows()
+    middleTrayOptions.value = rows
+    const selectedStillExists = rows.some((option) => {
+      return buildMiddleTrayRowKey(option) === middleTraySelectedKey.value
+    })
+    if (selectedStillExists === false) {
+      middleTraySelectedKey.value = rows.length > 0 ? buildMiddleTrayRowKey(rows[0]) : ''
+      middleTrayRows.value = []
+    }
+  } catch (err) {
+    middleTrayOptions.value = []
+    middleTraySelectedKey.value = ''
+    middleTrayRows.value = []
+    ElMessage.error(getErrorMessage(err))
+  } finally {
+    middleTrayOptionsLoading.value = false
+  }
+}
+
 function openEditDialog(row: TrayPositionRecord) {
   editForm.value = {
     name: row.name,
@@ -402,39 +446,48 @@ async function handleCreate() {
 }
 
 async function handlePreviewMiddleTray() {
-  const stationName = middleTrayForm.value.station_name.trim()
-  if (stationName === '') {
-    ElMessage.warning('请填写工站名称')
+  const selectedOption = selectedMiddleTrayOption.value
+  if (selectedOption === null) {
+    ElMessage.warning('请选择可校准行')
     return
   }
+  middleTrayPreviewLoading.value = true
   try {
-    const resp = await previewMiddleTray(stationName)
+    const resp = await previewMiddleTray(selectedOption.station_name, selectedOption.row_index)
     middleTrayRows.value = resp.rows
   } catch (err) {
     ElMessage.error(getErrorMessage(err))
+  } finally {
+    middleTrayPreviewLoading.value = false
   }
 }
 
 async function handleApplyMiddleTray() {
-  const stationName = middleTrayForm.value.station_name.trim()
-  if (stationName === '') {
-    ElMessage.warning('请填写工站名称')
+  const selectedOption = selectedMiddleTrayOption.value
+  if (selectedOption === null) {
+    ElMessage.warning('请选择可校准行')
     return
   }
   try {
-    await ElMessageBox.confirm(`确认将中间托盘计算结果应用到 ${stationName} 的配置文件?`, '确认应用', {
+    await ElMessageBox.confirm(`确认将 ${selectedOption.label} 的计算结果应用到配置文件?`, '确认应用', {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
   } catch {
     return
   }
+  middleTrayApplyLoading.value = true
   try {
-    const resp = await applyMiddleTray(stationName)
+    const resp = await applyMiddleTray(selectedOption.station_name, selectedOption.row_index)
     ElMessage.success(`已更新 ${resp.updated_count}, 新增 ${resp.created_count}`)
     await loadPositions()
+    await loadMiddleTrayRows()
+    const previewResp = await previewMiddleTray(selectedOption.station_name, selectedOption.row_index)
+    middleTrayRows.value = previewResp.rows
   } catch (err) {
     ElMessage.error(getErrorMessage(err))
+  } finally {
+    middleTrayApplyLoading.value = false
   }
 }
 
@@ -450,12 +503,14 @@ onMounted(() => {
   loadTrayOptions()
   loadMaterials()
   loadPositions()
+  loadMiddleTrayRows()
 })
 onActivated(() => {
   startAutoRefresh()
   loadTrayOptions()
   loadMaterials()
   loadPositions()
+  loadMiddleTrayRows()
 })
 onDeactivated(stopAutoRefresh)
 onBeforeUnmount(stopAutoRefresh)
@@ -750,15 +805,34 @@ onBeforeUnmount(stopAutoRefresh)
         <h3>中间托盘自动计算</h3>
       </div>
       <p class="muted">
-        给定工站名称, 后端会基于行内已有的左右托盘点位线性插值出中间列, 预览无误后再应用到 yaml.
+        选择可校准行, 后端会基于该行已有的左右托盘点位线性插值出中间列, 预览无误后再应用到 yaml.
       </p>
       <el-form size="small" label-width="90px" inline>
-        <el-form-item label="工站名称">
-          <el-input v-model="middleTrayForm.station_name" placeholder="例如 synthesis_station" style="width: 240px" />
+        <el-form-item label="可校准行">
+          <el-select
+            v-model="middleTraySelectedKey"
+            placeholder="请选择"
+            filterable
+            :loading="middleTrayOptionsLoading"
+            style="width: 520px"
+          >
+            <el-option
+              v-for="opt in middleTrayOptions"
+              :key="buildMiddleTrayRowKey(opt)"
+              :label="opt.label"
+              :value="buildMiddleTrayRowKey(opt)"
+            >
+              <span>{{ opt.label }}</span>
+              <span class="muted" style="margin-left: 8px">
+                更新 {{ opt.update_count }}, 新增 {{ opt.create_count }}
+              </span>
+            </el-option>
+          </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button @click="handlePreviewMiddleTray">预览</el-button>
-          <el-button type="primary" @click="handleApplyMiddleTray">应用</el-button>
+          <el-button @click="loadMiddleTrayRows">刷新行</el-button>
+          <el-button :loading="middleTrayPreviewLoading" @click="handlePreviewMiddleTray">预览</el-button>
+          <el-button type="primary" :loading="middleTrayApplyLoading" @click="handleApplyMiddleTray">应用</el-button>
         </el-form-item>
       </el-form>
       <el-table v-if="middleTrayRows.length > 0" :data="middleTrayRows" size="small" stripe>
@@ -769,6 +843,16 @@ onBeforeUnmount(stopAutoRefresh)
         <el-table-column label="比例" prop="ratio" width="70">
           <template #default="{ row }">
             {{ Number(row.ratio).toFixed(2) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="修改前 pose" min-width="320">
+          <template #default="{ row }">
+            {{ formatPoseShort(row.old_pose ?? null) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="修改后 pose" min-width="320">
+          <template #default="{ row }">
+            {{ formatPoseShort(row.new_pose ?? null) }}
           </template>
         </el-table-column>
         <el-table-column label="存在" prop="exists" width="60">

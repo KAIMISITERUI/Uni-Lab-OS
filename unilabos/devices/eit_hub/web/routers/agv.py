@@ -437,6 +437,19 @@ class StationNameRequest(BaseModel):
     station_name: str = Field(..., min_length=1)
 
 
+class MiddleTrayRowRequest(BaseModel):
+    """
+    功能:
+        中间托盘按行计算请求.
+    参数:
+        station_name: str, 工站名称.
+        row_index: int, 行号, 从1开始.
+    """
+
+    station_name: str = Field(..., min_length=1)
+    row_index: int = Field(..., ge=1)
+
+
 class ShelfSlotRequest(BaseModel):
     """
     功能:
@@ -1339,44 +1352,75 @@ def calibration_loaded_tray_complete(
     return _start_job(f"带托盘校准收尾 {request.tray_name}", _target)
 
 
-@router.get("/calibration/middle-tray/preview")
-def calibration_middle_tray_preview(
-    station: str = Query(..., min_length=1),
+@router.get("/calibration/middle-tray/rows")
+def calibration_middle_tray_rows(
     context: AgvContext = Depends(get_agv_context),
 ) -> JsonDict:
     """
     功能:
-        预览工站中间托盘的自动计算结果.
-    参数:
-        station: str, 工站名称.
+        列出所有可按行自动计算中间托盘点位的行, 供前端下拉菜单使用.
     返回:
-        Dict[str, Any], 包含 station_name 和 rows 列表.
+        Dict[str, Any], 包含 rows 列表.
     """
     _reload_positions(context)
     try:
-        rows = context.get_or_create().preview_station_middle_tray_updates(station)
+        rows = context.get_or_create().list_middle_tray_calibratable_rows()
+    except Exception as exc:
+        logger.exception("读取中间托盘可校准行失败")
+        raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    return {"rows": rows}
+
+
+@router.get("/calibration/middle-tray/preview")
+def calibration_middle_tray_preview(
+    station_name: str = Query(..., min_length=1),
+    row_index: int = Query(..., ge=1),
+    context: AgvContext = Depends(get_agv_context),
+) -> JsonDict:
+    """
+    功能:
+        按行预览中间托盘的自动计算结果.
+    参数:
+        station_name: str, 工站名称.
+        row_index: int, 行号, 从1开始.
+    返回:
+        Dict[str, Any], 包含 station_name, row_index 和 rows 列表.
+    """
+    _reload_positions(context)
+    try:
+        rows = context.get_or_create().preview_middle_tray_row_updates(
+            station_name,
+            row_index,
+        )
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
     except Exception as exc:
         logger.exception("预览中间托盘失败")
         raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
-    return {"station_name": station, "rows": rows}
+    return {"station_name": station_name, "row_index": row_index, "rows": rows}
 
 
 @router.post("/calibration/middle-tray/apply")
 def calibration_middle_tray_apply(
-    request: StationNameRequest,
+    request: MiddleTrayRowRequest,
     context: AgvContext = Depends(get_agv_context),
 ) -> JsonDict:
     """
     功能:
-        应用中间托盘计算结果到配置文件.
+        按行应用中间托盘计算结果到配置文件.
     参数:
-        request: StationNameRequest, 工站名称请求.
+        request: MiddleTrayRowRequest, 中间托盘行请求.
     返回:
         Dict[str, Any], 应用统计信息.
     """
     _reload_positions(context)
     try:
-        result = context.get_or_create().apply_station_middle_tray_updates(request.station_name)
+        result = context.get_or_create().apply_middle_tray_row_updates(
+            request.station_name,
+            request.row_index,
+        )
+    except ValueError as exc:
+        raise _json_error(str(exc)) from exc
     except Exception as exc:
         logger.exception("应用中间托盘失败")
         raise _json_error(str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR) from exc

@@ -252,6 +252,121 @@ class FakeTraySaveContext:
         return self.controller
 
 
+class FakeMiddleTrayPositionManager:
+    """
+    功能:
+        提供中间托盘按行计算 API 测试所需的位置管理器.
+    """
+
+    def __init__(self) -> None:
+        self.reload_count = 0
+
+    def reload(self) -> None:
+        """
+        功能:
+            记录配置重载次数.
+        返回:
+            None.
+        """
+        self.reload_count += 1
+
+
+class FakeMiddleTrayController:
+    """
+    功能:
+        提供中间托盘按行计算 API 测试所需的控制器.
+    """
+
+    def __init__(self) -> None:
+        self.position_manager = FakeMiddleTrayPositionManager()
+        self.preview_calls: List[Dict[str, Any]] = []
+        self.apply_calls: List[Dict[str, Any]] = []
+
+    def list_middle_tray_calibratable_rows(self) -> List[Dict[str, Any]]:
+        """
+        功能:
+            返回测试用可校准行选项.
+        返回:
+            List[Dict[str, Any]], 可校准行列表.
+        """
+        return [
+            {
+                "station_name": "shelf",
+                "row_index": 1,
+                "left_tray": "shelf_tray_1-1",
+                "right_tray": "shelf_tray_1-4",
+                "target_count": 2,
+                "update_count": 0,
+                "create_count": 2,
+                "label": "shelf 第1行: shelf_tray_1-1 -> shelf_tray_1-4, 2个中间点位",
+            }
+        ]
+
+    def preview_middle_tray_row_updates(self, station_name: str, row_index: int) -> List[Dict[str, Any]]:
+        """
+        功能:
+            记录按行预览调用并返回测试预览结果.
+        参数:
+            station_name: str, 工站名称.
+            row_index: int, 行号.
+        返回:
+            List[Dict[str, Any]], 预览行.
+        """
+        self.preview_calls.append({"station_name": station_name, "row_index": row_index})
+        return [
+            {
+                "row_index": row_index,
+                "target_tray": f"{station_name}_tray_{row_index}-2",
+                "left_tray": f"{station_name}_tray_{row_index}-1",
+                "right_tray": f"{station_name}_tray_{row_index}-4",
+                "target_col": 2,
+                "ratio": 1 / 3,
+                "old_pose": None,
+                "new_pose": [1.0, 2.0, 3.0, 0.1, 0.2, 0.3],
+                "exists": False,
+            }
+        ]
+
+    def apply_middle_tray_row_updates(self, station_name: str, row_index: int) -> Dict[str, Any]:
+        """
+        功能:
+            记录按行应用调用并返回测试写入结果.
+        参数:
+            station_name: str, 工站名称.
+            row_index: int, 行号.
+        返回:
+            Dict[str, Any], 写入统计.
+        """
+        self.apply_calls.append({"station_name": station_name, "row_index": row_index})
+        return {
+            "station_name": station_name,
+            "row_index": row_index,
+            "updated_count": 0,
+            "created_count": 1,
+            "affected_trays": [f"{station_name}_tray_{row_index}-2"],
+            "skipped_rows": [],
+        }
+
+
+class FakeMiddleTrayContext:
+    """
+    功能:
+        提供中间托盘按行计算 API 测试所需的 AGV 上下文.
+    """
+
+    def __init__(self) -> None:
+        self.controller = FakeMiddleTrayController()
+
+    def get_or_create(self) -> FakeMiddleTrayController:
+        """
+        功能:
+            返回测试控制器.
+        返回:
+            FakeMiddleTrayController, 测试控制器.
+        """
+        return self.controller
+
+
 def _charging_api_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -661,3 +776,68 @@ def test_tray_calibration_save_calls_controller_after_reload() -> None:
     assert context.controller.saved_calls == [
         {"tray_name": "synthesis_station_tray_1-1", "pose": pose}
     ]
+
+
+def test_middle_tray_rows_api_returns_calibratable_rows() -> None:
+    """
+    功能:
+        验证 /api/agv/calibration/middle-tray/rows 返回所有可校准行.
+    """
+    context = FakeMiddleTrayContext()
+    app = create_app()
+    app.dependency_overrides[deps.get_agv_context] = lambda: context
+    client = TestClient(app)
+
+    response = client.get("/api/agv/calibration/middle-tray/rows")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rows"][0]["station_name"] == "shelf"
+    assert body["rows"][0]["row_index"] == 1
+    assert context.controller.position_manager.reload_count == 1
+
+
+def test_middle_tray_preview_api_uses_station_and_row() -> None:
+    """
+    功能:
+        验证中间托盘预览接口按工站和行号调用控制器.
+    """
+    context = FakeMiddleTrayContext()
+    app = create_app()
+    app.dependency_overrides[deps.get_agv_context] = lambda: context
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/agv/calibration/middle-tray/preview",
+        params={"station_name": "shelf", "row_index": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["station_name"] == "shelf"
+    assert body["row_index"] == 2
+    assert body["rows"][0]["target_tray"] == "shelf_tray_2-2"
+    assert context.controller.preview_calls == [{"station_name": "shelf", "row_index": 2}]
+
+
+def test_middle_tray_apply_api_uses_station_and_row() -> None:
+    """
+    功能:
+        验证中间托盘应用接口按工站和行号调用控制器.
+    """
+    context = FakeMiddleTrayContext()
+    app = create_app()
+    app.dependency_overrides[deps.get_agv_context] = lambda: context
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/agv/calibration/middle-tray/apply",
+        json={"station_name": "shelf", "row_index": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["station_name"] == "shelf"
+    assert body["row_index"] == 2
+    assert body["created_count"] == 1
+    assert context.controller.apply_calls == [{"station_name": "shelf", "row_index": 2}]

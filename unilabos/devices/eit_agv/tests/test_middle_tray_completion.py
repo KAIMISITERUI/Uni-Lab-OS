@@ -227,6 +227,84 @@ class TestMiddleTrayCompletion(unittest.TestCase):
         self.controller.position_manager.save_tray_position.assert_not_called()
         self.controller.position_manager.save_tray_position_from_template.assert_not_called()
 
+    def test_preview_single_row_only_returns_selected_row(self) -> None:
+        """
+        功能:
+            验证按行预览只返回指定行的中间点位.
+
+        参数:
+            无.
+
+        返回:
+            无.
+        """
+        self.controller.position_manager.get_category.return_value = {
+            "shelf_tray_1-1": {"pose": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+            "shelf_tray_1-4": {"pose": [4.0, 4.0, 4.0, 0.4, 0.4, 0.4]},
+            "shelf_tray_2-1": {"pose": [10.0, 10.0, 10.0, 1.0, 1.0, 1.0]},
+            "shelf_tray_2-3": {"pose": [30.0, 30.0, 30.0, 3.0, 3.0, 3.0]},
+        }
+
+        preview_items = self.controller.preview_middle_tray_row_updates("shelf", 2)
+
+        self.assertEqual(len(preview_items), 1)
+        self.assertEqual(preview_items[0]["target_tray"], "shelf_tray_2-2")
+        self.assertEqual(preview_items[0]["row_index"], 2)
+
+    def test_list_calibratable_rows_excludes_rows_without_middle_points(self) -> None:
+        """
+        功能:
+            验证可校准行列表只包含存在中间编号可计算的行.
+
+        参数:
+            无.
+
+        返回:
+            无.
+        """
+        self.controller.position_manager.get_category.return_value = {
+            "shelf_tray_1-1": {"pose": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+            "shelf_tray_1-4": {"pose": [4.0, 4.0, 4.0, 0.4, 0.4, 0.4]},
+            "shelf_tray_2-1": {"pose": [10.0, 10.0, 10.0, 1.0, 1.0, 1.0]},
+            "shelf_tray_2-2": {"pose": [20.0, 20.0, 20.0, 2.0, 2.0, 2.0]},
+        }
+
+        row_options = self.controller.list_middle_tray_calibratable_rows()
+
+        self.assertEqual(len(row_options), 1)
+        self.assertEqual(row_options[0]["station_name"], "shelf")
+        self.assertEqual(row_options[0]["row_index"], 1)
+        self.assertEqual(row_options[0]["target_count"], 2)
+
+    def test_apply_single_row_only_writes_selected_row(self) -> None:
+        """
+        功能:
+            验证按行应用只写入指定行的中间点位.
+
+        参数:
+            无.
+
+        返回:
+            无.
+        """
+        self.controller.position_manager.get_category.return_value = {
+            "shelf_tray_1-1": {"pose": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+            "shelf_tray_1-4": {"pose": [4.0, 4.0, 4.0, 0.4, 0.4, 0.4]},
+            "shelf_tray_2-1": {"pose": [10.0, 10.0, 10.0, 1.0, 1.0, 1.0]},
+            "shelf_tray_2-3": {"pose": [30.0, 30.0, 30.0, 3.0, 3.0, 3.0]},
+        }
+        self.controller.position_manager.save_tray_position = MagicMock()
+        self.controller.position_manager.save_tray_position_from_template = MagicMock()
+
+        result = self.controller.apply_middle_tray_row_updates("shelf", 2)
+
+        self.assertEqual(result["row_index"], 2)
+        self.assertEqual(result["affected_trays"], ["shelf_tray_2-2"])
+        self.controller.position_manager.save_tray_position.assert_not_called()
+        template_call = self.controller.position_manager.save_tray_position_from_template.call_args
+        self.assertEqual(template_call.args[0], "shelf_tray_2-2")
+        self.assertEqual(template_call.args[2], "shelf_tray_2-1")
+
 
 if __name__ == "__main__":
     unittest.main()
