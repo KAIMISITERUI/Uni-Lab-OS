@@ -546,9 +546,9 @@ onBeforeUnmount(stopAutoRefresh)
           <span class="status-label">TCP</span>
           <span class="status-value pose-mono">{{ formatPose(status?.tcp_pose) }}</span>
         </div>
-        <div class="status-item">
+        <div class="status-item joint-status-item">
           <span class="status-label">关节</span>
-          <span class="status-value pose-mono">{{ formatJoints(status?.joints) }}</span>
+          <span class="status-value pose-mono joint-line">{{ formatJoints(status?.joints) }}</span>
         </div>
         <div class="status-item" v-if="isCollisionActive">
           <span class="status-label">安全</span>
@@ -956,6 +956,9 @@ onBeforeUnmount(stopAutoRefresh)
   flex-direction: column;
   gap: 4px;
 }
+.joint-status-item {
+  grid-column: span 2;
+}
 .status-label {
   color: #5d6d83;
   font-size: 12px;
@@ -970,6 +973,11 @@ onBeforeUnmount(stopAutoRefresh)
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
   font-weight: 500;
+}
+.joint-line {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 .info-row {
   display: flex;
@@ -1195,6 +1203,9 @@ onBeforeUnmount(stopAutoRefresh)
   }
 }
 @media (max-width: 720px) {
+  .joint-status-item {
+    grid-column: 1 / -1;
+  }
   .offset-grid,
   .pick-put-fields {
     grid-template-columns: 1fr;
