@@ -760,6 +760,28 @@ def submit_reaction_template(
     return _start_job("上传任务", _target)
 
 
+@router.post("/chemicals/sync-to-station")
+def sync_chemicals_to_station(
+    manager: SynthesisStationManager = Depends(get_synthesis_manager),
+) -> JsonDict:
+    """
+    功能:
+        创建后台任务, 将本地化学品库对齐到合成工站化学品库.
+    参数:
+        manager: SynthesisStationManager, 合成工站管理器.
+    返回:
+        Dict[str, Any], 后台任务 ID.
+    """
+
+    def _target(log: Callable[[str], None]) -> JsonDict:
+        log("正在以本地化学品库为准对齐合成工站化学品库.")
+        result = manager.sync_chemicals_to_station()
+        log("合成工站化学品库对齐完成.")
+        return result
+
+    return _start_job("对齐合成工站化学品库", _target)
+
+
 @router.post("/resource-check")
 def check_resource(
     request: ResourceCheckRequest = Body(...),

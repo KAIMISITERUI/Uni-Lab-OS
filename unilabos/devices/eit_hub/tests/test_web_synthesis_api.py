@@ -93,7 +93,7 @@ class FakeSynthesisManager:
         """
         self.chemical_sync_calls += 1
         self.call_order.append("sync_chemicals_to_station")
-        return {"success": True}
+        return {"total": 2, "updated_rows": 2, "id_written": 2}
 
     def create_task_by_file(self, template_path: str) -> int:
         """
@@ -716,6 +716,25 @@ def test_submit_saves_template_and_uses_default_path(
     assert len(saved["gc_ms_yield"]["products"]) == 2
 
 
+def test_sync_chemicals_to_station_endpoint_starts_job(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证化学品库对齐接口创建后台任务并调用合成工站同步逻辑.
+    """
+    client, fake_manager, _template_path = api_client
+
+    response = client.post("/api/synthesis/chemicals/sync-to-station")
+
+    assert response.status_code == 200
+    job = _wait_job(client, response.json()["job_id"])
+    assert job["name"] == "对齐合成工站化学品库"
+    assert job["result"] == {"total": 2, "updated_rows": 2, "id_written": 2}
+    assert fake_manager.chemical_sync_calls == 1
+    assert fake_manager.call_order == ["sync_chemicals_to_station"]
+
+
 def test_resource_check_uses_default_path(
     api_client: tuple[TestClient, FakeSynthesisManager, Path],
 ) -> None:
@@ -1237,6 +1256,29 @@ def test_second_exclusive_job_returns_409(
         json={"template": _updated_payload(), "auto_generate_batch_file": True},
     )
     assert second.status_code == 409
+
+    fake_manager.release_event.set()
+    _wait_job(client, first.json()["job_id"])
+
+
+def test_sync_chemicals_to_station_returns_409_when_job_busy(
+    api_client: tuple[TestClient, FakeSynthesisManager, Path],
+) -> None:
+    """
+    功能:
+        验证已有独占后台任务运行时, 化学品库对齐接口返回 409.
+    """
+    client, fake_manager, _template_path = api_client
+    fake_manager.entered_event = threading.Event()
+    fake_manager.release_event = threading.Event()
+
+    first = client.post("/api/synthesis/reaction-template/submit", json=_updated_payload())
+    assert first.status_code == 200
+    assert fake_manager.entered_event.wait(timeout=2) is True
+
+    second = client.post("/api/synthesis/chemicals/sync-to-station")
+    assert second.status_code == 409
+    assert fake_manager.chemical_sync_calls == 1
 
     fake_manager.release_event.set()
     _wait_job(client, first.json()["job_id"])

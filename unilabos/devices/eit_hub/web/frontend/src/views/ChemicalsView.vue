@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onActivated, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import {
   type ChemicalRow,
   type StructureSearchRequest,
@@ -12,11 +12,17 @@ import {
   listChemicals,
   searchChemicalsByStructure,
 } from '../api/chemicals'
+import {
+  type JobState,
+  syncChemicalsToStation,
+} from '../api/synthesis'
+import { getErrorMessage } from '../api/http'
 import ChemicalEditDialog from '../components/ChemicalEditDialog.vue'
 import ChemicalDetailDialog from '../components/ChemicalDetailDialog.vue'
 import HazardDisplay from '../components/HazardDisplay.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import IntegrityPanel from '../components/IntegrityPanel.vue'
+import JobPanel from '../components/JobPanel.vue'
 import StructurePreview from '../components/StructurePreview.vue'
 import StructureSearchDialog from '../components/StructureSearchDialog.vue'
 
@@ -52,6 +58,8 @@ const detailDialog = reactive<{
 const importDialogVisible = ref(false)
 const structureSearchDialogVisible = ref(false)
 const activeStructureSearch = ref<StoredStructureSearch | null>(null)
+const currentJobId = ref('')
+const syncLoading = ref(false)
 
 async function load() {
   loading.value = true
@@ -175,6 +183,35 @@ function onSaved() {
   load()
 }
 
+async function syncToStation() {
+  try {
+    await ElMessageBox.confirm(
+      '将以本地化学品库为准对齐合成工站化学品库, 并删除工站内多余化学品. 是否继续?',
+      '对齐合成工站',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+
+  syncLoading.value = true
+  try {
+    const data = await syncChemicalsToStation()
+    currentJobId.value = data.job_id
+    ElMessage.success('化学品库对齐任务已进入后台')
+  } catch (err: unknown) {
+    ElMessage.error(getErrorMessage(err))
+  } finally {
+    syncLoading.value = false
+  }
+}
+
+function onSyncJobFinished(job: JobState) {
+  if (job.name === '对齐合成工站化学品库' && job.status === 'succeeded') {
+    load()
+  }
+}
+
 function onStructureSearched(
   payload: StoredStructureSearch,
   response: StructureSearchResponse,
@@ -220,6 +257,9 @@ onActivated(load)
               <div style="flex: 1" />
               <el-button type="success" @click="openCreate">新增</el-button>
               <el-button @click="importDialogVisible = true">从文件导入</el-button>
+              <el-button :icon="Refresh" :loading="syncLoading" @click="syncToStation">
+                对齐合成工站
+              </el-button>
               <el-button @click="downloadCsv">导出 CSV</el-button>
               <el-button @click="downloadXlsx">导出 XLSX</el-button>
             </div>
@@ -309,6 +349,12 @@ onActivated(load)
         <IntegrityPanel />
       </el-tab-pane>
     </el-tabs>
+    <JobPanel
+      v-if="currentJobId !== ''"
+      :job-id="currentJobId"
+      title="化学品库对齐结果"
+      @finished="onSyncJobFinished"
+    />
 
     <ChemicalEditDialog
       v-model="editDialog.visible"

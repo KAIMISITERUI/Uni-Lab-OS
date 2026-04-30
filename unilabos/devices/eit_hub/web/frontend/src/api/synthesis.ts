@@ -82,6 +82,7 @@ export interface W1ShelfPayload {
 
 export interface JobCreateResponse {
   job_id: string
+  status?: 'queued'
 }
 
 export type WorkflowStepId =
@@ -242,6 +243,11 @@ export async function submitReactionTemplate(payload: ReactionTemplate): Promise
 
 export async function checkResource(payload: ResourceCheckPayload): Promise<JobCreateResponse> {
   const { data } = await http.post<JobCreateResponse>('/api/synthesis/resource-check', payload)
+  return data
+}
+
+export async function syncChemicalsToStation(): Promise<JobCreateResponse> {
+  const { data } = await http.post<JobCreateResponse>('/api/synthesis/chemicals/sync-to-station')
   return data
 }
 
