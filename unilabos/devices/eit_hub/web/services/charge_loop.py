@@ -63,10 +63,10 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, int]:
     if (1 <= retry_wait_minutes <= 60) is False:
         raise ValueError("重试等待必须在 1 到 60 分钟之间.")
     if (10 <= low_battery_pct <= 90) is False:
-        raise ValueError("电量阈值必须在 10 到 90 之间.")
-    # 满电阈值必须严格大于低电量阈值, 上限 100, 否则浮充逻辑无效
+        raise ValueError("低电阈值必须在 10 到 90 之间.")
+    # 满电阈值必须严格大于低电阈值, 上限 100, 否则浮充逻辑无效
     if (low_battery_pct < full_battery_pct <= 100) is False:
-        raise ValueError("满电阈值必须大于低电量阈值且不超过 100.")
+        raise ValueError("满电阈值必须大于低电阈值且不超过 100.")
 
     return {
         "interval_minutes": interval_minutes,
@@ -114,7 +114,7 @@ class ChargeLoopService:
         参数:
             interval_minutes: int, 正常检查间隔.
             retry_wait_minutes: int, 异常/跳过时的重试等待.
-            low_battery_pct: int, 低电量阈值 (0-100).
+            low_battery_pct: int, 低电阈值 (0-100).
             full_battery_pct: int, 满电停充阈值, 必须大于 low_battery_pct 且不超过 100.
         返回:
             Dict, 启动后的服务状态.
@@ -170,7 +170,7 @@ class ChargeLoopService:
         参数:
             interval_minutes: int, 正常检查间隔.
             retry_wait_minutes: int, 异常/跳过时的重试等待.
-            low_battery_pct: int, 低电量阈值.
+            low_battery_pct: int, 低电阈值.
             full_battery_pct: int, 满电停充阈值, 必须大于 low_battery_pct 且不超过 100.
         返回:
             Dict[str, Any], 保存后的服务状态.

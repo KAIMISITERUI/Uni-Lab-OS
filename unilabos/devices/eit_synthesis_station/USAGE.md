@@ -108,14 +108,14 @@ curl http://127.0.0.1:4670/health
 
 **最小请求 curl 示例**（与工程界面字段一致）：
 ```bash
-curl -X POST http://10.40.13.51:4670/api/ops/pick_up ^
+curl -X POST http://10.32.2.106:4670/api/ops/pick_up ^
   -H "Content-Type: application/json" ^
   -d "{\"src\":\"W-3-5:0\",\"resource_type\":\"201000816\"}"
 ```
 
 **带 has_cap / dst 的完整示例**：
 ```bash
-curl -X POST http://10.40.13.51:4670/api/ops/pick_up ^
+curl -X POST http://10.32.2.106:4670/api/ops/pick_up ^
   -H "Content-Type: application/json" ^
   -d "{\"src\":\"W-2-1:0\",\"dst\":\"SC-1:0\",\"resource_type\":\"220000005\",\"has_cap\":true}"
 ```
@@ -124,7 +124,7 @@ curl -X POST http://10.40.13.51:4670/api/ops/pick_up ^
 ```python
 import requests
 r = requests.post(
-    "http://10.40.13.51:4670/api/ops/pick_up",
+    "http://10.32.2.106:4670/api/ops/pick_up",
     json={"src": "W-3-5:0", "resource_type": "201000816"},  # dst/has_cap 可省
     timeout=620,
 )
@@ -144,7 +144,7 @@ print(r.status_code, r.json())
 
 **curl 示例**：
 ```bash
-curl -X POST http://10.40.13.51:4670/api/ops/put_down ^
+curl -X POST http://10.32.2.106:4670/api/ops/put_down ^
   -H "Content-Type: application/json" ^
   -d "{\"src\":\"SC-1:0\",\"dst\":\"W-2-1:0\",\"resource_type\":\"220000005\",\"has_cap\":true}"
 ```
@@ -159,7 +159,7 @@ curl -X POST http://10.40.13.51:4670/api/ops/put_down ^
 
 **最小请求 curl**：
 ```bash
-curl -X POST http://10.40.13.51:4670/api/ops/pick_up_tray ^
+curl -X POST http://10.32.2.106:4670/api/ops/pick_up_tray ^
   -H "Content-Type: application/json" ^
   -d "{\"src\":\"TB-2-1:-1\",\"resource_type\":\"201000711\"}"
 ```
@@ -168,7 +168,7 @@ curl -X POST http://10.40.13.51:4670/api/ops/pick_up_tray ^
 ```python
 import requests
 r = requests.post(
-    "http://10.40.13.51:4670/api/ops/pick_up_tray",
+    "http://10.32.2.106:4670/api/ops/pick_up_tray",
     json={"src": "TB-2-1:-1", "resource_type": "201000711"},  # dst 可省
     timeout=620,
 )
@@ -183,7 +183,7 @@ print(r.status_code, r.json())
 
 **curl 示例**：
 ```bash
-curl -X POST http://10.40.13.51:4670/api/ops/put_down_tray ^
+curl -X POST http://10.32.2.106:4670/api/ops/put_down_tray ^
   -H "Content-Type: application/json" ^
   -d "{\"src\":\"N-3:-1\",\"dst\":\"TB-2-1:-1\",\"resource_type\":\"201000711\"}"
 ```
@@ -196,7 +196,7 @@ curl -X POST http://10.40.13.51:4670/api/ops/put_down_tray ^
 
 **curl 示例**：
 ```bash
-curl -X POST http://10.40.13.51:4670/api/ops/w1_out ^
+curl -X POST http://10.32.2.106:4670/api/ops/w1_out ^
   -H "Content-Type: application/json" ^
   -d "{\"location_num\":1}"
 ```
@@ -205,7 +205,7 @@ curl -X POST http://10.40.13.51:4670/api/ops/w1_out ^
 ```python
 import requests
 r = requests.post(
-    "http://10.40.13.51:4670/api/ops/w1_out",
+    "http://10.32.2.106:4670/api/ops/w1_out",
     json={"location_num": 1},      # 工程界面用 1/3/5/7
     timeout=140,
 )
@@ -222,7 +222,7 @@ print(r.status_code, r.json())
 
 **curl 示例**：
 ```bash
-curl -X POST http://10.40.13.51:4670/api/ops/w1_in ^
+curl -X POST http://10.32.2.106:4670/api/ops/w1_in ^
   -H "Content-Type: application/json" ^
   -d "{\"location_num\":1}"
 ```
@@ -236,7 +236,7 @@ curl -X POST http://10.40.13.51:4670/api/ops/w1_in ^
 任何 POST 接口加查询参数 `?dry_run=true`，请求体一致，但**不会真正调用 lc39a，不会驱动机械臂**。返回将要下发的 RPC 参数，便于上线前对参数。
 
 ```bash
-curl -X POST "http://10.40.13.51:4670/api/ops/pick_up_tray?dry_run=true" ^
+curl -X POST "http://10.32.2.106:4670/api/ops/pick_up_tray?dry_run=true" ^
   -H "Content-Type: application/json" ^
   -d "{\"src\":\"TB-2-1:-1\",\"dst\":\"N-3:-1\",\"resource_type\":\"201000711\"}"
 ```

@@ -4,7 +4,7 @@
     将 ops_http sidecar (合成工站 PC 上独立 Python 进程, 端口 4670) 的 /api/cameras
     透传给 eit_hub 前端, 并为每路相机同时拼出子码流 (缩略图) 与主码流 (放大查看)
     的 MJPEG 直连 URL, 让前端 <img> 标签可直接拉流, 不经 eit_hub 后端转发视频.
-    服务地址通过环境变量 OPS_HTTP_BASE_URL 配置, 默认 http://10.40.13.51:4670.
+    服务地址通过环境变量 OPS_HTTP_BASE_URL 配置, 默认 http://10.32.2.106:4670.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 logger = logging.getLogger("EITHubCameraRouter")
 
 # ops_http sidecar 基础地址, 与合成工站业务接口 (4669) 解耦
-_DEFAULT_OPS_HTTP_BASE_URL = "http://10.40.13.51:4670"
+_DEFAULT_OPS_HTTP_BASE_URL = "http://10.32.2.106:4670"
 _OPS_HTTP_BASE_URL = os.getenv("OPS_HTTP_BASE_URL", _DEFAULT_OPS_HTTP_BASE_URL).rstrip("/")
 _REQUEST_TIMEOUT_S = 5.0
 

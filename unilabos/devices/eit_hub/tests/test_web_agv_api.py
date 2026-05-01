@@ -57,7 +57,7 @@ class FakeChargeController:
         功能:
             返回一次成功的充电检查结果.
         参数:
-            low_battery_pct: int, 低电量阈值.
+            low_battery_pct: int, 低电阈值.
             full_battery_pct: int, 满电停充阈值.
         返回:
             Dict[str, Any], 充电检查结果.
@@ -138,7 +138,7 @@ class FakeChargeLoopApiService:
         参数:
             interval_minutes: int, 检查间隔.
             retry_wait_minutes: int, 重试等待.
-            low_battery_pct: int, 电量阈值.
+            low_battery_pct: int, 低电阈值.
             full_battery_pct: int, 满电停充阈值.
         返回:
             Dict[str, Any], 保存后的服务状态.
@@ -164,7 +164,7 @@ class FakeChargeLoopApiService:
         参数:
             interval_minutes: int, 检查间隔.
             retry_wait_minutes: int, 重试等待.
-            low_battery_pct: int, 电量阈值.
+            low_battery_pct: int, 低电阈值.
             full_battery_pct: int, 满电停充阈值.
         返回:
             Dict[str, Any], 启动后的服务状态.

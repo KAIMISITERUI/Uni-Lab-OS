@@ -29,7 +29,7 @@ class Settings:
         Settings.
     """
 
-    base_url: str = "http://10.40.13.51:4669"
+    base_url: str = "http://10.32.2.106:4669"
     username: str = "admin"
     password: str = "admin"
     timeout_s: float = 30.0

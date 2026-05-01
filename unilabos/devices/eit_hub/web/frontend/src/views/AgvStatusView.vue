@@ -1320,7 +1320,7 @@ onBeforeUnmount(() => {
               <el-input-number v-model="chargingForm.retry_wait_minutes" :min="1" :max="60" />
               <span class="unit">分钟</span>
             </el-form-item>
-            <el-form-item label="电量阈值">
+            <el-form-item label="低电阈值">
               <el-input-number v-model="chargingForm.low_battery_pct" :min="10" :max="90" />
               <span class="unit">%</span>
             </el-form-item>

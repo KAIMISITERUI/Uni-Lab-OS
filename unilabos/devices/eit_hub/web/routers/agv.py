@@ -399,7 +399,7 @@ class ChargingStartRequest(BaseModel):
     参数:
         interval_minutes: int, 正常检查间隔分钟.
         retry_wait_minutes: int, 异常重试等待分钟.
-        low_battery_pct: int, 低电量阈值 0-100.
+        low_battery_pct: int, 低电阈值 0-100.
         full_battery_pct: int, 满电停充阈值, 必须大于 low_battery_pct, 上限 100.
     """
 

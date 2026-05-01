@@ -89,7 +89,7 @@ DEVICE_SPECS: Tuple[DeviceSpec, ...] = (
         key="synthesis_station",
         name="合成工站",
         category="合成",
-        endpoints=(EndpointSpec(host="10.40.13.51", port=4669),),
+        endpoints=(EndpointSpec(host="10.32.2.106", port=4669),),
     ),
     DeviceSpec(
         key="gc_ms",

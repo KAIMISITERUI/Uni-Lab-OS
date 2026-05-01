@@ -39,6 +39,6 @@ curl -o cam1.jpg "http://127.0.0.1:4670/api/cameras/cam1/snapshot.jpg?stream=sub
 From another host on the LAN:
 
 ```text
-http://10.40.13.51:4670/api/cameras
-http://10.40.13.51:4670/api/cameras/cam1/snapshot.jpg?stream=sub
+http://10.32.2.106:4670/api/cameras
+http://10.32.2.106:4670/api/cameras/cam1/snapshot.jpg?stream=sub
 ```

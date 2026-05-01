@@ -89,7 +89,6 @@ interface FabDragInteraction {
   pointerId: number
   startX: number
   startY: number
-  startLeft: number
   startTop: number
   moved: boolean
 }
@@ -236,24 +235,25 @@ function applySidePanelWidth(width: number): void {
   sidePanelWidth.value = normalizeSidePanelWidth(width)
 }
 
-function normalizeFabPosition(left: number, top: number): { left: number; top: number } {
+function getFabRightAlignedLeft(): number {
+  return getViewportWidth() - FAB_SIZE - FAB_DEFAULT_OFFSET
+}
+
+function normalizeFabPosition(top: number): { left: number; top: number } {
   return {
-    left: clamp(left, VIEWPORT_MARGIN, getViewportWidth() - FAB_SIZE - VIEWPORT_MARGIN),
+    left: clamp(getFabRightAlignedLeft(), VIEWPORT_MARGIN, getViewportWidth() - FAB_SIZE - VIEWPORT_MARGIN),
     top: clamp(top, VIEWPORT_MARGIN, getViewportHeight() - FAB_SIZE - VIEWPORT_MARGIN),
   }
 }
 
-function applyFabPosition(left: number, top: number): void {
-  const normalized = normalizeFabPosition(left, top)
+function applyFabPosition(top: number): void {
+  const normalized = normalizeFabPosition(top)
   fabPosition.left = normalized.left
   fabPosition.top = normalized.top
 }
 
 function resetFabPositionToDefault(): void {
-  applyFabPosition(
-    getViewportWidth() - FAB_SIZE - FAB_DEFAULT_OFFSET,
-    getViewportHeight() - FAB_SIZE - FAB_DEFAULT_OFFSET,
-  )
+  applyFabPosition(getViewportHeight() - FAB_SIZE - FAB_DEFAULT_OFFSET)
 }
 
 function initFabPosition(): void {
@@ -293,7 +293,7 @@ function resetDrawerRectToDefault(): void {
 }
 
 function onViewportResize(): void {
-  applyFabPosition(fabPosition.left, fabPosition.top)
+  applyFabPosition(fabPosition.top)
   if (isSidePanel.value === true) {
     applySidePanelWidth(sidePanelWidth.value)
     return
@@ -347,7 +347,6 @@ function onFabPointerDown(event: PointerEvent): void {
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
-    startLeft: fabPosition.left,
     startTop: fabPosition.top,
     moved: false,
   }
@@ -367,7 +366,7 @@ function onFabPointerMove(event: PointerEvent): void {
   if (Math.abs(deltaX) > FAB_DRAG_THRESHOLD || Math.abs(deltaY) > FAB_DRAG_THRESHOLD) {
     activeFabDrag.moved = true
   }
-  applyFabPosition(activeFabDrag.startLeft + deltaX, activeFabDrag.startTop + deltaY)
+  applyFabPosition(activeFabDrag.startTop + deltaY)
 }
 
 function onFabPointerUp(event: PointerEvent): void {
@@ -380,7 +379,7 @@ function onFabPointerUp(event: PointerEvent): void {
       suppressNextFabClick = false
     }, 0)
   } else {
-    applyFabPosition(activeFabDrag.startLeft, activeFabDrag.startTop)
+    applyFabPosition(activeFabDrag.startTop)
   }
   stopFabDrag()
 }
