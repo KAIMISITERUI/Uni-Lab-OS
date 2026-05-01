@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Check, Close, Refresh, Search } from '@element-plus/icons-vue'
+import { Check, Refresh, Search } from '@element-plus/icons-vue'
 import { getErrorMessage } from '../api/http'
 import {
   fetchTaskHistoryList,
@@ -26,8 +26,8 @@ const FILE_LABELS: Record<FileKey, string> = {
 }
 
 const items = ref<TaskHistoryItem[]>([])
-const total = ref(0)
 const queryText = ref('')
+const selectedFileFilters = ref<FileKey[]>([])
 const listLoading = ref(false)
 const selectedTaskId = ref<number | null>(null)
 const activeTab = ref<'experiment_plan' | 'task_report' | 'methods' | 'integration' | 'yield'>('experiment_plan')
@@ -35,20 +35,40 @@ const integrationReloadToken = ref(0)
 const yieldReloadToken = ref(0)
 const activatedOnce = ref(false)
 
+function hasFile(item: TaskHistoryItem, key: FileKey): boolean {
+  return item.files.some((entry) => entry.key === key && entry.exists === true)
+}
+
+const visibleItems = computed<TaskHistoryItem[]>(() => {
+  if (selectedFileFilters.value.length === 0) {
+    return items.value
+  }
+  return items.value.filter((item) => (
+    selectedFileFilters.value.every((key) => hasFile(item, key))
+  ))
+})
+
+function syncSelectedTask(): void {
+  if (visibleItems.value.length === 0) {
+    selectedTaskId.value = null
+    return
+  }
+  if (selectedTaskId.value === null) {
+    selectedTaskId.value = visibleItems.value[0].task_id
+    return
+  }
+  const stillVisible = visibleItems.value.find((entry) => entry.task_id === selectedTaskId.value)
+  if (stillVisible === undefined) {
+    selectedTaskId.value = visibleItems.value[0].task_id
+  }
+}
+
 async function loadList(): Promise<void> {
   listLoading.value = true
   try {
     const response = await fetchTaskHistoryList(queryText.value.trim())
     items.value = response.items
-    total.value = response.total
-    if (selectedTaskId.value === null && response.items.length > 0) {
-      selectedTaskId.value = response.items[0].task_id
-    } else if (selectedTaskId.value !== null) {
-      const stillThere = response.items.find((entry) => entry.task_id === selectedTaskId.value)
-      if (stillThere === undefined) {
-        selectedTaskId.value = response.items.length > 0 ? response.items[0].task_id : null
-      }
-    }
+    syncSelectedTask()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -60,7 +80,7 @@ const selectedTask = computed<TaskHistoryItem | null>(() => {
   if (selectedTaskId.value === null) {
     return null
   }
-  return items.value.find((entry) => entry.task_id === selectedTaskId.value) ?? null
+  return visibleItems.value.find((entry) => entry.task_id === selectedTaskId.value) ?? null
 })
 
 const selectedFileStatus = computed<Record<string, { exists: boolean; filename: string }>>(() => {
@@ -74,8 +94,15 @@ const selectedFileStatus = computed<Record<string, { exists: boolean; filename: 
   return map
 })
 
-function presenceFor(item: TaskHistoryItem, key: FileKey): FilePresence | null {
-  return item.files.find((entry) => entry.key === key) ?? null
+function existingFilePresences(item: TaskHistoryItem): FilePresence[] {
+  return item.files.filter((entry) => entry.exists === true)
+}
+
+function labelForFile(key: string): string {
+  if (FILE_KEYS.includes(key as FileKey) === true) {
+    return FILE_LABELS[key as FileKey]
+  }
+  return key
 }
 
 function selectTask(item: TaskHistoryItem): void {
@@ -83,10 +110,18 @@ function selectTask(item: TaskHistoryItem): void {
 }
 
 function statusType(status: string | null): 'success' | 'info' | 'warning' | 'danger' {
-  if (status === null) return 'info'
-  if (status.includes('COMPLETED') || status.includes('已完成')) return 'success'
-  if (status.includes('FAILED') || status.includes('失败')) return 'danger'
-  if (status.includes('RUNNING') || status.includes('进行')) return 'warning'
+  if (status === null) {
+    return 'info'
+  }
+  if (status.includes('COMPLETED') || status.includes('已完成')) {
+    return 'success'
+  }
+  if (status.includes('FAILED') || status.includes('失败')) {
+    return 'danger'
+  }
+  if (status.includes('RUNNING') || status.includes('进行')) {
+    return 'warning'
+  }
   return 'info'
 }
 
@@ -130,30 +165,49 @@ watch(activeTab, (tab) => {
     yieldReloadToken.value += 1
   }
 })
+
+watch(visibleItems, () => {
+  syncSelectedTask()
+})
 </script>
 
 <template>
   <div class="task-history-page">
     <header class="toolbar">
-      <el-input
-        v-model="queryText"
-        placeholder="按任务 ID 或任务名称搜索"
-        :prefix-icon="Search"
-        clearable
-        class="search-input"
-        @keyup.enter="loadList"
-        @clear="loadList"
-      />
-      <el-button :icon="Search" type="primary" @click="loadList">搜索</el-button>
+      <div class="search-control-group">
+        <el-input
+          v-model="queryText"
+          placeholder="按任务 ID 或任务名称搜索"
+          :prefix-icon="Search"
+          clearable
+          class="search-input"
+          @keyup.enter="loadList"
+          @clear="loadList"
+        />
+        <el-button :icon="Search" type="primary" @click="loadList">搜索</el-button>
+      </div>
+      <el-checkbox-group
+        v-model="selectedFileFilters"
+        class="file-filter-group"
+      >
+        <el-checkbox
+          v-for="key in FILE_KEYS"
+          :key="key"
+          :value="key"
+          class="file-filter-checkbox"
+        >
+          {{ FILE_LABELS[key] }}
+        </el-checkbox>
+      </el-checkbox-group>
       <el-button :icon="Refresh" @click="loadList">刷新</el-button>
-      <span class="toolbar-meta">共 {{ total }} 个任务</span>
+      <span class="toolbar-meta">共 {{ visibleItems.length }} 个任务</span>
     </header>
 
     <div class="split-layout">
       <aside v-loading="listLoading" class="list-pane">
-        <ul v-if="items.length > 0" class="task-list">
+        <ul v-if="visibleItems.length > 0" class="task-list">
           <li
-            v-for="item in items"
+            v-for="item in visibleItems"
             :key="item.task_id"
             class="task-item"
             :class="{ active: item.task_id === selectedTaskId }"
@@ -168,32 +222,30 @@ watch(activeTab, (tab) => {
               <span class="task-time">{{ formatTime(item.completed_at ?? item.started_at ?? item.created_at) }}</span>
               <div class="presence-row">
                 <el-tooltip
-                  v-for="key in FILE_KEYS"
-                  :key="key"
+                  v-for="file in existingFilePresences(item)"
+                  :key="file.key"
                   placement="top"
                 >
                   <template #content>
-                    <div>{{ FILE_LABELS[key] }}: {{ presenceFor(item, key)?.filename }}</div>
-                    <div>{{ presenceFor(item, key)?.exists ? '已生成' : '缺失' }}</div>
+                    <div>{{ labelForFile(file.key) }}: {{ file.filename }}</div>
+                    <div>已生成</div>
                   </template>
                   <span class="presence-dot">
-                    <el-icon
-                      v-if="presenceFor(item, key)?.exists"
-                      class="presence-icon presence-yes"
-                    >
+                    <el-icon class="presence-icon presence-yes">
                       <Check />
                     </el-icon>
-                    <el-icon v-else class="presence-icon presence-no">
-                      <Close />
-                    </el-icon>
-                    <span class="presence-label">{{ FILE_LABELS[key] }}</span>
+                    <span class="presence-label">{{ labelForFile(file.key) }}</span>
                   </span>
                 </el-tooltip>
               </div>
             </div>
           </li>
         </ul>
-        <el-empty v-else description="暂无任务历史" :image-size="80" />
+        <el-empty
+          v-else
+          :description="items.length > 0 ? '没有符合筛选条件的任务' : '暂无任务历史'"
+          :image-size="80"
+        />
       </aside>
 
       <section class="detail-pane">
@@ -268,11 +320,32 @@ watch(activeTab, (tab) => {
 .toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.search-control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .search-input {
   width: 320px;
+}
+
+.file-filter-group {
+  display: flex;
+  flex: 1 1 420px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  min-width: 260px;
+}
+
+.file-filter-checkbox {
+  margin-right: 0;
+  white-space: nowrap;
 }
 
 .toolbar-meta {
@@ -381,11 +454,6 @@ watch(activeTab, (tab) => {
 
 .presence-yes {
   color: var(--el-color-success);
-}
-
-.presence-no {
-  color: var(--el-color-danger);
-  opacity: 0.5;
 }
 
 .presence-label {
