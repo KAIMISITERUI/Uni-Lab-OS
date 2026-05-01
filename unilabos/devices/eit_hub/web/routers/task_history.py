@@ -2,7 +2,7 @@
 """
 功能:
     提供 EIT Hub 任务历史数据 Web API.
-    扫描合成站任务目录, 检查 5 项核心文件是否存在, 解析 xlsx/csv 内容预览,
+    扫描合成站任务目录, 检查核心文件和分析报告是否存在, 解析 xlsx/csv 内容预览,
     并代理分析站图集 (色谱图, 质谱峰图, 结构图) 的访问.
 """
 
@@ -43,7 +43,7 @@ router = APIRouter(prefix="/api/task-history", tags=["task-history"])
 # 分析站数据根, 测试可通过 monkeypatch 替换
 ANALYSIS_DATA_DIR: Path = Path(_ANALYSIS_DATA_DIR_DEFAULT)
 
-# 5 项核心文件检查规范, filename 中 {task_id} 会被替换
+# 5 项合成任务核心文件检查规范, filename 中 {task_id} 会被替换
 EXPECTED_TASK_FILES: Tuple[Tuple[str, str, str], ...] = (
     ("experiment_plan", "实验计划", "{task_id}_experiment_plan.xlsx"),
     ("task_report",     "任务报告", "{task_id}_task_report.xlsx"),
@@ -51,7 +51,13 @@ EXPECTED_TASK_FILES: Tuple[Tuple[str, str, str], ...] = (
     ("uplc_qtof",       "UPLC-QTOF 方法配置", "uplc_qtof.csv"),
     ("hplc",            "HPLC 方法配置", "hplc.csv"),
 )
-EXPECTED_FILE_KEYS = {key for key, _label, _name in EXPECTED_TASK_FILES}
+ANALYSIS_REPORT_FILES: Tuple[Tuple[str, str, str], ...] = (
+    ("yield_report", "产率报告", "yield_report"),
+)
+EXPECTED_FILE_KEYS = {
+    key
+    for key, _label, _name in (*EXPECTED_TASK_FILES, *ANALYSIS_REPORT_FILES)
+}
 XLSX_FILE_KEYS = {"experiment_plan", "task_report"}
 CSV_FILE_KEYS = {"gc_ms", "uplc_qtof", "hplc"}
 
@@ -212,12 +218,12 @@ def _format_mtime(timestamp: float) -> str:
 def _build_file_presence(task_dir: Path, task_id: int) -> List[FilePresence]:
     """
     功能:
-        计算 5 项核心文件在指定任务目录下的存在状态.
+        计算任务历史卡片需要展示和筛选的文件存在状态.
     参数:
         task_dir: Path, 任务目录.
         task_id: int, 任务 ID.
     返回:
-        List[FilePresence], 5 项检查结果.
+        List[FilePresence], 合成任务文件和分析站报告检查结果.
     """
     presences: List[FilePresence] = []
     for key, label, name_pattern in EXPECTED_TASK_FILES:
@@ -230,6 +236,32 @@ def _build_file_presence(task_dir: Path, task_id: int) -> List[FilePresence]:
                     key=key,
                     label=label,
                     filename=filename,
+                    exists=True,
+                    size_bytes=int(stat_result.st_size),
+                    mtime=_format_mtime(stat_result.st_mtime),
+                )
+            )
+        else:
+            presences.append(
+                FilePresence(
+                    key=key,
+                    label=label,
+                    filename=filename,
+                    exists=False,
+                    size_bytes=None,
+                    mtime=None,
+                )
+            )
+    for key, label, suffix in ANALYSIS_REPORT_FILES:
+        filename = f"{task_id}_{suffix}.xlsx"
+        candidate = _resolve_analysis_report(task_id, suffix)
+        if candidate is not None:
+            stat_result = candidate.stat()
+            presences.append(
+                FilePresence(
+                    key=key,
+                    label=label,
+                    filename=candidate.name,
                     exists=True,
                     size_bytes=int(stat_result.st_size),
                     mtime=_format_mtime(stat_result.st_mtime),
@@ -582,7 +614,7 @@ def list_history(
 ) -> TaskHistoryListResponse:
     """
     功能:
-        返回历史任务列表, 含 5 项核心文件存在状态.
+        返回历史任务列表, 含合成任务文件和分析报告存在状态.
     参数:
         query: str, 模糊搜索关键词.
     返回:
@@ -596,7 +628,7 @@ def list_history(
 def get_history_detail(task_id: int) -> TaskHistoryDetailResponse:
     """
     功能:
-        返回单个任务的详情, 含元数据, 5 项文件状态及分析站图集分组.
+        返回单个任务的详情, 含元数据, 文件状态及分析站图集分组.
     参数:
         task_id: int, 任务 ID.
     返回:
@@ -1327,6 +1359,25 @@ def _parse_yield_config(rows: List[List[Any]]) -> JsonDict:
     return config
 
 
+def _normalize_yield_value(value: Any) -> Tuple[Optional[float], str]:
+    """
+    功能:
+        将产率报告中的产率值拆分为可计算数值与可显示文本.
+    参数:
+        value: Any, "产率(%)" 单元格原始值, 可能是数字, None 或 "<1".
+    返回:
+        Tuple[Optional[float], str], 第 1 项用于热力图计算, 第 2 项用于界面显示.
+    """
+    if value is None:
+        return None, "-"
+    if isinstance(value, (int, float)) is True:
+        yield_pct = float(value)
+        return yield_pct, f"{round(yield_pct)}%"
+    if _safe_str(value) == "<1":
+        return None, "<1%"
+    return None, "-"
+
+
 @router.get("/{task_id}/yield-report")
 def get_yield_report(task_id: int) -> JsonDict:
     """
@@ -1372,6 +1423,7 @@ def get_yield_report(task_id: int) -> JsonDict:
             product_name = _safe_str(row_dict.get("目标产物")) or "未命名产物"
             if product_name not in products_seen:
                 products_seen.append(product_name)
+            yield_pct, yield_display = _normalize_yield_value(row_dict.get("产率(%)"))
             entry = {
                 "product_name": product_name,
                 "product_rt": row_dict.get("产物保留时间(min)"),
@@ -1383,7 +1435,8 @@ def get_yield_report(task_id: int) -> JsonDict:
                 "ratio": row_dict.get("Ratio"),
                 "product_ecn": row_dict.get("产物ECN"),
                 "internal_ecn": row_dict.get("内标ECN"),
-                "yield_pct": row_dict.get("产率(%)"),
+                "yield_pct": yield_pct,
+                "yield_display": yield_display,
                 "match_method": row_dict.get("匹配方式"),
                 "confidence": row_dict.get("置信度"),
                 "nist_mw": row_dict.get("NIST匹配分子量(Da)"),

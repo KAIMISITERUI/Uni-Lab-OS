@@ -14,7 +14,7 @@ import TabIntegrationReport from '../components/taskHistory/TabIntegrationReport
 import TabYieldReport from '../components/taskHistory/TabYieldReport.vue'
 import TabAnalysisMethods from '../components/taskHistory/TabAnalysisMethods.vue'
 
-const FILE_KEYS = ['experiment_plan', 'task_report', 'gc_ms', 'uplc_qtof', 'hplc'] as const
+const FILE_KEYS = ['experiment_plan', 'task_report', 'gc_ms', 'uplc_qtof', 'hplc', 'yield_report'] as const
 type FileKey = (typeof FILE_KEYS)[number]
 
 const FILE_LABELS: Record<FileKey, string> = {
@@ -23,6 +23,7 @@ const FILE_LABELS: Record<FileKey, string> = {
   gc_ms: 'GC-MS',
   uplc_qtof: 'UPLC-QTOF',
   hplc: 'HPLC',
+  yield_report: '产率报告',
 }
 
 const items = ref<TaskHistoryItem[]>([])

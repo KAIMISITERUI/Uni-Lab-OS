@@ -114,11 +114,21 @@ function formatNumber(value: unknown, digits = 3): string {
   return value.toFixed(digits)
 }
 
-function formatYield(value: number | null): string {
-  if (value === null || Number.isNaN(value)) {
+function formatYieldDisplay(entry: YieldResultEntry | null | undefined): string {
+  if (entry === null || entry === undefined) {
     return '-'
   }
-  return `${value.toFixed(2)}%`
+  if (entry.yield_display !== undefined && entry.yield_display !== '') {
+    return entry.yield_display
+  }
+  const rawYieldPct = entry.yield_pct as unknown
+  if (typeof rawYieldPct === 'number' && Number.isNaN(rawYieldPct) === false) {
+    return `${rawYieldPct.toFixed(0)}%`
+  }
+  if (rawYieldPct === '<1') {
+    return '<1%'
+  }
+  return '-'
 }
 </script>
 
@@ -211,7 +221,7 @@ function formatYield(value: number | null): string {
                 }"
                 @click="selectCell(sampleEntry.sample, product, findEntry(sampleEntry, product))"
               >
-                <span class="yield-value">{{ formatYield(findEntry(sampleEntry, product)?.yield_pct ?? null) }}</span>
+                <span class="yield-value">{{ formatYieldDisplay(findEntry(sampleEntry, product)) }}</span>
               </td>
             </tr>
           </tbody>
@@ -231,7 +241,7 @@ function formatYield(value: number | null): string {
                 size="small"
                 :type="selectedDetail.entry.yield_pct === null ? 'info' : 'success'"
               >
-                {{ formatYield(selectedDetail.entry.yield_pct) }}
+                {{ formatYieldDisplay(selectedDetail.entry) }}
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="Ratio">{{ formatNumber(selectedDetail.entry.ratio, 4) }}</el-descriptions-item>

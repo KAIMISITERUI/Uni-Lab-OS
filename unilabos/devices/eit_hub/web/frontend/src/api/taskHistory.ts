@@ -282,6 +282,7 @@ export interface YieldResultEntry {
   product_ecn: number | null
   internal_ecn: number | null
   yield_pct: number | null
+  yield_display?: string
   match_method: string | null
   confidence: number | null
   nist_mw: number | null

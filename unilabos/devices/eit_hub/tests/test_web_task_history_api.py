@@ -163,6 +163,10 @@ def _write_yield_report(path: Path) -> None:
              4.149, 2.0, "Benzene, 1,2,4-trimethyl-", None,
              19.93, 9, None, None, None, None, None, None,
              "未检测到目标峰"],
+            ["725-3", "酯化产物", 8.7, 0.12, "Trace Compound",
+             4.149, 2.0, "Benzene, 1,2,4-trimethyl-", 0.06,
+             19.93, 9, "<1", "分子量命中", 0.7, 352, 352, 352,
+             "低于 1%"],
         ],
         "计算参数": [
             ["参数", "值"],
@@ -252,7 +256,7 @@ def api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestCli
     synthesis_root.mkdir(parents=True, exist_ok=True)
     analysis_root.mkdir(parents=True, exist_ok=True)
 
-    # 任务 725: 5 项中除 hplc 外全部存在
+    # 任务 725: 合成任务核心文件中除 hplc 外全部存在
     task_725 = synthesis_root / "725"
     task_725.mkdir()
     _write_experiment_plan(task_725 / "725_experiment_plan.xlsx", "EIT-胺合成-725")
@@ -328,12 +332,12 @@ def _find_file_presence(files: list, key: str) -> Dict[str, Any]:
     raise AssertionError(f"未找到 file_key={key}")
 
 
-def test_list_returns_tasks_with_5_file_presences(
+def test_list_returns_tasks_with_file_presences(
     api_client: tuple[TestClient, Path, Path],
 ) -> None:
     """
     功能:
-        验证列表端点返回任务且每项包含 5 项文件检查.
+        验证列表端点返回任务且每项包含合成任务文件与分析报告检查.
     """
     client, _synthesis_root, _analysis_root = api_client
     response = client.get("/api/task-history/list")
@@ -347,11 +351,12 @@ def test_list_returns_tasks_with_5_file_presences(
     assert item_725["task_id"] == 725
     assert item_725["task_name"] == "EIT-胺合成-725"
     assert item_725["status"] == "COMPLETED"
-    assert len(item_725["files"]) == 5
+    assert len(item_725["files"]) == 6
     keys = [entry["key"] for entry in item_725["files"]]
-    assert keys == ["experiment_plan", "task_report", "gc_ms", "uplc_qtof", "hplc"]
+    assert keys == ["experiment_plan", "task_report", "gc_ms", "uplc_qtof", "hplc", "yield_report"]
     assert _find_file_presence(item_725["files"], "experiment_plan")["exists"] is True
     assert _find_file_presence(item_725["files"], "hplc")["exists"] is False
+    assert _find_file_presence(item_725["files"], "yield_report")["exists"] is True
 
 
 def test_list_filters_by_query(api_client: tuple[TestClient, Path, Path]) -> None:
@@ -383,6 +388,22 @@ def test_hplc_always_missing(api_client: tuple[TestClient, Path, Path]) -> None:
     response = client.get("/api/task-history/list")
     for item in response.json()["items"]:
         assert _find_file_presence(item["files"], "hplc")["exists"] is False
+
+
+def test_yield_report_presence_marks_analysis_report(
+    api_client: tuple[TestClient, Path, Path],
+) -> None:
+    """
+    功能:
+        验证任务列表会标记分析站产率报告是否存在, 用于前端筛选和卡片展示.
+    """
+    client, _synthesis_root, _analysis_root = api_client
+    response = client.get("/api/task-history/list")
+    assert response.status_code == 200
+    items = {item["task_id"]: item for item in response.json()["items"]}
+    assert _find_file_presence(items[725]["files"], "yield_report")["exists"] is True
+    assert _find_file_presence(items[725]["files"], "yield_report")["filename"] == "725_yield_report.xlsx"
+    assert _find_file_presence(items[504]["files"], "yield_report")["exists"] is False
 
 
 def test_detail_includes_image_groups_and_lazy_ms_plots(
@@ -684,14 +705,20 @@ def test_yield_report_endpoint(api_client: tuple[TestClient, Path, Path]) -> Non
     assert config["products"][0]["name"] == "酯化产物"
     assert config["products"][0]["smiles"] == "O=C1CC[C@@]2C"
     assert body["products"] == ["酯化产物"]
-    assert len(body["samples"]) == 2
+    assert len(body["samples"]) == 3
     sample1 = body["samples"][0]
     assert sample1["sample"] == "725-1"
     assert sample1["results"][0]["yield_pct"] == 53.5
+    assert sample1["results"][0]["yield_display"] == "54%"
     sample2 = body["samples"][1]
     assert sample2["sample"] == "725-2"
     assert sample2["results"][0]["yield_pct"] is None
+    assert sample2["results"][0]["yield_display"] == "-"
     assert "未检测到" in sample2["results"][0]["remarks"]
+    sample3 = body["samples"][2]
+    assert sample3["sample"] == "725-3"
+    assert sample3["results"][0]["yield_pct"] is None
+    assert sample3["results"][0]["yield_display"] == "<1%"
 
 
 def test_yield_report_404_when_missing(api_client: tuple[TestClient, Path, Path]) -> None:
