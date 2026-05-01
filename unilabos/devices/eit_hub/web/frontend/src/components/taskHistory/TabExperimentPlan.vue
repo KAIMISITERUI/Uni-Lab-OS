@@ -35,6 +35,28 @@ const sectionGroups = computed<Array<{ title: string; items: ParamRowEntry[] }>>
   return groups
 })
 
+// 三列固定布局: 按 section 名称硬编码分配
+const COLUMN_LAYOUT: ReadonlyArray<ReadonlyArray<string>> = [
+  ['实验设定', '反应设定'],
+  ['称量设定', '加料设定', '稀释设定'],
+  ['内标设定', '闪滤设定'],
+]
+const ANALYSIS_SECTION_TITLE = '分析方法设定'
+
+const sectionColumns = computed<Array<Array<{ title: string; items: ParamRowEntry[] }>>>(() => {
+  const map = new Map(sectionGroups.value.map((g) => [g.title, g]))
+  return COLUMN_LAYOUT.map((titles) => {
+    return titles
+      .map((title) => map.get(title))
+      .filter((group): group is { title: string; items: ParamRowEntry[] } => group !== undefined)
+  })
+})
+
+// 分析方法设定单独占整行, 内部三个分析方法横向排列
+const analysisGroup = computed<{ title: string; items: ParamRowEntry[] } | null>(() => {
+  return sectionGroups.value.find((g) => g.title === ANALYSIS_SECTION_TITLE) ?? null
+})
+
 const headers = computed<string[]>(() => data.value?.headers ?? [])
 const rowsForTable = computed<unknown[][]>(() => (data.value?.rows ?? []) as unknown[][])
 
@@ -84,18 +106,36 @@ function formatValue(value: unknown): string {
     <el-empty v-if="errorMessage !== '' && data === null" :description="errorMessage" />
     <template v-else-if="data !== null">
       <section class="param-area">
-        <div v-for="group in sectionGroups" :key="group.title" class="param-group">
-          <h4 class="param-title">{{ group.title }}</h4>
-          <el-descriptions :column="2" border size="small" class="param-desc">
-            <el-descriptions-item
-              v-for="item in group.items"
-              :key="item.row + ':' + item.name"
-              :label="item.name"
-            >
-              {{ formatValue(item.value) }}
-            </el-descriptions-item>
-          </el-descriptions>
+        <div
+          v-for="(column, columnIndex) in sectionColumns"
+          :key="columnIndex"
+          class="param-column"
+        >
+          <div v-for="group in column" :key="group.title" class="param-group">
+            <h4 class="param-title">{{ group.title }}</h4>
+            <el-descriptions :column="1" border size="small" class="param-desc">
+              <el-descriptions-item
+                v-for="item in group.items"
+                :key="item.row + ':' + item.name"
+                :label="item.name"
+              >
+                {{ formatValue(item.value) }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
         </div>
+      </section>
+      <section v-if="analysisGroup !== null" class="param-group analysis-group">
+        <h4 class="param-title">{{ analysisGroup.title }}</h4>
+        <el-descriptions :column="3" border size="small" class="param-desc analysis-desc">
+          <el-descriptions-item
+            v-for="item in analysisGroup.items"
+            :key="item.row + ':' + item.name"
+            :label="item.name"
+          >
+            {{ formatValue(item.value) }}
+          </el-descriptions-item>
+        </el-descriptions>
       </section>
       <section class="experiment-area">
         <h4 class="param-title">实验编号 × 反应物</h4>
@@ -123,8 +163,16 @@ function formatValue(value: unknown): string {
 
 .param-area {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
+  align-items: start;
+}
+
+.param-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
 }
 
 .param-group {
@@ -142,7 +190,8 @@ function formatValue(value: unknown): string {
 }
 
 .param-desc :deep(.el-descriptions__label) {
-  width: 140px;
+  width: 160px;
+  white-space: nowrap;
 }
 
 .experiment-area {
