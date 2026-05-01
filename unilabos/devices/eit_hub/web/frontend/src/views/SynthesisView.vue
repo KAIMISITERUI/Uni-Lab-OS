@@ -1297,17 +1297,20 @@ onBeforeUnmount(stopDashboardPolling)
 
 .w1-control-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 54px;
-  gap: 20px;
+  grid-template-columns: max-content 54px;
+  justify-content: end;
+  gap: 15px;
   align-items: center;
   min-width: 0;
 }
 
 .w1-position-name {
+  justify-self: end;
   color: #34445d;
   font-size: 14px;
   font-weight: 700;
   line-height: 1.25;
+  text-align: right;
   white-space: normal;
 }
 
