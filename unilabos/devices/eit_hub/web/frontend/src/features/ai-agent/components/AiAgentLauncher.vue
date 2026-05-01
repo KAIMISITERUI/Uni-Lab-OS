@@ -12,6 +12,7 @@ import {
   Loading,
   Plus,
   Refresh,
+  Top,
 } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -84,12 +85,24 @@ interface SidePanelResizeInteraction {
   startWidth: number
 }
 
+interface FabDragInteraction {
+  pointerId: number
+  startX: number
+  startY: number
+  startLeft: number
+  startTop: number
+  moved: boolean
+}
+
 const VIEWPORT_MARGIN = 16
 const DEFAULT_DRAWER_WIDTH = 400
 const DEFAULT_DRAWER_HEIGHT = 640
 const DEFAULT_SIDE_PANEL_WIDTH = 420
 const MIN_SIDE_PANEL_WIDTH = 360
 const MAX_SIDE_PANEL_WIDTH = 760
+const FAB_SIZE = 56
+const FAB_DEFAULT_OFFSET = 24
+const FAB_DRAG_THRESHOLD = 4
 
 const drawerRect = reactive<DrawerRect>({
   left: 0,
@@ -98,9 +111,17 @@ const drawerRect = reactive<DrawerRect>({
   height: DEFAULT_DRAWER_HEIGHT,
 })
 const sidePanelWidth = ref(DEFAULT_SIDE_PANEL_WIDTH)
+const fabPosition = reactive({
+  left: 0,
+  top: 0,
+})
+const fabReady = ref(false)
+const fabDragging = ref(false)
 
 let activeInteraction: DrawerInteraction | null = null
 let activeSidePanelResize: SidePanelResizeInteraction | null = null
+let activeFabDrag: FabDragInteraction | null = null
+let suppressNextFabClick = false
 let desktopQuery: MediaQueryList | null = null
 
 marked.setOptions({ gfm: true, breaks: true })
@@ -146,6 +167,14 @@ const sidePanelStyle = computed(() => {
   return {
     width: `${sidePanelWidth.value}px`,
     visibility: 'visible',
+  }
+})
+
+const fabStyle = computed(() => {
+  return {
+    left: `${fabPosition.left}px`,
+    top: `${fabPosition.top}px`,
+    visibility: fabReady.value === true ? 'visible' : 'hidden',
   }
 })
 
@@ -207,6 +236,31 @@ function applySidePanelWidth(width: number): void {
   sidePanelWidth.value = normalizeSidePanelWidth(width)
 }
 
+function normalizeFabPosition(left: number, top: number): { left: number; top: number } {
+  return {
+    left: clamp(left, VIEWPORT_MARGIN, getViewportWidth() - FAB_SIZE - VIEWPORT_MARGIN),
+    top: clamp(top, VIEWPORT_MARGIN, getViewportHeight() - FAB_SIZE - VIEWPORT_MARGIN),
+  }
+}
+
+function applyFabPosition(left: number, top: number): void {
+  const normalized = normalizeFabPosition(left, top)
+  fabPosition.left = normalized.left
+  fabPosition.top = normalized.top
+}
+
+function resetFabPositionToDefault(): void {
+  applyFabPosition(
+    getViewportWidth() - FAB_SIZE - FAB_DEFAULT_OFFSET,
+    getViewportHeight() - FAB_SIZE - FAB_DEFAULT_OFFSET,
+  )
+}
+
+function initFabPosition(): void {
+  resetFabPositionToDefault()
+  fabReady.value = true
+}
+
 function normalizeDrawerRect(rect: DrawerRect): DrawerRect {
   const width = clamp(rect.width, getMinDrawerWidth(), getMaxDrawerWidth())
   const height = clamp(rect.height, getMinDrawerHeight(), getMaxDrawerHeight())
@@ -239,6 +293,7 @@ function resetDrawerRectToDefault(): void {
 }
 
 function onViewportResize(): void {
+  applyFabPosition(fabPosition.left, fabPosition.top)
   if (isSidePanel.value === true) {
     applySidePanelWidth(sidePanelWidth.value)
     return
@@ -270,6 +325,74 @@ function stopSidePanelResize(): void {
   window.removeEventListener('pointercancel', onSidePanelResizeEnd)
   activeSidePanelResize = null
   drawerInteracting.value = false
+}
+
+function stopFabDrag(): void {
+  if (activeFabDrag === null) {
+    return
+  }
+  window.removeEventListener('pointermove', onFabPointerMove)
+  window.removeEventListener('pointerup', onFabPointerUp)
+  window.removeEventListener('pointercancel', onFabPointerUp)
+  activeFabDrag = null
+  fabDragging.value = false
+}
+
+function onFabPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) {
+    return
+  }
+  event.preventDefault()
+  activeFabDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    startLeft: fabPosition.left,
+    startTop: fabPosition.top,
+    moved: false,
+  }
+  fabDragging.value = true
+  window.addEventListener('pointermove', onFabPointerMove)
+  window.addEventListener('pointerup', onFabPointerUp)
+  window.addEventListener('pointercancel', onFabPointerUp)
+}
+
+function onFabPointerMove(event: PointerEvent): void {
+  if (activeFabDrag === null || event.pointerId !== activeFabDrag.pointerId) {
+    return
+  }
+  event.preventDefault()
+  const deltaX = event.clientX - activeFabDrag.startX
+  const deltaY = event.clientY - activeFabDrag.startY
+  if (Math.abs(deltaX) > FAB_DRAG_THRESHOLD || Math.abs(deltaY) > FAB_DRAG_THRESHOLD) {
+    activeFabDrag.moved = true
+  }
+  applyFabPosition(activeFabDrag.startLeft + deltaX, activeFabDrag.startTop + deltaY)
+}
+
+function onFabPointerUp(event: PointerEvent): void {
+  if (activeFabDrag === null || event.pointerId !== activeFabDrag.pointerId) {
+    return
+  }
+  suppressNextFabClick = activeFabDrag.moved
+  if (activeFabDrag.moved === true) {
+    window.setTimeout(() => {
+      suppressNextFabClick = false
+    }, 0)
+  } else {
+    applyFabPosition(activeFabDrag.startLeft, activeFabDrag.startTop)
+  }
+  stopFabDrag()
+}
+
+function onFabClick(event: MouseEvent): void {
+  if (suppressNextFabClick === true) {
+    suppressNextFabClick = false
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+  ai.open()
 }
 
 function startDrawerInteraction(
@@ -488,6 +611,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
 }
 
 onMounted(() => {
+  initFabPosition()
   desktopQuery = window.matchMedia(DESKTOP_QUERY)
   syncDesktopLayout(desktopQuery.matches)
   if (typeof desktopQuery.addEventListener === 'function') {
@@ -502,6 +626,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopFabDrag()
   stopDrawerInteraction()
   stopSidePanelResize()
   if (desktopQuery !== null) {
@@ -519,6 +644,14 @@ async function onSend() {
   const text = inputText.value
   inputText.value = ''
   await ai.sendMessage(text)
+}
+
+function onPrimaryInputAction(): void {
+  if (ai.state.sending === true) {
+    ai.stopStreaming()
+    return
+  }
+  void onSend()
 }
 
 function onKeyDown(event: KeyboardEvent) {
@@ -654,9 +787,12 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
     <button
       v-if="ai.state.open === false"
       class="ai-fab"
+      :class="{ 'ai-fab-dragging': fabDragging === true }"
+      :style="fabStyle"
       type="button"
       aria-label="打开 AI 助手"
-      @click="ai.open"
+      @pointerdown="onFabPointerDown"
+      @click="onFabClick"
     >
       <el-icon><ChatDotRound /></el-icon>
     </button>
@@ -754,7 +890,6 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
         >
           <div class="ai-session-menu-row">
             <span class="ai-session-menu-name">{{ item.title }}</span>
-            <span class="ai-session-menu-count">{{ item.user_turns }} 轮</span>
           </div>
           <div class="ai-session-menu-time">{{ formatTime(item.last_at) }}</div>
         </div>
@@ -885,12 +1020,14 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
               </button>
             </div>
             <el-button
+              class="ai-send-button"
               type="primary"
-              :loading="ai.state.sending"
-              :disabled="ai.state.pending !== null || inputText.trim() === ''"
-              @click="onSend"
+              :disabled="ai.state.sending === false && (ai.state.pending !== null || inputText.trim() === '')"
+              :aria-label="ai.state.sending === true ? '停止生成' : '发送消息'"
+              @click="onPrimaryInputAction"
             >
-              发送
+              <span v-if="ai.state.sending === true" class="ai-stop-square" aria-hidden="true"></span>
+              <el-icon v-else><Top /></el-icon>
             </el-button>
           </div>
         </div>
@@ -933,8 +1070,6 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 /* ===== 浮动按钮 ===== */
 .ai-fab {
   position: absolute;
-  right: 24px;
-  bottom: 24px;
   width: 56px;
   height: 56px;
   display: flex;
@@ -946,8 +1081,10 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   border: 0;
   border-radius: 28px;
   box-shadow: 0 12px 28px rgba(18, 50, 90, 0.32);
-  cursor: pointer;
+  cursor: grab;
   transition: transform 0.18s ease, background 0.18s ease;
+  touch-action: none;
+  user-select: none;
 }
 
 .ai-fab:hover {
@@ -957,6 +1094,11 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 
 .ai-fab:active {
   transform: translateY(0);
+}
+
+.ai-fab-dragging {
+  cursor: grabbing;
+  transition: background 0.18s ease;
 }
 
 /* ===== 抽屉 ===== */
@@ -1096,8 +1238,9 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 
 .ai-session-menu-row {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
+  min-width: 0;
 }
 
 .ai-session-menu-name {
@@ -1107,12 +1250,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 240px;
-}
-
-.ai-session-menu-count {
-  font-size: 11px;
-  color: #66758a;
+  max-width: 100%;
 }
 
 .ai-session-menu-time {
@@ -1188,7 +1326,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 }
 
 .ai-msg-bubble {
-  max-width: 320px;
+  max-width: min(720px, 82%);
   padding: 8px 12px;
   border-radius: 10px;
   font-size: 13px;
@@ -1203,6 +1341,9 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 }
 
 .ai-msg-assistant .ai-msg-bubble {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   background: #ffffff;
   color: #172033;
   border: 1px solid #dce5f0;
@@ -1263,6 +1404,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 .ai-tool-card {
   width: 100%;
   max-width: 100%;
+  box-sizing: border-box;
   padding: 8px 10px;
   background: #ffffff;
   border: 1px solid #dce5f0;
@@ -1426,6 +1568,21 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+.ai-send-button {
+  width: 34px;
+  min-width: 34px;
+  height: 32px;
+  padding: 0;
+}
+
+.ai-stop-square {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background: currentColor;
+  border-radius: 2px;
 }
 
 .ai-model-switch {
@@ -1625,7 +1782,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
     white-space: nowrap;
   }
 
-  .ai-drawer-side .ai-msg-bubble {
+  .ai-drawer-side .ai-msg-user .ai-msg-bubble {
     max-width: 340px;
   }
 }

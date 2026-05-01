@@ -92,6 +92,7 @@ const state = reactive<AiAgentState>({
 
 let _localCounter = -1
 let _activeStream: StreamHandle | null = null
+let _streamStoppedByUser = false
 
 function _nextLocalId(): number {
   _localCounter -= 1
@@ -107,6 +108,13 @@ function _abortActiveStream(): void {
     }
     _activeStream = null
   }
+}
+
+function _handleStreamError(err: unknown): void {
+  if (_streamStoppedByUser === true) {
+    return
+  }
+  state.error = (err as Error).message
 }
 
 function _toChatRow(message: AiMessage): ChatMessageRow {
@@ -341,6 +349,7 @@ export function useAiAgent() {
     loadSession,
     openWith,
     sendMessage,
+    stopStreaming,
     confirmPending,
     rejectPending,
     refreshRecentSessions,
@@ -437,15 +446,28 @@ async function sendMessage(content: string): Promise<void> {
     })
     const handle = await streamAiSendMessage(sessionId, text)
     _activeStream = handle
+    if (_streamStoppedByUser === true) {
+      _abortActiveStream()
+      return
+    }
     await _consumeStream(handle)
   } catch (err) {
-    state.error = (err as Error).message
+    _handleStreamError(err)
   } finally {
     state.sending = false
+    _streamStoppedByUser = false
     // 流结束后从后端拉一次, 确保前端 server_id 与 token 用量等字段对齐
     await _refreshFromServer()
     await refreshRecentSessions()
   }
+}
+
+function stopStreaming(): void {
+  if (state.sending === false) {
+    return
+  }
+  _streamStoppedByUser = true
+  _abortActiveStream()
 }
 
 async function confirmPending(): Promise<void> {
@@ -466,11 +488,16 @@ async function confirmPending(): Promise<void> {
       action: 'confirm',
     })
     _activeStream = handle
+    if (_streamStoppedByUser === true) {
+      _abortActiveStream()
+      return
+    }
     await _consumeStream(handle)
   } catch (err) {
-    state.error = (err as Error).message
+    _handleStreamError(err)
   } finally {
     state.sending = false
+    _streamStoppedByUser = false
     await _refreshFromServer()
     await refreshRecentSessions()
   }
@@ -495,11 +522,16 @@ async function rejectPending(reason: string): Promise<void> {
       reject_reason: reason,
     })
     _activeStream = handle
+    if (_streamStoppedByUser === true) {
+      _abortActiveStream()
+      return
+    }
     await _consumeStream(handle)
   } catch (err) {
-    state.error = (err as Error).message
+    _handleStreamError(err)
   } finally {
     state.sending = false
+    _streamStoppedByUser = false
     await _refreshFromServer()
     await refreshRecentSessions()
   }

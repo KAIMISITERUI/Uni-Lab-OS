@@ -7,9 +7,11 @@ import {
   Delete,
   EditPen,
   Loading,
+  MoreFilled,
   Plus,
   Search,
   Setting,
+  Top,
 } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -165,6 +167,18 @@ async function onDelete(session: AiSessionSummary) {
   }
 }
 
+function onSessionMenuCommand(command: string | number | object, session: AiSessionSummary): void {
+  const action = String(command)
+  if (action === 'rename') {
+    void onRename(session)
+    return
+  }
+  if (action === 'delete') {
+    void onDelete(session)
+    return
+  }
+}
+
 async function onContinueInLauncher(sessionId: string) {
   if (ai.state.sending === true) {
     ElMessage.warning('模型生成中, 请稍后切换会话.')
@@ -215,6 +229,14 @@ async function onSendInHistory(): Promise<void> {
   await ai.sendMessage(text)
   await loadSessions()
   await scrollDetailToBottom()
+}
+
+function onPrimaryHistoryInputAction(): void {
+  if (ai.state.sending === true) {
+    ai.stopStreaming()
+    return
+  }
+  void onSendInHistory()
 }
 
 function onHistoryKeyDown(event: KeyboardEvent): void {
@@ -458,13 +480,28 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
           >
             <div class="ai-history-item-row">
               <span class="ai-history-item-name">{{ session.title }}</span>
-              <span class="ai-history-item-count">{{ session.user_turns }} 轮 · {{ session.message_count }} 条</span>
+              <el-dropdown
+                trigger="click"
+                placement="bottom-end"
+                @command="(command) => onSessionMenuCommand(command, session)"
+              >
+                <button
+                  type="button"
+                  class="ai-history-item-menu"
+                  aria-label="会话操作"
+                  @click.stop
+                >
+                  <el-icon><MoreFilled /></el-icon>
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="rename" :icon="EditPen">重命名</el-dropdown-item>
+                    <el-dropdown-item command="delete" :icon="Delete">删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
             <div class="ai-history-item-time">{{ formatTime(session.last_at) }}</div>
-            <div class="ai-history-item-actions" @click.stop>
-              <el-button text size="small" :icon="EditPen" @click="onRename(session)">重命名</el-button>
-              <el-button text size="small" :icon="Delete" type="danger" @click="onDelete(session)">删除</el-button>
-            </div>
           </div>
           <el-pagination
             v-if="total > pageSize"
@@ -596,12 +633,14 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
                   <span v-else>支持 markdown · 工具调用自动展示</span>
                 </span>
                 <el-button
+                  class="ai-history-send-button"
                   type="primary"
-                  :loading="ai.state.sending"
-                  :disabled="ai.state.pending !== null || historyInputText.trim() === ''"
-                  @click="onSendInHistory"
+                  :disabled="ai.state.sending === false && (ai.state.pending !== null || historyInputText.trim() === '')"
+                  :aria-label="ai.state.sending === true ? '停止生成' : '发送消息'"
+                  @click="onPrimaryHistoryInputAction"
                 >
-                  发送
+                  <span v-if="ai.state.sending === true" class="ai-stop-square" aria-hidden="true"></span>
+                  <el-icon v-else><Top /></el-icon>
                 </el-button>
               </div>
             </footer>
@@ -771,33 +810,43 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-bottom: 4px;
 }
 
 .ai-history-item-name {
+  flex: 1;
+  min-width: 0;
   font-size: 14px;
   color: #12325a;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 220px;
-}
-
-.ai-history-item-count {
-  font-size: 11px;
-  color: #66758a;
 }
 
 .ai-history-item-time {
   font-size: 11px;
   color: #94a2b8;
-  margin-bottom: 4px;
 }
 
-.ai-history-item-actions {
-  display: flex;
-  gap: 4px;
+.ai-history-item-menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #66758a;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ai-history-item-menu:hover {
+  color: #12325a;
+  background: #eaf3ff;
 }
 
 .ai-history-pagination {
@@ -849,6 +898,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 
 .ai-msg {
   display: flex;
+  width: 100%;
 }
 
 .ai-msg-user {
@@ -878,6 +928,9 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 }
 
 .ai-msg-assistant .ai-msg-bubble {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   background: #ffffff;
   color: #172033;
   border: 1px solid #dce5f0;
@@ -940,6 +993,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 
 .ai-tool-card {
   width: 100%;
+  box-sizing: border-box;
   padding: 10px 12px;
   background: #ffffff;
   border: 1px solid #dce5f0;
@@ -1072,6 +1126,21 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.ai-history-send-button {
+  width: 34px;
+  min-width: 34px;
+  height: 32px;
+  padding: 0;
+}
+
+.ai-stop-square {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background: currentColor;
+  border-radius: 2px;
 }
 
 /* ===== 配置 dialog ===== */
