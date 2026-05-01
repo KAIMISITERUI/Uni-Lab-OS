@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // AI 助手浮动入口: 右下角圆形按钮 + 抽屉聊天面板.
 // 跨路由不卸载, v-show 切换以保留输入草稿和滚动位置.
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowDown,
@@ -19,6 +19,35 @@ import { AI_AGENT_MODEL_OPTIONS, type AiAgentModelId } from '../types'
 import { useAiAgent } from '../state/useAiAgent'
 
 const ai = useAiAgent()
+
+// 图钉图标组件: 钉住时显示填充直立图钉, 未钉住时显示描边图钉, 与 el-icon 兼容
+const PinIcon = defineComponent({
+  name: 'PinIcon',
+  props: {
+    pinned: { type: Boolean, default: false },
+  },
+  setup(props) {
+    return () =>
+      h(
+        'svg',
+        {
+          viewBox: '0 0 24 24',
+          fill: 'currentColor',
+          xmlns: 'http://www.w3.org/2000/svg',
+          'aria-hidden': 'true',
+        },
+        [
+          h('path', {
+            d:
+              props.pinned === true
+                ? 'M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z'
+                : 'M14 4v5c0 1.12.37 2.16 1 3H9c.65-.86 1-1.9 1-3V4h4m3-2H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3V4h1c.55 0 1-.45 1-1s-.45-1-1-1z',
+          }),
+        ],
+      )
+  },
+})
+
 const inputText = ref('')
 const sessionMenuOpen = ref(false)
 const messageScroll = ref<HTMLDivElement | null>(null)
@@ -431,6 +460,33 @@ function onDesktopQueryChange(event: MediaQueryListEvent): void {
   syncDesktopLayout(event.matches)
 }
 
+// 点击助手以外区域时自动隐藏面板; 钉住状态下保持打开
+// 用 pointerdown (capture) 是为了在 Element Plus 内部 popper 调用 stopPropagation 之前判断归属
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (ai.state.open === false || ai.state.pinned === true) {
+    return
+  }
+  const target = event.target
+  if (target instanceof Element === false) {
+    return
+  }
+  // 命中助手自身, 不隐藏
+  if (target.closest('.ai-launcher-root') !== null) {
+    return
+  }
+  // Element Plus 浮层 (tooltip / 下拉 / MessageBox / Message / Overlay) 挂载在 body 上,
+  // 但这些是助手内部按钮触发的 UI, 点击不应触发隐藏
+  if (
+    target.closest('.el-popper') !== null ||
+    target.closest('.el-overlay') !== null ||
+    target.closest('.el-message-box') !== null ||
+    target.closest('.el-message') !== null
+  ) {
+    return
+  }
+  ai.close()
+}
+
 onMounted(() => {
   desktopQuery = window.matchMedia(DESKTOP_QUERY)
   syncDesktopLayout(desktopQuery.matches)
@@ -440,6 +496,7 @@ onMounted(() => {
     desktopQuery.addListener(onDesktopQueryChange)
   }
   window.addEventListener('resize', onViewportResize)
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
   void ai.refreshRecentSessions()
   void ai.refreshConfig()
 })
@@ -455,6 +512,7 @@ onBeforeUnmount(() => {
     }
   }
   window.removeEventListener('resize', onViewportResize)
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
 })
 
 async function onSend() {
@@ -625,6 +683,20 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
           </div>
         </div>
         <div class="ai-header-actions" @pointerdown.stop>
+          <el-tooltip
+            :content="ai.state.pinned === true ? '取消固定 (允许点击外部隐藏)' : '固定面板 (始终悬浮)'"
+            placement="top"
+          >
+            <button
+              type="button"
+              class="ai-icon-btn ai-pin-btn"
+              :class="{ 'ai-pin-btn-active': ai.state.pinned === true }"
+              :aria-pressed="ai.state.pinned === true"
+              @click="ai.togglePin"
+            >
+              <el-icon><PinIcon :pinned="ai.state.pinned" /></el-icon>
+            </button>
+          </el-tooltip>
           <el-tooltip content="切换会话" placement="top">
             <button
               type="button"
@@ -971,6 +1043,17 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 .ai-icon-btn-close:hover {
   color: #b3361d;
   background: #fdeeea;
+}
+
+/* 图钉激活态: 颜色加深 + 浅色底色, 与悬停态区分 */
+.ai-pin-btn-active {
+  color: #1a5fa8;
+  background: rgba(26, 95, 168, 0.12);
+}
+
+.ai-pin-btn-active:hover {
+  color: #12325a;
+  background: rgba(26, 95, 168, 0.2);
 }
 
 /* ===== 会话切换面板 ===== */

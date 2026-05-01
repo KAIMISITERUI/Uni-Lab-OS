@@ -41,6 +41,7 @@ export interface ChatMessageRow {
 
 interface AiAgentState {
   open: boolean
+  pinned: boolean
   sessionId: string | null
   messages: ChatMessageRow[]
   sending: boolean
@@ -59,8 +60,24 @@ interface AiAgentState {
   modelSaving: boolean
 }
 
+// 图钉状态持久化键名, 跨刷新保留用户的"始终悬浮"偏好
+const PIN_STORAGE_KEY = 'eit-ai-agent-pinned'
+
+function _readPinned(): boolean {
+  // 隐私模式 / SSR 下 localStorage 可能不可用, 安全降级为未钉住
+  if (typeof window === 'undefined') {
+    return false
+  }
+  try {
+    return window.localStorage.getItem(PIN_STORAGE_KEY) === '1'
+  } catch (_err) {
+    return false
+  }
+}
+
 const state = reactive<AiAgentState>({
   open: false,
+  pinned: _readPinned(),
   sessionId: null,
   messages: [],
   sending: false,
@@ -318,6 +335,8 @@ export function useAiAgent() {
     open,
     close,
     toggle,
+    setPinned,
+    togglePin,
     newSession,
     loadSession,
     openWith,
@@ -344,6 +363,22 @@ function close(): void {
 
 function toggle(): void {
   state.open = state.open === false
+}
+
+function setPinned(value: boolean): void {
+  state.pinned = value
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.setItem(PIN_STORAGE_KEY, value === true ? '1' : '0')
+  } catch (_err) {
+    // 隐私模式下 localStorage 写入失败, 内存状态仍然有效
+  }
+}
+
+function togglePin(): void {
+  setPinned(state.pinned === false)
 }
 
 async function newSession(): Promise<void> {
