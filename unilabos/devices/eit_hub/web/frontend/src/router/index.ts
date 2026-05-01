@@ -78,6 +78,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '运维管理' },
   },
   {
+    path: '/ai-agent-history',
+    name: 'ai-agent-history',
+    component: () => import('../features/ai-agent').then((module) => module.AiAgentHistoryView),
+    meta: { title: 'AI 助手' },
+  },
+  {
     path: '/label-printer',
     name: 'label-printer',
     component: () => import('../views/LabelPrinterView.vue'),

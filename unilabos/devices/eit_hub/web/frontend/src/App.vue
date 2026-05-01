@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   ArrowDown,
+  ChatDotRound,
   Connection,
   Document,
   EditPen,
@@ -16,6 +17,7 @@ import {
   VideoCamera,
 } from '@element-plus/icons-vue'
 import { setApiToken } from './api/chemicals'
+import { AiAgentLauncher } from './features/ai-agent'
 
 const route = useRoute()
 
@@ -217,6 +219,10 @@ function saveToken() {
           <el-icon><Tools /></el-icon>
           <span>运维管理</span>
         </RouterLink>
+        <RouterLink class="nav-link" to="/ai-agent-history">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>AI 助手</span>
+        </RouterLink>
         <RouterLink class="nav-link" to="/label-printer">
           <el-icon><Printer /></el-icon>
           <span>标签打印机</span>
@@ -258,5 +264,8 @@ function saveToken() {
         <el-button type="primary" @click="saveToken">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- AI 助手浮动入口, 挂在 .app-shell 末尾以脱离 KeepAlive RouterView, 跨路由保持状态 -->
+    <AiAgentLauncher />
   </div>
 </template>

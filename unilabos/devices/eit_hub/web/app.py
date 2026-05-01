@@ -27,6 +27,7 @@ from .deps import (
     get_charge_loop_service,
     get_chassis_status_sampler,
 )
+from .ai_agent import router as ai_agent_router
 from .routers import (
     agv,
     analysis,
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(label_printer.router)
     app.include_router(maintenance.router)
     app.include_router(task_history.router)
+    app.include_router(ai_agent_router)
     app.include_router(chemical_chemicals.router)
     app.include_router(chemical_lookup.router)
     app.include_router(chemical_prepare.router)
