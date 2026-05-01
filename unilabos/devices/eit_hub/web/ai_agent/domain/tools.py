@@ -206,7 +206,7 @@ def _handle_search_chemical(args: JsonDict) -> JsonDict:
     返回:
         Dict, 含 items 列表与 total.
     """
-    from unilabos.devices.eit_chemical_manager.api.manager import ChemicalManager
+    from unilabos.devices.eit_chemical_manager.manager.chemical_manager import ChemicalManager
 
     keyword = str(args.get("keyword") or "").strip()
     if keyword == "":
