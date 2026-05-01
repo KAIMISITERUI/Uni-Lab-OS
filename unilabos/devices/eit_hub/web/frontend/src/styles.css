@@ -187,9 +187,11 @@ select {
 }
 
 .nav-sub {
+  --nav-icon-size: 16px;
   margin-left: 14px;
   min-height: 36px;
-  padding-left: 40px;
+  gap: 8px;
+  padding-left: 18px;
   font-size: 13px;
 }
 

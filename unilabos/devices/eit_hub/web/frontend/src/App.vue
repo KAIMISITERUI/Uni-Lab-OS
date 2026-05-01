@@ -8,9 +8,12 @@ import {
   Document,
   EditPen,
   Files,
+  MapLocation,
   Operation,
   Printer,
+  TakeawayBox,
   Tools,
+  VideoCamera,
 } from '@element-plus/icons-vue'
 import { setApiToken } from './api/chemicals'
 
@@ -127,6 +130,7 @@ function saveToken() {
         </div>
         <div v-if="synthesisMenuExpanded" class="nav-sub-list">
           <RouterLink class="nav-link nav-sub" to="/synthesis/cameras">
+            <el-icon><VideoCamera /></el-icon>
             <span>现场监控</span>
           </RouterLink>
         </div>
@@ -185,9 +189,11 @@ function saveToken() {
         </div>
         <div v-if="agvMenuExpanded" class="nav-sub-list">
           <RouterLink class="nav-link nav-sub" to="/agv/positions">
+            <el-icon><MapLocation /></el-icon>
             <span>点位管理</span>
           </RouterLink>
           <RouterLink class="nav-link nav-sub" to="/agv/shelf">
+            <el-icon><TakeawayBox /></el-icon>
             <span>货架状态</span>
           </RouterLink>
         </div>
