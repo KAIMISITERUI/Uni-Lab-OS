@@ -1277,9 +1277,9 @@ def charging_check_once(
 ) -> JsonDict:
     """
     功能:
-        手动执行一次充电检查 (Job 任务), 不启动循环.
+        手动执行一次 CP6 原地充电检查 (Job 任务), 不启动循环.
     参数:
-        request: ChargingStartRequest, 复用启动结构, 仅使用 low_battery_pct.
+        request: ChargingStartRequest, 复用启动结构, 使用低电与满电阈值.
     返回:
         Dict[str, Any], Job ID.
     """
@@ -1287,18 +1287,16 @@ def charging_check_once(
 
     def _target(log: Callable[[str], None]) -> Any:
         log(
-            f"执行单次充电检查, 低电阈值={request.low_battery_pct}%, 满电阈值={request.full_battery_pct}%."
+            f"执行单次 CP6 原地充电检查, 低电阈值={request.low_battery_pct}%, 满电阈值={request.full_battery_pct}%."
         )
-        # 充电检查内部可能触发导航+回零, 持锁执行
-        with context.arm_lock:
-            result = context.get_or_create().auto_charge_pp5_cp6_check(
-                low_battery_pct=request.low_battery_pct,
-                full_battery_pct=request.full_battery_pct,
-            )
+        result = context.get_or_create().auto_charge_cp6_check(
+            low_battery_pct=request.low_battery_pct,
+            full_battery_pct=request.full_battery_pct,
+        )
         log(f"检查完成, 结果={result}.")
         return result
 
-    return _start_job("单次充电检查", _target)
+    return _start_job("单次 CP6 充电检查", _target)
 
 
 @router.get("/battery/history")

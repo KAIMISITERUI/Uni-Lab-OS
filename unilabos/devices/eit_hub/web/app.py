@@ -98,6 +98,7 @@ def create_app() -> FastAPI:
         # 实时状态采样器为 /agv/status 路由提供数据源, 必须在应用启动即拉起
         get_chassis_status_sampler().start()
         get_arm_status_sampler().start()
+        get_charge_loop_service().start_auto_start_monitor()
 
     @app.on_event("shutdown")
     def _on_shutdown() -> None:
@@ -108,7 +109,8 @@ def create_app() -> FastAPI:
             None.
         """
         try:
-            get_charge_loop_service().stop()
+            get_charge_loop_service().stop_auto_start_monitor()
+            get_charge_loop_service().stop(disable_auto_start=False)
         except Exception as exc:
             logger.warning("关闭充电循环失败: %s", exc)
         try:

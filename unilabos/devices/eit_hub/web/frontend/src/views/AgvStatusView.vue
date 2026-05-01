@@ -802,10 +802,6 @@ function handleGripperAction() {
 // ==================== 导航与转运 ====================
 
 async function handleStationSelect(stationId: string) {
-  if (isCharging.value === true) {
-    ElMessage.warning('充电循环运行中, 请先停止后再手动导航')
-    return
-  }
   try {
     await ElMessageBox.confirm(`确认导航到 ${stationId} ?`, '导航确认', {
       confirmButtonText: '确认',
@@ -1125,7 +1121,6 @@ onBeforeUnmount(() => {
         <div class="panel-title">
           <h3>工站地图</h3>
           <div class="panel-title-actions">
-            <el-tag v-if="isCharging" type="warning">循环运行中, 手动导航不可用</el-tag>
             <div class="navigation-actions">
               <el-button
                 size="small"
@@ -1173,7 +1168,6 @@ onBeforeUnmount(() => {
         <AgvMapView
           :stations="displayStations"
           :current-station-id="currentStationId"
-          :disabled="isCharging"
           :editable="mapEditing"
           @select="handleStationSelect"
           @update:stations="handleMapDraftUpdate"

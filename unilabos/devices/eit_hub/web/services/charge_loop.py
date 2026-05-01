@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 功能:
-    AGV 充电循环常驻服务. 包装 AGVController.auto_charge_pp5_cp6_check(),
+    AGV 充电循环常驻服务. 包装 AGVController.auto_charge_cp6_check(),
     在独立线程中周期执行, 不占用 JobManager 的独占槽位, 方便与其他 AGV 操作并发调度.
 """
 
@@ -19,6 +19,7 @@ from .agv_context import AgvContext
 logger = logging.getLogger("EITHubChargeLoop")
 
 CHARGE_LOOP_CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "charge_loop_config.json"
+AUTO_START_CHECK_INTERVAL_S = 5.0
 
 DEFAULT_CHARGE_LOOP_CONFIG: Dict[str, int] = {
     "interval_minutes": 30,
@@ -81,13 +82,22 @@ class ChargeLoopService:
         充电循环服务, 运行时以独立线程周期执行一次充电检查.
     """
 
-    def __init__(self, context: AgvContext, config_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        context: AgvContext,
+        config_path: Optional[Path] = None,
+        auto_start_check_interval_s: float = AUTO_START_CHECK_INTERVAL_S,
+    ) -> None:
         self._context = context
         self._config_path = config_path if config_path is not None else CHARGE_LOOP_CONFIG_PATH
         self._thread: Optional[threading.Thread] = None
+        self._auto_start_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._auto_start_stop_event = threading.Event()
         self._lock = threading.Lock()
         self._running = False
+        self._auto_start_disabled = False
+        self._auto_start_check_interval_s = max(0.01, float(auto_start_check_interval_s))
         self._config: Dict[str, Any] = self._load_config()
         self._last_action: Optional[Dict[str, Any]] = None
 
@@ -124,6 +134,7 @@ class ChargeLoopService:
         with self._lock:
             if self._running is True:
                 raise RuntimeError("充电循环已在运行")
+            self._auto_start_disabled = False
             self._write_config(config)
             self._config = config
             self._stop_event.clear()
@@ -131,14 +142,14 @@ class ChargeLoopService:
             self._last_action = {
                 "at": datetime.now().isoformat(timespec="seconds"),
                 "status": "started",
-                "message": "充电循环已启动, 固定策略=PP5待命/CP6充电",
+                "message": "充电循环已启动, 固定策略=CP6原地充电控制",
             }
             thread = threading.Thread(target=self._loop, name="agv-charge-loop", daemon=True)
             self._thread = thread
             thread.start()
 
         logger.info(
-            "充电循环已启动, strategy=PP5待命/CP6充电, interval=%d min, retry=%d min, low=%d%%, full=%d%%",
+            "充电循环已启动, strategy=CP6原地充电控制, interval=%d min, retry=%d min, low=%d%%, full=%d%%",
             self._config["interval_minutes"],
             self._config["retry_wait_minutes"],
             self._config["low_battery_pct"],
@@ -184,14 +195,18 @@ class ChargeLoopService:
         )
         return self.status()
 
-    def stop(self) -> Dict[str, Any]:
+    def stop(self, disable_auto_start: bool = True) -> Dict[str, Any]:
         """
         功能:
             停止充电循环.
+        参数:
+            disable_auto_start: bool, True 表示用户主动停止后禁用本次服务生命周期内的自动重启.
         返回:
             Dict, 停止后的服务状态.
         """
         with self._lock:
+            if disable_auto_start is True:
+                self._auto_start_disabled = True
             self._stop_event.set()
             thread = self._thread
         if thread is not None and thread.is_alive() is True:
@@ -206,6 +221,42 @@ class ChargeLoopService:
             }
         logger.info("充电循环已停止.")
         return self.status()
+
+    def start_auto_start_monitor(self) -> None:
+        """
+        功能:
+            启动后台自启监视线程. 当底盘连接标记变为可用且用户未手动停止时,
+            使用当前保存配置启动 CP6 原地充电循环.
+        返回:
+            None.
+        """
+        with self._lock:
+            if self._auto_start_thread is not None and self._auto_start_thread.is_alive() is True:
+                return
+            self._auto_start_stop_event.clear()
+            thread = threading.Thread(
+                target=self._auto_start_loop,
+                name="agv-charge-loop-auto-start",
+                daemon=True,
+            )
+            self._auto_start_thread = thread
+            thread.start()
+        logger.info("充电循环自启监视已启动.")
+
+    def stop_auto_start_monitor(self) -> None:
+        """
+        功能:
+            停止后台自启监视线程.
+        返回:
+            None.
+        """
+        with self._lock:
+            self._auto_start_stop_event.set()
+            thread = self._auto_start_thread
+            self._auto_start_thread = None
+        if thread is not None and thread.is_alive() is True:
+            thread.join(timeout=3.0)
+        logger.info("充电循环自启监视已停止.")
 
     def status(self) -> Dict[str, Any]:
         """
@@ -225,15 +276,14 @@ class ChargeLoopService:
         """
         功能:
             循环执行充电检查. 每轮结束后按执行结果挑选等待时长.
-            机械臂回零的锁保护已下沉到 _safe_navigate_to_station_detailed 内部,
-            本循环不再外包 arm_lock, 避免在数分钟的 PP5/CP6 移动期间阻塞状态采样器.
+            CP6 原地策略只在 AGV 已位于 CP6 时控制 DO7, 不触发 AGV 导航.
         返回:
             None.
         """
         controller = self._context.get_or_create()
         while self._stop_event.is_set() is False:
             try:
-                result = controller.auto_charge_pp5_cp6_check(
+                result = controller.auto_charge_cp6_check(
                     low_battery_pct=self._config["low_battery_pct"],
                     full_battery_pct=self._config["full_battery_pct"],
                 )
@@ -259,6 +309,33 @@ class ChargeLoopService:
                 wait_seconds = max(1, self._config["retry_wait_minutes"] * 60)
 
             if self._stop_event.wait(wait_seconds) is True:
+                break
+
+    def _auto_start_loop(self) -> None:
+        """
+        功能:
+            轮询底盘连接标记并按保存配置自动启动充电循环.
+        返回:
+            None.
+        """
+        while self._auto_start_stop_event.is_set() is False:
+            with self._lock:
+                should_start = self._running is False and self._auto_start_disabled is False
+                config = dict(self._config)
+
+            if should_start is True and self._context.is_chassis_connected() is True:
+                try:
+                    self.start(
+                        interval_minutes=config["interval_minutes"],
+                        retry_wait_minutes=config["retry_wait_minutes"],
+                        low_battery_pct=config["low_battery_pct"],
+                        full_battery_pct=config["full_battery_pct"],
+                    )
+                    logger.info("底盘已连接, 充电循环已按保存配置自动启动.")
+                except Exception as exc:
+                    logger.warning("自动启动充电循环失败: %s", exc)
+
+            if self._auto_start_stop_event.wait(self._auto_start_check_interval_s) is True:
                 break
 
     def _load_config(self) -> Dict[str, int]:
