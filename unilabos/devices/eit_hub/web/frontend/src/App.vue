@@ -202,7 +202,7 @@ function toggleAiPanel (): void {
     left: 0;
     right: 0;
     /* 顶栏只覆盖普通页面内容, 弹窗和抽屉由全局层级规则管理. */
-    z-index: 1900;
+    z-index: 6500;
     display: flex;
     align-items: center;
     gap: 8px;

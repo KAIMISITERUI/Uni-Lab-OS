@@ -765,7 +765,7 @@ watch(
     <section class="panel">
       <div class="panel-title">
         <h2>分析样品表</h2>
-        <div class="button-row">
+        <div class="button-row analysis-button-grid">
           <el-button :icon="Refresh" :loading="statusLoading" @click="refreshAnalysisContent">刷新</el-button>
           <el-button :icon="Plus" @click="addRow">新增行</el-button>
           <el-button :icon="Delete" @click="deleteActiveRow">删除行</el-button>
@@ -773,7 +773,7 @@ watch(
           <el-button :icon="DeleteFilled" @click="clearAllTables">清除所有内容</el-button>
           <el-button :icon="TrendCharts" @click="fillActiveTable('increment')">递增填充</el-button>
           <el-button :icon="CopyDocument" @click="fillActiveTable('copy')">复制填充</el-button>
-          <el-button type="primary" :icon="Upload" :loading="submitLoading" @click="submitTables">
+          <el-button class="analysis-submit-button" type="primary" :icon="Upload" :loading="submitLoading" @click="submitTables">
             保存并提交
           </el-button>
         </div>
@@ -907,6 +907,22 @@ watch(
 @media (max-width: 767.98px) {
   .analysis-status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .analysis-button-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 10px;
+  }
+
+  .analysis-button-grid :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .analysis-submit-button {
+    grid-column: 1 / -1;
   }
 
   .spreadsheet-wrap {

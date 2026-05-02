@@ -31,6 +31,7 @@
             <NTUStationGraph
               ref="graphRef"
               :margin="24"
+              :mobile-margin="10"
               :auto-select-on-click="false"
               :on-click-tray="onClickTray"
             />
@@ -473,7 +474,9 @@ defineExpose({ resetState })
     overflow: visible;
   }
   .preview-inner :deep(.ntu-station-graph) {
-    max-height: 38vh;
+    height: min(46dvh, 360px) !important;
+    min-height: 260px;
+    max-height: none;
   }
 }
 </style>

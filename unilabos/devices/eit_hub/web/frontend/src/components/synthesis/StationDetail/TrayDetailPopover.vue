@@ -8,7 +8,7 @@
                    点击 filled 孔位时弹出二级 Popover, 显示该试剂的结构式 + 名称 + 剩余量
       点击浮卡外部关闭, 点击关闭按钮关闭, 父组件可通过 v-if 控制可见性.
   -->
-  <Teleport to="body">
+  <Teleport to="body" :disabled="isMobile === true">
     <div
       ref="popoverRef"
       class="tray-detail-popover"
@@ -369,25 +369,25 @@ onBeforeUnmount(() => {
   margin-top: 2px;
 }
 
-/* 手机端: 底部上拉 sheet, 覆盖桌面端的 anchor 跟随定位 */
+/* 手机端: 放在 3D 视图下方并居中, 不再固定到 viewport 底部 */
 @media (max-width: 767.98px) {
   .tray-detail-popover-mobile {
-    position: fixed;
-    inset: auto 0 0 0;
+    position: static;
+    inset: auto;
     left: 0 !important;
     right: 0 !important;
     top: auto !important;
     bottom: 0;
-    width: 100vw;
-    max-width: 100vw;
+    width: min(calc(100% - 24px), 520px);
+    max-width: calc(100% - 24px);
     min-width: 0;
-    max-height: 70dvh;
-    overflow: auto;
-    border: 0;
-    border-top: 1px solid #e0e6f0;
-    border-radius: 12px 12px 0 0;
-    padding-bottom: env(safe-area-inset-bottom);
-    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.16);
+    max-height: none;
+    margin: 12px auto 0;
+    overflow: visible;
+    border: 1px solid #e0e6f0;
+    border-radius: 8px;
+    padding-bottom: 0;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
   }
 }
 </style>

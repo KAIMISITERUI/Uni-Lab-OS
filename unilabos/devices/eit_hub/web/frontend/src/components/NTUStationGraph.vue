@@ -16,9 +16,11 @@
  */
 import { nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { StationGraph } from '@/lib/dynamic-graph/runtime/useStationGraph'
+import { useViewportMode } from '@/composables/useViewportMode'
 
 interface Props {
   margin?: number
+  mobileMargin?: number
   // 是否启用 StationGraph 内部的"点击自动单选"行为 (互斥单选+自动 setSelected/setHighlight)
   // 默认 true 保持主合成页 SynthesisView 现有行为; 多选场景 (如删除资源对话框) 应传 false 让父组件自行控制选中视觉
   autoSelectOnClick?: boolean
@@ -33,6 +35,7 @@ const props = withDefaults(defineProps<Props>(), {
   margin: 24,
   autoSelectOnClick: true,
 })
+const { isMobile } = useViewportMode()
 const containerRef = ref<HTMLDivElement>()
 const containerId = `ntu-graph-${Math.random().toString(36).slice(2, 9)}`
 const graphHeight = ref('720px')
@@ -74,7 +77,10 @@ function updateGraphHeight (): boolean {
 }
 
 function normalizeGraphMargin (): number {
-  const margin = Number(props.margin)
+  const sourceMargin = isMobile.value === true && props.mobileMargin !== undefined
+    ? props.mobileMargin
+    : props.margin
+  const margin = Number(sourceMargin)
   if (Number.isFinite(margin) === false || margin < 0) {
     return 0
   }
@@ -175,7 +181,7 @@ onMounted(async () => {
 })
 
 watch(
-  () => props.margin,
+  () => [props.margin, props.mobileMargin, isMobile.value],
   () => {
     const graphMargin = normalizeGraphMargin()
     if (graph !== null) {

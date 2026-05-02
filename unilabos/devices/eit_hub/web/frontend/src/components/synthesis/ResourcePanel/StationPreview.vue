@@ -34,6 +34,7 @@ import { onBeforeUnmount, onMounted, ref, watch, nextTick, computed } from 'vue'
 import { Location } from '@element-plus/icons-vue'
 import { StationGraph } from '@/lib/dynamic-graph/runtime/useStationGraph'
 import { getModule } from '@/lib/dynamic-graph'
+import { useViewportMode } from '@/composables/useViewportMode'
 import {
   applyTrayVisualResource,
   buildTrayVisualResource,
@@ -73,6 +74,7 @@ const emit = defineEmits<{
 }>()
 
 const iconLocation = Location
+const { isMobile } = useViewportMode()
 const containerRef = ref<HTMLDivElement>()
 const wrapRef = ref<HTMLDivElement>()
 const containerId = `dialog-ntu-graph-${Math.random().toString(36).slice(2, 9)}`
@@ -108,10 +110,18 @@ function scheduleGraphLayout (delay = 80): void {
   }, delay)
 }
 
+function resolvePreviewMargin (): number {
+  if (isMobile.value === true) {
+    return 10
+  }
+  return 24
+}
+
 async function syncGraphLayout (taskId = ++layoutTaskId): Promise<void> {
   await nextTick()
   if (taskId !== layoutTaskId) { return }
   if (graph !== null) {
+    graph.setViewportPadding(resolvePreviewMargin())
     applyVisiblePrefixes()
     graph.fitVisibleScene(resolveSceneBoundsPadding())
     graph.onResize()
@@ -145,7 +155,7 @@ function isLayoutCodeDisabled (layoutCode: string): boolean {
 onMounted(async () => {
   const stationGraph = new StationGraph({
     containerId,
-    viewportPadding: 24,
+    viewportPadding: resolvePreviewMargin(),
     autoSelectOnClick: false,
     preserveFilteredOutResources: true,
     onClickTray: (layout_code) => {
@@ -185,6 +195,13 @@ onMounted(async () => {
 })
 
 watch(() => props.selectedCodes.join(','), () => { syncSelectionToGraph() })
+
+watch(
+  () => isMobile.value,
+  () => {
+    scheduleGraphLayout(30)
+  },
+)
 
 watch(
   () => props.visiblePrefixes.join(','),
@@ -502,8 +519,9 @@ onBeforeUnmount(() => {
 
 @media (max-width: 767.98px) {
   .station-preview {
-    min-height: 200px;
-    max-height: 38vh;
+    height: 100%;
+    min-height: 320px;
+    max-height: none;
   }
 
   .position-bar {

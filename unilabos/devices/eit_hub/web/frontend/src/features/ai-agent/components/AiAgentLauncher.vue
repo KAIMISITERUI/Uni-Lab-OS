@@ -1800,7 +1800,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   .ai-launcher-mobile {
     position: fixed;
     inset: 0;
-    z-index: 1800;
+    z-index: 5000;
     pointer-events: none;
   }
 
@@ -1829,7 +1829,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
     border-radius: 0 !important;
     border: 0 !important;
     visibility: visible !important;
-    z-index: 1850;
+    z-index: 5000;
   }
 
   /* 隐藏拖动改尺寸的手柄, 触屏无意义 */
@@ -1853,6 +1853,20 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   /* 输入区底部安全区 (iPhone home indicator) */
   .ai-launcher-mobile .ai-drawer-footer {
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .ai-launcher-mobile .ai-send-button {
+    width: 40px;
+    min-width: 40px;
+    height: var(--mobile-touch-min);
+  }
+
+  .ai-launcher-mobile .ai-model-switch {
+    min-height: var(--mobile-touch-min);
+  }
+
+  .ai-launcher-mobile .ai-model-option {
+    height: 38px;
   }
 }
 </style>

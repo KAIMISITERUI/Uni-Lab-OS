@@ -614,7 +614,9 @@ function onCancel (): void {
   }
   /* 站位预览限高, 不抢占表单空间 */
   .preview-inner :deep(.station-preview) {
-    max-height: 38vh;
+    height: min(54dvh, 420px);
+    min-height: 320px;
+    max-height: none;
   }
 }
 </style>

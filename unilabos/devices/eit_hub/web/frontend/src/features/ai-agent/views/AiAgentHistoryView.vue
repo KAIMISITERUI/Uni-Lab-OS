@@ -447,7 +447,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
     <div class="panel">
       <div class="panel-title">
         <h2>AI 助手对话历史</h2>
-        <div class="button-row">
+        <div class="button-row ai-history-actions">
           <el-input
             v-model="keyword"
             placeholder="按标题搜索..."
@@ -543,7 +543,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
               >
                 返回列表
               </el-button>
-              <div>
+              <div class="ai-history-detail-meta">
                 <h3 class="ai-history-detail-title">{{ selectedSummary?.title || '会话详情' }}</h3>
                 <div class="ai-history-detail-sub">
                   开始: {{ formatTime(selectedSummary?.started_at ?? null) }} · 最近:
@@ -551,7 +551,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
                   {{ visibleMessages.length }} 条消息
                 </div>
               </div>
-              <div class="button-row">
+              <div class="button-row ai-history-detail-actions">
                 <el-button type="primary" @click="onContinueInLauncher(selectedSessionId)">
                   在浮动窗中继续对话
                 </el-button>
@@ -1264,15 +1264,53 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
     width: 100%;
   }
 
+  .ai-history-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 10px;
+  }
+
+  .ai-history-actions .ai-history-search {
+    grid-column: 1 / -1;
+  }
+
+  .ai-history-actions :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .ai-history-list,
   .ai-history-detail {
     width: 100%;
     min-height: 50vh;
+    max-height: none;
+    padding-left: 0;
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .ai-history-detail-header {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .ai-history-back-btn {
     align-self: flex-start;
     margin-bottom: 8px;
+  }
+
+  .ai-history-detail-meta {
+    min-width: 0;
+  }
+
+  .ai-history-detail-actions {
+    width: 100%;
+  }
+
+  .ai-history-detail-actions :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
   }
 
   .ai-history-item {

@@ -169,4 +169,37 @@ function onTrayModelChange (val: string): void {
 .tray-form :deep(.el-form-item) {
   margin-bottom: 8px;
 }
+
+@media (max-width: 767.98px) {
+  .slot-card {
+    margin-bottom: 10px;
+  }
+
+  .card-header {
+    padding: 10px 12px;
+  }
+
+  .card-body {
+    padding: 10px 12px 12px;
+  }
+
+  .top-row,
+  .top-row.has-editor {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .left-col,
+  .grid-col,
+  .editor-col {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .grid-col,
+  .editor-col {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
 </style>

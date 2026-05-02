@@ -551,12 +551,13 @@ select {
   .mobile-nav-drawer-modal {
     top: var(--app-mobile-topbar-h) !important;
     height: calc(100dvh - var(--app-mobile-topbar-h)) !important;
-    z-index: 1800 !important;
+    z-index: 6400 !important;
   }
 
   .mobile-nav-drawer {
     top: 0 !important;
     height: 100% !important;
+    z-index: 6450 !important;
   }
 
   .mobile-nav-drawer.open {

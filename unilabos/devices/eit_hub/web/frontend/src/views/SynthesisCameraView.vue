@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from 'vue'
 import { Refresh, VideoCamera } from '@element-plus/icons-vue'
 import { type CameraInfo, fetchCameraList } from '../api/synthesis'
 import { getErrorMessage } from '../api/http'
+import { useViewportMode } from '../composables/useViewportMode'
 
 interface CameraSlot {
   info: CameraInfo
@@ -23,8 +24,10 @@ const zoomedReloadToken = ref(0)
 const zoomedFailed = ref(false)
 // 弹窗主码流 <img> DOM 引用, 关闭弹窗时显式置空 src 强制释放 MJPEG 连接
 const zoomImgEl = ref<HTMLImageElement | null>(null)
+const mobileZoomRef = ref<HTMLDivElement | null>(null)
 // 缩略图 <img> DOM 引用 Map, 离开页面时显式置空 src 强制释放 sub 流连接
 const thumbImgEls = new Map<string, HTMLImageElement>()
+const { isMobile } = useViewportMode()
 
 const hasCameras = computed(() => cameras.value.length > 0)
 const dialogVisible = computed({
@@ -108,11 +111,52 @@ function openZoom(slot: CameraSlot): void {
   zoomedReloadToken.value = Date.now()
   zoomedFailed.value = false
   zoomedSlot.value = slot
+  if (isMobile.value === true) {
+    void enterMobileLandscape()
+  }
 }
 
 function reloadZoom(): void {
   zoomedReloadToken.value = Date.now()
   zoomedFailed.value = false
+}
+
+async function enterMobileLandscape(): Promise<void> {
+  await nextTick()
+  const container = mobileZoomRef.value
+  if (container !== null && document.fullscreenElement === null) {
+    try {
+      await container.requestFullscreen()
+    } catch {
+      // 浏览器不允许全屏时保持页面内横屏播放器.
+    }
+  }
+  try {
+    await screen.orientation?.lock?.('landscape')
+  } catch {
+    // iOS Safari 等环境不支持方向锁定时, 由全屏播放器兜住画面.
+  }
+}
+
+async function exitMobileLandscape(): Promise<void> {
+  try {
+    screen.orientation?.unlock?.()
+  } catch {
+    // unlock 失败不影响释放视频连接.
+  }
+  if (document.fullscreenElement !== null) {
+    try {
+      await document.exitFullscreen()
+    } catch {
+      // 用户或浏览器已退出全屏时无需额外处理.
+    }
+  }
+}
+
+function closeMobileZoom(): void {
+  releaseZoomConnection()
+  zoomedSlot.value = null
+  void exitMobileLandscape()
 }
 
 onMounted(() => {
@@ -141,6 +185,7 @@ onDeactivated(() => {
   releaseZoomConnection()
   streamActive.value = false
   zoomedSlot.value = null
+  void exitMobileLandscape()
 })
 
 onBeforeUnmount(() => {
@@ -148,6 +193,7 @@ onBeforeUnmount(() => {
   releaseZoomConnection()
   streamActive.value = false
   zoomedSlot.value = null
+  void exitMobileLandscape()
 })
 </script>
 
@@ -232,7 +278,40 @@ onBeforeUnmount(() => {
       />
     </section>
 
+    <div
+      v-show="isMobile === true && zoomedSlot !== null"
+      ref="mobileZoomRef"
+      class="mobile-landscape-viewer"
+    >
+      <div class="mobile-landscape-toolbar">
+        <span class="mobile-landscape-title">
+          {{ zoomedSlot ? `${zoomedSlot.info.name || zoomedSlot.info.id} - 主码流` : '' }}
+        </span>
+        <div class="mobile-landscape-actions">
+          <el-button size="small" :icon="Refresh" @click="reloadZoom">重连</el-button>
+          <el-button size="small" type="primary" @click="closeMobileZoom">关闭</el-button>
+        </div>
+      </div>
+      <div v-if="zoomedSlot !== null" class="mobile-landscape-frame">
+        <img
+          ref="zoomImgEl"
+          :src="buildSrc(zoomedSlot.info.stream_url_main, zoomedReloadToken)"
+          :alt="zoomedSlot.info.id"
+          class="mobile-landscape-image"
+          @error="zoomedFailed = true"
+          @load="zoomedFailed = false"
+        />
+        <div v-if="zoomedFailed" class="camera-overlay">
+          <p>主码流拉取失败, 请检查 ops_http 与网络</p>
+          <el-button type="primary" :icon="Refresh" @click="reloadZoom">
+            重新连接
+          </el-button>
+        </div>
+      </div>
+    </div>
+
     <el-dialog
+      v-if="isMobile === false"
       v-model="dialogVisible"
       :title="zoomedSlot ? `${zoomedSlot.info.name || zoomedSlot.info.id} - 主码流` : ''"
       width="80%"
@@ -403,6 +482,59 @@ onBeforeUnmount(() => {
   height: 100%;
   object-fit: contain;
   background: #000;
+}
+
+.mobile-landscape-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 7000;
+  display: flex;
+  flex-direction: column;
+  background: #000000;
+}
+
+.mobile-landscape-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 10px;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.92);
+}
+
+.mobile-landscape-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-landscape-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.mobile-landscape-frame {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  background: #000000;
+}
+
+.mobile-landscape-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000000;
 }
 
 @media (max-width: 767.98px) {

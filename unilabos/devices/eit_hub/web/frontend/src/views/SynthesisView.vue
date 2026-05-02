@@ -882,6 +882,7 @@ onBeforeUnmount(stopDashboardPolling)
                     <NTUStationGraph
                       ref="stationGraphRef"
                       :margin="50"
+                      :mobile-margin="12"
                       :on-context-menu-tray="onSlotContextMenu"
                       :on-click-tray="onSlotClick"
                       :on-after-refresh="syncResourceList"
@@ -956,7 +957,7 @@ onBeforeUnmount(stopDashboardPolling)
           </section>
 
           <section class="chemical-status-layout">
-            <div class="panel display-panel">
+            <div class="panel display-panel chemical-panel">
               <div class="panel-title">
                 <h3>化学品库</h3>
               </div>
@@ -1062,7 +1063,7 @@ onBeforeUnmount(stopDashboardPolling)
               </div>
             </div>
 
-            <div class="panel display-panel">
+            <div class="panel display-panel device-status-panel">
               <div class="panel-title">
                 <h3>设备状态</h3>
               </div>
@@ -1452,6 +1453,14 @@ onBeforeUnmount(stopDashboardPolling)
     grid-template-columns: 1fr;
   }
 
+  .device-status-panel {
+    order: 1;
+  }
+
+  .chemical-panel {
+    order: 2;
+  }
+
   /* 耗材卡片: 2 列网格让 8 张耗材卡可见 */
   .consumable-card-grid {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1474,6 +1483,23 @@ onBeforeUnmount(stopDashboardPolling)
   .device-status-grid {
     height: auto;
     max-height: 50vh;
+  }
+
+  .chemical-panel :deep(.responsive-card-row[data-card-field="structureSmiles"]) {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+
+  .chemical-panel :deep(.responsive-card-label[data-card-field="structureSmiles"]),
+  .chemical-panel :deep(.responsive-card-value[data-card-field="structureSmiles"]) {
+    width: 100%;
+    text-align: center;
+  }
+
+  .chemical-panel :deep(.structure-preview) {
+    margin: 0 auto;
   }
 
   /* W1 排货架: 让位置名占满, 按钮宽 96px 对齐右侧 */

@@ -4,12 +4,14 @@ import { ElMessage } from 'element-plus'
 import { fetchExperimentPlan, type ExperimentPlanResponse, type ParamRowEntry } from '../../api/taskHistory'
 import { getErrorMessage } from '../../api/http'
 import EditableSpreadsheet from '../EditableSpreadsheet.vue'
+import { useViewportMode } from '../../composables/useViewportMode'
 
 const props = defineProps<{ taskId: number }>()
 
 const data = ref<ExperimentPlanResponse | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
+const { isMobile } = useViewportMode()
 
 const sectionGroups = computed<Array<{ title: string; items: ParamRowEntry[] }>>(() => {
   if (data.value === null) {
@@ -127,7 +129,7 @@ function formatValue(value: unknown): string {
       </section>
       <section v-if="analysisGroup !== null" class="param-group analysis-group">
         <h4 class="param-title">{{ analysisGroup.title }}</h4>
-        <el-descriptions :column="3" border size="small" class="param-desc analysis-desc">
+        <el-descriptions :column="isMobile === true ? 1 : 3" border size="small" class="param-desc analysis-desc">
           <el-descriptions-item
             v-for="item in analysisGroup.items"
             :key="item.row + ':' + item.name"
@@ -199,5 +201,31 @@ function formatValue(value: unknown): string {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 12px;
+}
+
+@media (max-width: 767.98px) {
+  .param-area {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .param-column {
+    gap: 10px;
+  }
+
+  .param-group,
+  .experiment-area {
+    padding: 10px;
+  }
+
+  .param-desc :deep(.el-descriptions__label) {
+    width: auto;
+    white-space: normal;
+  }
+
+  .experiment-area {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 </style>

@@ -36,7 +36,7 @@ import ResponsiveTable from '../components/ResponsiveTable.vue'
 // 点位管理表 手机端卡片字段
 const positionCardFields = [
   { key: 'name', label: '名称', primary: true },
-  { key: 'pose', label: 'pose [x,y,z,rx,ry,rz]' },
+  { key: 'pose', label: 'pose' },
   { key: 'descend_z', label: 'descend_z' },
   { key: 'lift_z', label: 'lift_z' },
   { key: 'drop_z', label: 'drop_z' },
@@ -770,7 +770,7 @@ onBeforeUnmount(stopAutoRefresh)
     />
 
     <!-- 点位管理 -->
-    <section class="panel">
+    <section class="panel position-management-panel">
       <div class="panel-title">
         <h3>点位管理</h3>
         <div class="button-row">
@@ -1273,5 +1273,17 @@ onBeforeUnmount(stopAutoRefresh)
     width: 100%;
   }
   /* 编辑/新增点位弹窗内的 input-number 不再固定 220px, 走 :where(.el-input-number){width:100%} */
+  .position-management-panel :deep(.responsive-card-row[data-card-field="pose"]) {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .position-management-panel :deep(.responsive-card-label[data-card-field="pose"]) {
+    white-space: normal;
+  }
+
+  .position-management-panel :deep(.responsive-card-value[data-card-field="pose"]) {
+    overflow-wrap: anywhere;
+  }
 }
 </style>

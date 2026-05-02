@@ -138,8 +138,8 @@ onBeforeUnmount(stopAutoRefresh)
     <section class="panel">
       <div class="panel-title">
         <h2>AGV 货架</h2>
-        <div class="button-row">
-          <span class="muted" style="font-size: 12px;">
+        <div class="button-row shelf-toolbar">
+          <span class="muted shelf-last-updated">
             最后更新: {{ shelfStatus?.last_updated || '--' }}
           </span>
           <el-button
@@ -203,3 +203,29 @@ onBeforeUnmount(stopAutoRefresh)
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.shelf-toolbar {
+  align-items: center;
+}
+
+.shelf-last-updated {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767.98px) {
+  .shelf-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    gap: 10px;
+  }
+
+  .shelf-toolbar :deep(.el-button) {
+    margin-left: 0;
+  }
+}
+</style>

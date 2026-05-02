@@ -202,4 +202,15 @@ function onRemove (slotIndex: number): void {
 .amount-cell :deep(.el-input-number .el-input__inner) {
   text-align: left;
 }
+
+@media (max-width: 767.98px) {
+  .vessel-editor {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .vessel-editor :deep(.el-table) {
+    min-width: 560px;
+  }
+}
 </style>

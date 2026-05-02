@@ -95,22 +95,25 @@ function rowKeyOf (row: T): string {
       class="responsive-card"
     >
       <div v-if="primaryFieldDef !== null" class="responsive-card-title">
-        <slot
-          :name="`cell:${primaryFieldDef.key}`"
-          :row="row"
-          :field="primaryFieldDef"
-        >
-          {{ resolveValue(row, primaryFieldDef) }}
-        </slot>
+        <span class="responsive-card-title-value" :data-card-field="primaryFieldDef.key">
+          <slot
+            :name="`cell:${primaryFieldDef.key}`"
+            :row="row"
+            :field="primaryFieldDef"
+          >
+            {{ resolveValue(row, primaryFieldDef) }}
+          </slot>
+        </span>
       </div>
       <div class="responsive-card-body">
         <div
           v-for="field in secondaryFieldDefs"
           :key="field.key"
           class="responsive-card-row"
+          :data-card-field="field.key"
         >
-          <span class="responsive-card-label">{{ field.label }}</span>
-          <span class="responsive-card-value">
+          <span class="responsive-card-label" :data-card-field="field.key">{{ field.label }}</span>
+          <span class="responsive-card-value" :data-card-field="field.key">
             <slot
               :name="`cell:${field.key}`"
               :row="row"
