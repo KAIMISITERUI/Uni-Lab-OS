@@ -7,11 +7,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+import websockets
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
+from websockets.exceptions import ConnectionClosed
 
 from unilabos.devices.eit_agv.config.agv_config import STATION_POSITIONS
 from unilabos.devices.eit_agv.utils.position_manager import PositionManager
@@ -1144,15 +1147,107 @@ def batch_transfer(
 def arm_duco_ws_endpoint() -> JsonDict:
     """
     功能:
-        返回 Duco 机械臂原生 WebSocket 控制端点, 供前端直接建立连接
-        复刻官方 movement 页面的 moveJog/stopManualMove 控制语义.
-        端口 7000 是 Duco Web UI + WebSocket 的共用端口, 与 Thrift 的 7003 不同.
+        返回 Duco 机械臂 WebSocket 反代相对路径, 由前端结合 window.location 拼成完整 URL,
+        让本机和手机都通过 eit_hub 入口访问, 后端再转发到 ARM_HOST:7000.
+        不再下发内网 IP 给浏览器, 避免内网拓扑泄露与跨网段不可达.
     返回:
-        Dict[str, Any], 含 ws_url 字段, 形如 "ws://192.168.1.10:7000".
+        Dict[str, str], 含 ws_path 字段, 固定为 "/api/agv/arm/duco-ws".
+    """
+    return {"ws_path": "/api/agv/arm/duco-ws"}
+
+
+@router.websocket("/arm/duco-ws")
+async def arm_duco_ws_proxy(websocket: WebSocket) -> None:
+    """
+    功能:
+        反向代理 Duco 机械臂原生 WebSocket. 浏览器同源连接 eit_hub,
+        由后端透明转发到 ARM_HOST:7000, 不向客户端暴露内网拓扑.
+        透传文本帧, 二进制帧, 子协议, close code 与 reason.
+        端口 7000 是 Duco Web UI + WebSocket 共用端口, 与 Thrift 的 7003 不同.
+    参数:
+        websocket: WebSocket, 浏览器侧连接句柄.
+    返回:
+        None.
     """
     from unilabos.devices.eit_agv.config.arm_config import ARM_HOST
 
-    return {"ws_url": f"ws://{ARM_HOST}:7000"}
+    upstream_url = f"ws://{ARM_HOST}:7000"
+    # 透传浏览器请求的子协议, 由上游决定最终协商结果
+    requested_subprotocols = list(websocket.scope.get("subprotocols") or [])
+
+    try:
+        upstream = await websockets.connect(
+            upstream_url,
+            subprotocols=requested_subprotocols or None,
+            open_timeout=10,
+            ping_interval=None,  # 让两端自然 ping/pong, 中间不插入心跳避免计时打架
+            ping_timeout=None,
+            max_size=None,
+            close_timeout=2,
+        )
+    except Exception as exc:
+        logger.warning("机械臂 WS 上游连接失败: %s", exc)
+        # 4502 自定义码与 1011/1006 区分, 便于前端日志排查上游不可达场景
+        await websocket.close(code=4502, reason=f"upstream unreachable: {exc}")
+        return
+
+    # 用上游协商出的子协议反过来 accept 客户端, 保证两侧子协议一致
+    await websocket.accept(subprotocol=upstream.subprotocol)
+
+    async def client_to_upstream() -> None:
+        """
+        功能:
+            浏览器到上游的单向转发, 透传文本与二进制帧.
+        返回:
+            None.
+        """
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg["type"] == "websocket.disconnect":
+                    return
+                if msg.get("text") is not None:
+                    await upstream.send(msg["text"])
+                elif msg.get("bytes") is not None:
+                    await upstream.send(msg["bytes"])
+        except (WebSocketDisconnect, ConnectionClosed):
+            return
+
+    async def upstream_to_client() -> None:
+        """
+        功能:
+            上游到浏览器的单向转发, 按帧类型分发为文本或二进制.
+        返回:
+            None.
+        """
+        try:
+            async for frame in upstream:
+                if isinstance(frame, (bytes, bytearray)):
+                    await websocket.send_bytes(bytes(frame))
+                else:
+                    await websocket.send_text(frame)
+        except ConnectionClosed:
+            return
+
+    t_c2u = asyncio.create_task(client_to_upstream(), name="duco-ws-c2u")
+    t_u2c = asyncio.create_task(upstream_to_client(), name="duco-ws-u2c")
+    # 任一侧关闭立即同步关另一侧, 防止协程泄漏
+    done, pending = await asyncio.wait({t_c2u, t_u2c}, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+
+    try:
+        await upstream.close()
+    except Exception:
+        pass
+    try:
+        # 透传上游 close code 与 reason, 让前端能区分正常关闭与异常断开
+        code = upstream.close_code if upstream.close_code is not None else 1000
+        reason = upstream.close_reason or ""
+        await websocket.close(code=code, reason=reason)
+    except Exception:
+        pass
 
 
 # ==================== 分节 D: 充电管理 ====================

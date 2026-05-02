@@ -2,22 +2,23 @@
 """
 功能:
     覆盖 EIT Hub 机械臂 WebSocket 端点接口.
-    机械臂微调已改为前端直连 Duco 原生 WebSocket (复刻官方 movement 控制语义),
-    后端仅提供 ws_url 查询端点, 业务路由不再参与 jog 指令中继.
+    机械臂微调走 eit_hub 后端 WebSocket 反代 (路径 /api/agv/arm/duco-ws),
+    端点接口仅返回相对路径, 由前端结合 window.location 拼成完整 URL,
+    避免向浏览器暴露内网 ARM_HOST 拓扑.
 """
 
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from unilabos.devices.eit_agv.config.arm_config import ARM_HOST
 from unilabos.devices.eit_hub.web.app import create_app
 
 
-def test_arm_duco_ws_endpoint_returns_configured_host() -> None:
+def test_arm_duco_ws_endpoint_returns_relative_path() -> None:
     """
     功能:
-        验证 /api/agv/arm/duco-ws-endpoint 返回 ws_url, 主机与 ARM_HOST 一致, 端口固定 7000.
+        验证 /api/agv/arm/duco-ws-endpoint 返回相对路径 ws_path,
+        指向 eit_hub 后端反代路由 /api/agv/arm/duco-ws, 不再泄露 ARM_HOST.
     """
     client = TestClient(create_app())
 
@@ -25,7 +26,7 @@ def test_arm_duco_ws_endpoint_returns_configured_host() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["ws_url"] == f"ws://{ARM_HOST}:7000"
+    assert body == {"ws_path": "/api/agv/arm/duco-ws"}
 
 
 def test_arm_jog_legacy_routes_are_removed() -> None:

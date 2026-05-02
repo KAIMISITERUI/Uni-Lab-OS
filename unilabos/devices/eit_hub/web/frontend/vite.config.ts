@@ -53,6 +53,8 @@ export default {
       '/api': {
         target: 'http://127.0.0.1:8770',
         changeOrigin: true,
+        // 支持 WebSocket upgrade, 用于 /api/agv/arm/duco-ws 反代到 8770
+        ws: true,
       },
       // 代理到 eit_hub 后端的 /synthesis-api/* 路由,
       // 由 web/routers/synthesis_proxy.py 转发到 eit_synthesis_station 设备 PC,

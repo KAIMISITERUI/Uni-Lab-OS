@@ -16,8 +16,11 @@ async function ensureWsUrl(): Promise<string> {
   if (wsUrl !== null) {
     return wsUrl
   }
-  const { data } = await axios.get<{ ws_url: string }>('/api/agv/arm/duco-ws-endpoint')
-  wsUrl = data.ws_url
+  const { data } = await axios.get<{ ws_path: string }>('/api/agv/arm/duco-ws-endpoint')
+  const loc = window.location
+  const scheme = loc.protocol === 'https:' ? 'wss' : 'ws'
+  // loc.host 已含端口, 同源拼接, 自动跟随访问入口 (本机/手机/HTTPS 反代)
+  wsUrl = `${scheme}://${loc.host}${data.ws_path}`
   return wsUrl
 }
 
@@ -50,7 +53,7 @@ async function openSocket(): Promise<void> {
   try {
     url = await ensureWsUrl()
   } catch (error) {
-    console.warn('[ducoWs] 获取 ws_url 失败, 稍后重试', error)
+    console.warn('[ducoWs] 获取 ws_path 失败, 稍后重试', error)
     scheduleReconnect()
     return
   }
