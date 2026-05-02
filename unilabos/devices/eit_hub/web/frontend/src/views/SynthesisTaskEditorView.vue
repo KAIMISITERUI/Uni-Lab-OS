@@ -45,6 +45,7 @@ import {
 import { getErrorMessage } from '../api/http'
 import { renderSmilesToSvg } from '../composables/useRDKit'
 import EditableSpreadsheet from '../components/EditableSpreadsheet.vue'
+import SpreadsheetFullscreenPanel from '../components/SpreadsheetFullscreenPanel.vue'
 
 type SpreadsheetRow = Record<string, unknown> | unknown[]
 type FillMode = 'increment' | 'copy'
@@ -64,6 +65,7 @@ type EditableSpreadsheetRef = ComponentPublicInstance & {
   fillSelectedRange: (mode: FillMode) => boolean
   clearSelectedRange: () => boolean
   syncSourceData: () => SpreadsheetRow[]
+  refreshLayout: () => void
 }
 
 const TASK_EDITOR_DRAFT_KEY = 'eit_hub.synthesis_task_editor_draft'
@@ -148,6 +150,22 @@ let internalStandardTimer: ReturnType<typeof setTimeout> | null = null
 let suppressNextInternalStandardAutofill = false
 const gcProductStructureSvgCache = new Map<string, string | null>()
 const gcProductStructurePendingCache = new Set<string>()
+
+function scheduleSpreadsheetLayoutRefresh(spreadsheet: EditableSpreadsheetRef | null): void {
+  void nextTick(() => {
+    window.requestAnimationFrame(() => {
+      spreadsheet?.refreshLayout()
+    })
+  })
+}
+
+function refreshTemplateSpreadsheetLayout(): void {
+  scheduleSpreadsheetLayoutRefresh(spreadsheetRef.value)
+}
+
+function refreshBatchInSpreadsheetLayout(): void {
+  scheduleSpreadsheetLayoutRefresh(batchInSpreadsheetRef.value)
+}
 
 const experimentCount = computed(() => templateData.value?.rows.length || 12)
 
@@ -1634,6 +1652,14 @@ watch(
   { deep: true },
 )
 
+watch(activeSettingsTableTab, (tab) => {
+  if (tab === 'batchIn') {
+    refreshBatchInSpreadsheetLayout()
+    return
+  }
+  refreshTemplateSpreadsheetLayout()
+})
+
 watch(
   () => currentInternalStandardName(),
   (value) => {
@@ -1761,69 +1787,91 @@ watch(
           <section class="editor-table-panel">
             <el-tabs v-model="activeSettingsTableTab" type="card" class="editor-table-tabs">
               <el-tab-pane label="试剂表格" name="reagent">
-                <div class="button-row table-button-row">
-                  <el-select
-                    :model-value="experimentCount"
-                    size="small"
-                    class="experiment-count-select"
-                    @change="setExperimentCount"
-                  >
-                    <el-option
-                      v-for="count in templateData?.supported_experiment_counts || [12, 24, 36, 48]"
-                      :key="count"
-                      :label="String(count) + ' 个实验'"
-                      :value="count"
-                    />
-                  </el-select>
-                  <el-button :icon="Plus" @click="addReagentPair">试剂列</el-button>
-                  <el-button :icon="Minus" @click="removeReagentPair">试剂列</el-button>
-                  <el-button :icon="Delete" @click="clearTemplateSelection">清除内容</el-button>
-                  <el-button :icon="DeleteFilled" @click="clearAllTemplateContent">清除所有内容</el-button>
-                  <el-button :icon="TrendCharts" @click="fillTemplateTable('increment')">递增填充</el-button>
-                  <el-button :icon="CopyDocument" @click="fillTemplateTable('copy')">复制填充</el-button>
-                  <el-checkbox v-model="autoGenerateBatchFile" class="resource-check-option">自动修改上料文件</el-checkbox>
-                  <el-button type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
-                  <el-button type="primary" :icon="DocumentChecked" @click="saveReactionTemplateOnly">保存</el-button>
-                </div>
+                <SpreadsheetFullscreenPanel
+                  title="试剂表格"
+                  :normal-height="520"
+                  @fullscreen-change="refreshTemplateSpreadsheetLayout"
+                  @layout-change="refreshTemplateSpreadsheetLayout"
+                >
+                  <template #actions>
+                    <div class="button-row table-button-row">
+                      <el-select
+                        :model-value="experimentCount"
+                        class="experiment-count-select"
+                        :teleported="false"
+                        @change="setExperimentCount"
+                      >
+                        <el-option
+                          v-for="count in templateData?.supported_experiment_counts || [12, 24, 36, 48]"
+                          :key="count"
+                          :label="String(count) + ' 个实验'"
+                          :value="count"
+                        />
+                      </el-select>
+                      <el-button :icon="Plus" @click="addReagentPair">试剂列</el-button>
+                      <el-button :icon="Minus" @click="removeReagentPair">试剂列</el-button>
+                      <el-button :icon="Delete" @click="clearTemplateSelection">清除内容</el-button>
+                      <el-button :icon="DeleteFilled" @click="clearAllTemplateContent">清除所有内容</el-button>
+                      <el-button :icon="TrendCharts" @click="fillTemplateTable('increment')">递增填充</el-button>
+                      <el-button :icon="CopyDocument" @click="fillTemplateTable('copy')">复制填充</el-button>
+                      <el-checkbox v-model="autoGenerateBatchFile" class="resource-check-option">自动修改上料文件</el-checkbox>
+                      <el-button type="warning" :icon="CircleCheck" @click="runResourceCheck">物料核算</el-button>
+                      <el-button type="primary" :icon="DocumentChecked" @click="saveReactionTemplateOnly">保存</el-button>
+                    </div>
+                  </template>
 
-                <div v-if="templateData !== null" class="spreadsheet-wrap">
-                  <EditableSpreadsheet
-                    :key="spreadsheetKey"
-                    ref="spreadsheetRef"
-                    :model-value="templateData.rows"
-                    :col-headers="templateData.headers"
-                    :columns="spreadsheetColumns"
-                    :height="520"
-                    @update:model-value="updateTemplateRows"
-                  />
-                </div>
+                  <template #default="{ tableHeight }">
+                    <div v-if="templateData !== null" class="spreadsheet-wrap">
+                      <EditableSpreadsheet
+                        :key="spreadsheetKey"
+                        ref="spreadsheetRef"
+                        :model-value="templateData.rows"
+                        :col-headers="templateData.headers"
+                        :columns="spreadsheetColumns"
+                        :height="tableHeight"
+                        @update:model-value="updateTemplateRows"
+                      />
+                    </div>
+                  </template>
+                </SpreadsheetFullscreenPanel>
               </el-tab-pane>
 
               <el-tab-pane label="上料表格" name="batchIn">
-                <div class="button-row table-button-row">
-                  <el-button :icon="Plus" @click="addBatchInRow">新增行</el-button>
-                  <el-button :icon="Delete" @click="removeBatchInRow">删除行</el-button>
-                  <el-button :icon="Delete" @click="clearBatchInSelection">清除内容</el-button>
-                  <el-button :icon="DeleteFilled" @click="clearAllBatchInContent">清除所有内容</el-button>
-                  <el-button type="warning" :icon="Tickets" @click="printReagentLabels">打印试剂标签</el-button>
-                  <el-button type="success" :icon="Printer" @click="printBatchInTable">打印上料表格</el-button>
-                  <el-button type="primary" :icon="DocumentChecked" @click="saveBatchInTemplateOnly">保存</el-button>
-                </div>
+                <SpreadsheetFullscreenPanel
+                  title="上料表格"
+                  :normal-height="520"
+                  @fullscreen-change="refreshBatchInSpreadsheetLayout"
+                  @layout-change="refreshBatchInSpreadsheetLayout"
+                >
+                  <template #actions>
+                    <div class="button-row table-button-row">
+                      <el-button :icon="Plus" @click="addBatchInRow">新增行</el-button>
+                      <el-button :icon="Delete" @click="removeBatchInRow">删除行</el-button>
+                      <el-button :icon="Delete" @click="clearBatchInSelection">清除内容</el-button>
+                      <el-button :icon="DeleteFilled" @click="clearAllBatchInContent">清除所有内容</el-button>
+                      <el-button type="warning" :icon="Tickets" @click="printReagentLabels">打印试剂标签</el-button>
+                      <el-button type="success" :icon="Printer" @click="printBatchInTable">打印上料表格</el-button>
+                      <el-button type="primary" :icon="DocumentChecked" @click="saveBatchInTemplateOnly">保存</el-button>
+                    </div>
+                  </template>
 
-                <div v-loading="batchInLoading" class="batch-in-tab-body">
-                  <div v-if="batchInData !== null" class="spreadsheet-wrap">
-                    <EditableSpreadsheet
-                      :key="batchInSpreadsheetKey"
-                      ref="batchInSpreadsheetRef"
-                      :model-value="batchInData.rows"
-                      :col-headers="batchInData.headers"
-                      :columns="batchInColumns"
-                      :height="520"
-                      @update:model-value="updateBatchInRows"
-                      @selected-row="selectedBatchInRow = $event"
-                    />
-                  </div>
-                </div>
+                  <template #default="{ tableHeight }">
+                    <div v-loading="batchInLoading" class="batch-in-tab-body">
+                      <div v-if="batchInData !== null" class="spreadsheet-wrap">
+                        <EditableSpreadsheet
+                          :key="batchInSpreadsheetKey"
+                          ref="batchInSpreadsheetRef"
+                          :model-value="batchInData.rows"
+                          :col-headers="batchInData.headers"
+                          :columns="batchInColumns"
+                          :height="tableHeight"
+                          @update:model-value="updateBatchInRows"
+                          @selected-row="selectedBatchInRow = $event"
+                        />
+                      </div>
+                    </div>
+                  </template>
+                </SpreadsheetFullscreenPanel>
               </el-tab-pane>
             </el-tabs>
           </section>
@@ -2159,7 +2207,7 @@ watch(
 }
 
 .table-button-row {
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
@@ -2168,11 +2216,25 @@ watch(
 }
 
 .table-button-row :deep(.el-button) {
+  height: 32px;
   margin-left: 0;
 }
 
 .experiment-count-select {
   width: 116px;
+  height: 32px;
+}
+
+.experiment-count-select :deep(.el-select__wrapper) {
+  box-sizing: border-box;
+  min-height: 32px;
+  height: 32px;
+}
+
+.experiment-count-select :deep(.el-select__selected-item),
+.experiment-count-select :deep(.el-select-dropdown__item) {
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .resource-check-option {
@@ -2226,8 +2288,15 @@ watch(
   .table-button-row :deep(.el-button),
   .table-button-row :deep(.el-select) {
     flex: 1 1 calc(50% - 8px);
+    width: auto;
     min-width: 0;
     margin-left: 0;
+  }
+
+  .experiment-count-select :deep(.el-select__selection),
+  .experiment-count-select :deep(.el-select__selected-item) {
+    justify-content: center;
+    text-align: center;
   }
 
   .resource-check-option {

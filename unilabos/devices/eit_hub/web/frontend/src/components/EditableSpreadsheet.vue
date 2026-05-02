@@ -45,6 +45,7 @@ type HotInstanceLike = {
   setDataAtCell: (changes: HotCellChange[], source?: string) => void
   countRows: () => number
   countCols: () => number
+  refreshDimensions?: () => void
   render: () => void
 }
 type IncrementTarget =
@@ -299,11 +300,21 @@ function clearSelectedRange(): boolean {
   return true
 }
 
+function refreshLayout(): void {
+  const hotInstance = getHotInstance()
+  if (hotInstance === undefined) {
+    return
+  }
+  hotInstance.refreshDimensions?.()
+  hotInstance.render()
+}
+
 defineExpose({
   fillSelectedRange,
   clearSelectedRange,
   getSelectedRowRange,
   syncSourceData,
+  refreshLayout,
 })
 
 function buildIncrementalFillData(

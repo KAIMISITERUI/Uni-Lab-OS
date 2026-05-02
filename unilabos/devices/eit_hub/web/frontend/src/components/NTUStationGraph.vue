@@ -26,6 +26,7 @@ interface Props {
   autoSelectOnClick?: boolean
   // selected: 点击后该托盘的选中态 (true=切换到选中, false=同一托盘再次点击触发取消选中)
   onClickTray?: (layout_code: string, x: number, y: number, selected: boolean) => void
+  onClickBlank?: (x: number, y: number) => void
   onContextMenuTray?: (layout_code: string, x: number, y: number) => void
   // 内部资源轮询每次 refresh 完成后回调一次, 父组件可借此同步自有的 resource_list 缓存
   onAfterRefresh?: () => void
@@ -152,6 +153,11 @@ onMounted(async () => {
     onClickTray: (layout_code, x, y, selected) => {
       if (typeof props.onClickTray === 'function') {
         props.onClickTray(layout_code, x, y, selected)
+      }
+    },
+    onClickBlank: (x, y) => {
+      if (typeof props.onClickBlank === 'function') {
+        props.onClickBlank(x, y)
       }
     },
     onContextMenuTray: (layout_code, x, y) => {

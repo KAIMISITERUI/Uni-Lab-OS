@@ -21,6 +21,7 @@ export interface StationGraphParams {
   // selected: true 表示该托盘点击后处于选中态, false 表示点击触发了取消选中 (toggle off)
   // 当 autoSelectOnClick 为 false 时, selected 始终为 true (保留旧行为)
   onClickTray?: (layout_code: string, x: number, y: number, selected: boolean) => void
+  onClickBlank?: (x: number, y: number) => void
   onContextMenuTray?: (layout_code: string, x: number, y: number) => void
   onAfterRefresh?: () => void
   resourceLayoutFilter?: (layout_code: string) => boolean
@@ -105,6 +106,11 @@ export class StationGraph {
       contextMenuTray: (layout_code: string, x: number, y: number) => {
         if (typeof this.params.onContextMenuTray === 'function') {
           this.params.onContextMenuTray(layout_code, x, y)
+        }
+      },
+      clickBlank: (x: number, y: number) => {
+        if (typeof this.params.onClickBlank === 'function') {
+          this.params.onClickBlank(x, y)
         }
       }
     })

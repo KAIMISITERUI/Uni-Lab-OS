@@ -190,6 +190,7 @@ class Station {
     this.fitBounds = this.measureFitBounds()
     this.baseFitBounds = { ...this.fitBounds }
     this.zr.on('click', (a: any) => {
+      let hitLayoutCode: string | undefined
       if (typeof a.topTarget !== 'undefined') {
         let tar = a.topTarget
         while (typeof tar !== 'undefined') {
@@ -200,8 +201,12 @@ class Station {
         }
 
         if (typeof tar?._layout_code !== 'undefined' && !Station.isDisableClick(tar?._layout_code)) {
+          hitLayoutCode = tar._layout_code
           callback.clickTray(tar._layout_code, a.offsetX, a.offsetY)
         }
+      }
+      if (hitLayoutCode === undefined && typeof callback.clickBlank === 'function') {
+        callback.clickBlank(a.offsetX, a.offsetY)
       }
     })
 

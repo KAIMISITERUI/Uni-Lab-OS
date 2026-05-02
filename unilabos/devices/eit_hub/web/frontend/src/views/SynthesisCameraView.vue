@@ -13,6 +13,8 @@ interface CameraSlot {
   failed: boolean
 }
 
+type ZoomOrientation = 'auto' | 'landscape' | 'portrait'
+
 const cameras = ref<CameraSlot[]>([])
 const loading = ref(false)
 const errorText = ref('')
@@ -22,6 +24,7 @@ const streamActive = ref(true)
 const zoomedSlot = ref<CameraSlot | null>(null)
 const zoomedReloadToken = ref(0)
 const zoomedFailed = ref(false)
+const zoomOrientation = ref<ZoomOrientation>('auto')
 // 弹窗主码流 <img> DOM 引用, 关闭弹窗时显式置空 src 强制释放 MJPEG 连接
 const zoomImgEl = ref<HTMLImageElement | null>(null)
 const mobileZoomRef = ref<HTMLDivElement | null>(null)
@@ -73,6 +76,20 @@ function releaseAllThumbConnections(): void {
   }
 }
 
+function resetZoomState(): void {
+  zoomedReloadToken.value = Date.now()
+  zoomedFailed.value = false
+  zoomOrientation.value = 'auto'
+}
+
+function restoreThumbStreams(): void {
+  streamActive.value = true
+  for (const slot of cameras.value) {
+    slot.failed = false
+    slot.reloadToken = Date.now()
+  }
+}
+
 async function loadCameras(): Promise<void> {
   loading.value = true
   errorText.value = ''
@@ -108,20 +125,27 @@ function onThumbLoad(slot: CameraSlot): void {
 }
 
 function openZoom(slot: CameraSlot): void {
-  zoomedReloadToken.value = Date.now()
-  zoomedFailed.value = false
+  resetZoomState()
+  if (isMobile.value === true) {
+    // 手机端放大时独占主码流, 避免缩略图 MJPEG 连接占满同源连接池.
+    releaseAllThumbConnections()
+    streamActive.value = false
+  }
   zoomedSlot.value = slot
   if (isMobile.value === true) {
-    void enterMobileLandscape()
+    void enterMobileZoom()
   }
 }
 
 function reloadZoom(): void {
-  zoomedReloadToken.value = Date.now()
-  zoomedFailed.value = false
+  releaseZoomConnection()
+  resetZoomState()
+  if (isMobile.value === true) {
+    void enterMobileZoom()
+  }
 }
 
-async function enterMobileLandscape(): Promise<void> {
+async function enterMobileZoom(): Promise<void> {
   await nextTick()
   const container = mobileZoomRef.value
   if (container !== null && document.fullscreenElement === null) {
@@ -131,14 +155,21 @@ async function enterMobileLandscape(): Promise<void> {
       // 浏览器不允许全屏时保持页面内横屏播放器.
     }
   }
+  await lockMobileOrientation()
+}
+
+async function lockMobileOrientation(): Promise<void> {
+  if (zoomOrientation.value === 'auto') {
+    return
+  }
   try {
-    await screen.orientation?.lock?.('landscape')
+    await screen.orientation?.lock?.(zoomOrientation.value)
   } catch {
-    // iOS Safari 等环境不支持方向锁定时, 由全屏播放器兜住画面.
+    // iOS Safari 等环境不支持方向锁定时, 由全屏播放器样式兜住画面.
   }
 }
 
-async function exitMobileLandscape(): Promise<void> {
+async function exitMobileZoom(): Promise<void> {
   try {
     screen.orientation?.unlock?.()
   } catch {
@@ -153,10 +184,31 @@ async function exitMobileLandscape(): Promise<void> {
   }
 }
 
+function onZoomLoad(event: Event): void {
+  zoomedFailed.value = false
+  const img = event.currentTarget
+  if (img instanceof HTMLImageElement === false) {
+    return
+  }
+  if (img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+    return
+  }
+  zoomOrientation.value = img.naturalHeight > img.naturalWidth ? 'portrait' : 'landscape'
+  if (isMobile.value === true) {
+    void lockMobileOrientation()
+  }
+}
+
+function onZoomError(): void {
+  zoomedFailed.value = true
+}
+
 function closeMobileZoom(): void {
   releaseZoomConnection()
   zoomedSlot.value = null
-  void exitMobileLandscape()
+  zoomOrientation.value = 'auto'
+  void exitMobileZoom()
+  restoreThumbStreams()
 }
 
 onMounted(() => {
@@ -185,7 +237,8 @@ onDeactivated(() => {
   releaseZoomConnection()
   streamActive.value = false
   zoomedSlot.value = null
-  void exitMobileLandscape()
+  zoomOrientation.value = 'auto'
+  void exitMobileZoom()
 })
 
 onBeforeUnmount(() => {
@@ -193,7 +246,8 @@ onBeforeUnmount(() => {
   releaseZoomConnection()
   streamActive.value = false
   zoomedSlot.value = null
-  void exitMobileLandscape()
+  zoomOrientation.value = 'auto'
+  void exitMobileZoom()
 })
 </script>
 
@@ -282,30 +336,33 @@ onBeforeUnmount(() => {
       v-show="isMobile === true && zoomedSlot !== null"
       ref="mobileZoomRef"
       class="mobile-landscape-viewer"
+      :class="`is-${zoomOrientation}`"
     >
-      <div class="mobile-landscape-toolbar">
-        <span class="mobile-landscape-title">
-          {{ zoomedSlot ? `${zoomedSlot.info.name || zoomedSlot.info.id} - 主码流` : '' }}
-        </span>
-        <div class="mobile-landscape-actions">
-          <el-button size="small" :icon="Refresh" @click="reloadZoom">重连</el-button>
-          <el-button size="small" type="primary" @click="closeMobileZoom">关闭</el-button>
+      <div class="mobile-landscape-shell">
+        <div class="mobile-landscape-toolbar">
+          <span class="mobile-landscape-title">
+            {{ zoomedSlot ? `${zoomedSlot.info.name || zoomedSlot.info.id} - 主码流` : '' }}
+          </span>
+          <div class="mobile-landscape-actions">
+            <el-button size="small" :icon="Refresh" @click="reloadZoom">重连</el-button>
+            <el-button size="small" type="primary" @click="closeMobileZoom">关闭</el-button>
+          </div>
         </div>
-      </div>
-      <div v-if="zoomedSlot !== null" class="mobile-landscape-frame">
-        <img
-          ref="zoomImgEl"
-          :src="buildSrc(zoomedSlot.info.stream_url_main, zoomedReloadToken)"
-          :alt="zoomedSlot.info.id"
-          class="mobile-landscape-image"
-          @error="zoomedFailed = true"
-          @load="zoomedFailed = false"
-        />
-        <div v-if="zoomedFailed" class="camera-overlay">
-          <p>主码流拉取失败, 请检查 ops_http 与网络</p>
-          <el-button type="primary" :icon="Refresh" @click="reloadZoom">
-            重新连接
-          </el-button>
+        <div v-if="zoomedSlot !== null" class="mobile-landscape-frame">
+          <img
+            ref="zoomImgEl"
+            :src="buildSrc(zoomedSlot.info.stream_url_main, zoomedReloadToken)"
+            :alt="zoomedSlot.info.id"
+            class="mobile-landscape-image"
+            @error="onZoomError"
+            @load="onZoomLoad"
+          />
+          <div v-if="zoomedFailed" class="camera-overlay">
+            <p>主码流拉取失败, 请检查 ops_http 与网络</p>
+            <el-button type="primary" :icon="Refresh" @click="reloadZoom">
+              重新连接
+            </el-button>
+          </div>
         </div>
       </div>
     </div>
@@ -327,8 +384,8 @@ onBeforeUnmount(() => {
           :src="buildSrc(zoomedSlot.info.stream_url_main, zoomedReloadToken)"
           :alt="zoomedSlot.info.id"
           class="zoom-image"
-          @error="zoomedFailed = true"
-          @load="zoomedFailed = false"
+          @error="onZoomError"
+          @load="onZoomLoad"
         />
         <div v-if="zoomedFailed" class="camera-overlay">
           <p>主码流拉取失败, 请检查 ops_http 与网络</p>
@@ -488,8 +545,15 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: 7000;
+  overflow: hidden;
+  background: #000000;
+}
+
+.mobile-landscape-shell {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  height: 100%;
   background: #000000;
 }
 
@@ -535,6 +599,18 @@ onBeforeUnmount(() => {
   height: 100%;
   object-fit: contain;
   background: #000000;
+}
+
+@media (max-width: 767.98px) and (orientation: portrait) {
+  .mobile-landscape-viewer.is-landscape .mobile-landscape-shell {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+    transform-origin: center center;
+  }
 }
 
 @media (max-width: 767.98px) {

@@ -209,6 +209,24 @@ function onSlotClick (layoutCode: string, x: number, y: number, selected: boolea
   popoverState.value = { detail, anchor: { x: clientX, y: clientY } }
 }
 
+function clearStationSelection(): void {
+  const station: any = stationGraphRef.value?.getStation?.()
+  if (station === undefined || station === null) {
+    popoverState.value = null
+    return
+  }
+  Object.values(station.slots || {}).forEach((slot: any) => {
+    if (slot?.selected === true && typeof slot.setSelected === 'function') {
+      slot.setSelected(false)
+    }
+  })
+  popoverState.value = null
+}
+
+function onStationBlankClick(): void {
+  clearStationSelection()
+}
+
 // 强制刷新主 3D 视图. 供资源变更成功回调和 ResourcePanel 手动刷新按钮共同复用
 // 异常会向上抛出, 由调用方决定是否提示 (手动刷新会在子组件捕获并提示)
 async function refreshStationGraph (): Promise<void> {
@@ -885,6 +903,7 @@ onBeforeUnmount(stopDashboardPolling)
                       :mobile-margin="12"
                       :on-context-menu-tray="onSlotContextMenu"
                       :on-click-tray="onSlotClick"
+                      :on-click-blank="onStationBlankClick"
                       :on-after-refresh="syncResourceList"
                     />
                     <TrayDetailPopover

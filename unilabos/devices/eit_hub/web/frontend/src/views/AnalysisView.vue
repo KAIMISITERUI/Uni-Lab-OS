@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onActivated, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CopyDocument, Delete, DeleteFilled, Plus, Refresh, TrendCharts, Upload } from '@element-plus/icons-vue'
 import JobPanel from '../components/JobPanel.vue'
@@ -15,6 +15,7 @@ import {
 import { getErrorMessage } from '../api/http'
 import { type JobState } from '../api/synthesis'
 import EditableSpreadsheet from '../components/EditableSpreadsheet.vue'
+import SpreadsheetFullscreenPanel from '../components/SpreadsheetFullscreenPanel.vue'
 
 const csvHeaders = [
   'SampleName',
@@ -47,6 +48,7 @@ type EditableSpreadsheetRef = ComponentPublicInstance & {
   clearSelectedRange: () => boolean
   getSelectedRowRange: () => SelectedRowRange | null
   syncSourceData: () => SpreadsheetRow[]
+  refreshLayout: () => void
 }
 
 const ANALYSIS_DRAFT_KEY = 'eit_hub.analysis_tables_draft'
@@ -311,6 +313,14 @@ function setSpreadsheetRef(
 
 function getActiveSpreadsheet(): EditableSpreadsheetRef | undefined {
   return spreadsheetRefs.value[activeInstrument.value]
+}
+
+function refreshActiveSpreadsheetLayout(): void {
+  void nextTick(() => {
+    window.requestAnimationFrame(() => {
+      getActiveSpreadsheet()?.refreshLayout()
+    })
+  })
 }
 
 function syncActiveSpreadsheetRows(): AnalysisTableRow[] {
@@ -715,6 +725,7 @@ onActivated(() => {
 watch(activeInstrument, () => {
   selectedRow.value = null
   persistAnalysisDraft()
+  refreshActiveSpreadsheetLayout()
 })
 
 watch(
@@ -763,54 +774,64 @@ watch(
     </section>
 
     <section class="panel">
-      <div class="panel-title">
-        <h2>分析样品表</h2>
-        <div class="button-row analysis-button-grid">
-          <el-button :icon="Refresh" :loading="statusLoading" @click="refreshAnalysisContent">刷新</el-button>
-          <el-button :icon="Plus" @click="addRow">新增行</el-button>
-          <el-button :icon="Delete" @click="deleteActiveRow">删除行</el-button>
-          <el-button @click="clearActiveTable">清除内容</el-button>
-          <el-button :icon="DeleteFilled" @click="clearAllTables">清除所有内容</el-button>
-          <el-button :icon="TrendCharts" @click="fillActiveTable('increment')">递增填充</el-button>
-          <el-button :icon="CopyDocument" @click="fillActiveTable('copy')">复制填充</el-button>
-          <el-button class="analysis-submit-button" type="primary" :icon="Upload" :loading="submitLoading" @click="submitTables">
-            保存并提交
-          </el-button>
-        </div>
-      </div>
+      <SpreadsheetFullscreenPanel
+        title="分析样品表"
+        :normal-height="500"
+        :fullscreen-table-offset="82"
+        :mobile-fullscreen-table-offset="72"
+        @fullscreen-change="refreshActiveSpreadsheetLayout"
+        @layout-change="refreshActiveSpreadsheetLayout"
+      >
+        <template #actions>
+          <div class="button-row analysis-button-grid">
+            <el-button :icon="Refresh" :loading="statusLoading" @click="refreshAnalysisContent">刷新</el-button>
+            <el-button :icon="Plus" @click="addRow">新增行</el-button>
+            <el-button :icon="Delete" @click="deleteActiveRow">删除行</el-button>
+            <el-button @click="clearActiveTable">清除内容</el-button>
+            <el-button :icon="DeleteFilled" @click="clearAllTables">清除所有内容</el-button>
+            <el-button :icon="TrendCharts" @click="fillActiveTable('increment')">递增填充</el-button>
+            <el-button :icon="CopyDocument" @click="fillActiveTable('copy')">复制填充</el-button>
+            <el-button class="analysis-submit-button" type="primary" :icon="Upload" :loading="submitLoading" @click="submitTables">
+              保存并提交
+            </el-button>
+          </div>
+        </template>
 
-      <el-tabs v-model="activeInstrument" class="analysis-tabs">
-        <el-tab-pane
-          v-for="instrument in instruments"
-          :key="instrument.key"
-          :name="instrument.key"
-          :label="instrument.name"
-        >
-          <div class="spreadsheet-wrap">
-            <EditableSpreadsheet
+        <template #default="{ tableHeight }">
+          <el-tabs v-model="activeInstrument" class="analysis-tabs" @tab-change="refreshActiveSpreadsheetLayout">
+            <el-tab-pane
+              v-for="instrument in instruments"
               :key="instrument.key"
-              :ref="(component) => setSpreadsheetRef(instrument.key, component)"
-              :model-value="tables[instrument.key]"
-              :col-headers="[...csvHeaders]"
-              :columns="analysisColumnsByInstrument[instrument.key]"
-              :height="500"
-              stretch-h="all"
-              @selected-row="selectedRow = $event"
-              @update:model-value="updateInstrumentRows(instrument.key, $event)"
-            />
-          </div>
-          <div v-if="instrument.key === 'uplc_qtof'" class="analysis-option-row">
-            <el-checkbox v-model="autoAppendEnabled.uplc_qtof">
-              自动添加冲柱+停机方法
-            </el-checkbox>
-          </div>
-          <div v-if="instrument.key === 'hplc'" class="analysis-option-row">
-            <el-checkbox v-model="autoAppendEnabled.hplc">
-              自动添加冲柱+停机方法
-            </el-checkbox>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
+              :name="instrument.key"
+              :label="instrument.name"
+            >
+              <div class="spreadsheet-wrap">
+                <EditableSpreadsheet
+                  :key="instrument.key"
+                  :ref="(component) => setSpreadsheetRef(instrument.key, component)"
+                  :model-value="tables[instrument.key]"
+                  :col-headers="[...csvHeaders]"
+                  :columns="analysisColumnsByInstrument[instrument.key]"
+                  :height="tableHeight"
+                  stretch-h="all"
+                  @selected-row="selectedRow = $event"
+                  @update:model-value="updateInstrumentRows(instrument.key, $event)"
+                />
+              </div>
+              <div v-if="instrument.key === 'uplc_qtof'" class="analysis-option-row">
+                <el-checkbox v-model="autoAppendEnabled.uplc_qtof">
+                  自动添加冲柱+停机方法
+                </el-checkbox>
+              </div>
+              <div v-if="instrument.key === 'hplc'" class="analysis-option-row">
+                <el-checkbox v-model="autoAppendEnabled.hplc">
+                  自动添加冲柱+停机方法
+                </el-checkbox>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+        </template>
+      </SpreadsheetFullscreenPanel>
     </section>
 
     <JobPanel

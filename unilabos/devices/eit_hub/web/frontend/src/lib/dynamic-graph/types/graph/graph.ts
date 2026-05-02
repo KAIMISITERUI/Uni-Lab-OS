@@ -22,6 +22,8 @@ export interface Recorder {
 
 export interface GraphCallback {
   clickTray: (layout_code: string, x: number, y: number) => void;
+  // 点击空白区域时触发, 用于上层清除当前选中态.
+  clickBlank?: (x: number, y: number) => void;
   // 右键菜单回调, 在 zrender contextmenu 事件命中槽位时触发
   // x/y 为相对画布的偏移坐标, 由调用方决定如何映射为屏幕坐标
   contextMenuTray?: (layout_code: string, x: number, y: number) => void;

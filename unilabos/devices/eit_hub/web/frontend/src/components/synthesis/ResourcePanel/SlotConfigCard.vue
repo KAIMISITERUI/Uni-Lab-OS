@@ -201,5 +201,13 @@ function onTrayModelChange (val: string): void {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
+
+  .grid-col {
+    justify-content: center;
+  }
+
+  .grid-col :deep(.well-grid-wrap) {
+    margin-inline: auto;
+  }
 }
 </style>
