@@ -16,8 +16,12 @@ from fastapi.responses import StreamingResponse
 
 from ..dependencies import (
     get_ai_agent_config_store,
-    get_ai_agent_orchestrator,
+    get_ai_agent_knowledge_service,
+    get_ai_agent_memory_service,
+    get_ai_agent_runtime,
+    get_ai_agent_skill_service,
     get_ai_agent_store,
+    get_ai_agent_tool_registry,
 )
 from ..domain.store import AiAgentStore
 from ..infra.config_store import AiAgentConfig
@@ -25,6 +29,7 @@ from ..infra.deepseek_client import DEFAULT_BASE_URL, DEFAULT_MODEL, MODEL_OPTIO
 from .schemas import (
     AiConfigUpdatePayload,
     CreateSessionResponse,
+    KnowledgeIngestPayload,
     RenameSessionPayload,
     SendMessagePayload,
     ToolConfirmPayload,
@@ -278,6 +283,115 @@ def delete_session(session_id: str) -> JsonDict:
     return {"affected": affected}
 
 
+@router.get("/tools")
+def list_tools() -> JsonDict:
+    """
+    功能:
+        返回 AI Agent 当前注册工具目录, 同时包含 OpenAI-compatible 和 MCP-style 元数据.
+    返回:
+        Dict[str, Any], 工具列表.
+    """
+    registry = get_ai_agent_tool_registry()
+    items = registry.to_mcp_tools()
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/memories")
+def list_memories(
+    keyword: str = Query(default=""),
+    category: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> JsonDict:
+    """
+    功能:
+        查询 AI Agent 长期记忆.
+    参数:
+        keyword: str, 内容关键词.
+        category: Optional[str], 记忆分类.
+        limit: int, 最大条数.
+    返回:
+        Dict[str, Any], 记忆列表.
+    """
+    service = get_ai_agent_memory_service()
+    items = service.list_memories(keyword=keyword, category=category, limit=limit)
+    return {"items": items, "total": len(items)}
+
+
+@router.delete("/memories/{memory_id}")
+def delete_memory(memory_id: int) -> JsonDict:
+    """
+    功能:
+        删除指定长期记忆.
+    参数:
+        memory_id: int, 记忆 ID.
+    返回:
+        Dict[str, Any], 删除结果.
+    """
+    service = get_ai_agent_memory_service()
+    try:
+        affected = service.delete_memory(memory_id)
+    except KeyError as exc:
+        raise _json_error(str(exc), status.HTTP_404_NOT_FOUND) from exc
+    return {"affected": affected}
+
+
+@router.get("/skills")
+def list_skills(refresh: bool = Query(default=False)) -> JsonDict:
+    """
+    功能:
+        返回 Agent Skills 目录.
+    参数:
+        refresh: bool, 是否重新扫描 skill 目录.
+    返回:
+        Dict[str, Any], skill 列表.
+    """
+    service = get_ai_agent_skill_service()
+    items = service.refresh() if refresh is True else service.list_skills()
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/knowledge/ingest")
+def ingest_knowledge(payload: KnowledgeIngestPayload = Body(...)) -> JsonDict:
+    """
+    功能:
+        摄取本地文件或目录到知识库.
+    参数:
+        payload: KnowledgeIngestPayload, 含路径和 collection.
+    返回:
+        Dict[str, Any], 入库统计.
+    """
+    service = get_ai_agent_knowledge_service()
+    try:
+        return service.ingest_path(payload.path, collection_name=payload.collection)
+    except Exception as exc:
+        logger.exception("知识库摄取失败")
+        raise _json_error(str(exc)) from exc
+
+
+@router.get("/knowledge/search")
+def search_knowledge(
+    query: str = Query(...),
+    limit: int = Query(default=5, ge=1, le=20),
+    collection: Optional[str] = Query(default=None),
+) -> JsonDict:
+    """
+    功能:
+        检索知识库.
+    参数:
+        query: str, 检索问题.
+        limit: int, 返回条数.
+        collection: Optional[str], collection 名称.
+    返回:
+        Dict[str, Any], 检索结果.
+    """
+    service = get_ai_agent_knowledge_service()
+    try:
+        return service.search(query=query, limit=limit, collection_name=collection)
+    except Exception as exc:
+        logger.exception("知识库检索失败")
+        raise _json_error(str(exc)) from exc
+
+
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
@@ -293,12 +407,14 @@ async def send_message(
         StreamingResponse, 媒体类型 text/event-stream.
     """
     try:
-        orchestrator = get_ai_agent_orchestrator()
+        runtime = get_ai_agent_runtime()
     except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE) from exc
+    except RuntimeError as exc:
         raise _json_error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE) from exc
 
     async def _generate():
-        async for event in orchestrator.stream_user_turn(session_id, payload.content):
+        async for event in runtime.stream_user_turn(session_id, payload.content):
             yield event.to_sse_text()
 
     return StreamingResponse(_generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -318,20 +434,23 @@ async def confirm_tool(
     返回:
         StreamingResponse, 媒体类型 text/event-stream.
     """
-    if payload.action not in ("confirm", "reject"):
-        raise _json_error(f"action 必须是 confirm 或 reject, 当前: {payload.action}")
+    if payload.action not in ("approve", "reject", "edit"):
+        raise _json_error(f"action 必须是 approve, reject 或 edit, 当前: {payload.action}")
 
     try:
-        orchestrator = get_ai_agent_orchestrator()
+        runtime = get_ai_agent_runtime()
     except ValueError as exc:
+        raise _json_error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE) from exc
+    except RuntimeError as exc:
         raise _json_error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE) from exc
 
     async def _generate():
-        async for event in orchestrator.stream_tool_resolution(
+        async for event in runtime.resume_human_review(
             session_id=session_id,
             message_id=payload.message_id,
             action=payload.action,
             reject_reason=payload.reject_reason or "",
+            edited_arguments=payload.edited_arguments,
         ):
             yield event.to_sse_text()
 

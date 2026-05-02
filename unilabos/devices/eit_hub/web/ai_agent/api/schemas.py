@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class CreateSessionResponse(BaseModel):
@@ -30,10 +30,9 @@ class RenameSessionPayload(BaseModel):
         title: str, 新标题, 不能为空.
     """
 
-    title: str
+    model_config = ConfigDict(extra="forbid")
 
-    class Config:
-        extra = "forbid"
+    title: str
 
 
 class SendMessagePayload(BaseModel):
@@ -44,10 +43,9 @@ class SendMessagePayload(BaseModel):
         content: str, 消息原文.
     """
 
-    content: str
+    model_config = ConfigDict(extra="forbid")
 
-    class Config:
-        extra = "forbid"
+    content: str
 
 
 class AiConfigUpdatePayload(BaseModel):
@@ -61,28 +59,43 @@ class AiConfigUpdatePayload(BaseModel):
         timeout_s: Optional[float], 超时秒, None 不修改, 0 或负数清除.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
     timeout_s: Optional[float] = None
 
-    class Config:
-        extra = "forbid"
-
 
 class ToolConfirmPayload(BaseModel):
     """
     功能:
-        对挂起 control_tool 的确认/拒绝请求.
+        对挂起 control 工具的确认, 拒绝或编辑后确认请求.
     参数:
         message_id: int, 待解决的 tool 消息行 ID.
-        action: str, confirm 或 reject.
+        action: str, approve, reject 或 edit.
         reject_reason: str 或 None, 拒绝时的说明.
+        edited_arguments: Dict 或 None, edit 时的新工具参数.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     message_id: int
     action: str
     reject_reason: Optional[str] = ""
+    edited_arguments: Optional[Dict[str, Any]] = None
 
-    class Config:
-        extra = "forbid"
+
+class KnowledgeIngestPayload(BaseModel):
+    """
+    功能:
+        知识库摄取请求.
+    参数:
+        path: str, 本地文件或目录路径.
+        collection: str 或 None, Qdrant collection 名称.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    collection: Optional[str] = None
