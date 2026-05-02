@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(/c/ProgramData/miniforge3/python.exe -c ' *)"
+      "Bash(/c/ProgramData/miniforge3/python.exe -c ' *)",
+      "Read(//Users/**)",
+      "Read(//Users/nskyoc/D:/Uni-Lab-OS/unilabos/devices/eit_hub/web/frontend/**)",
+      "Bash(curl -s http://127.0.0.1:5174/ -m 5)"
     ]
   }
 }
