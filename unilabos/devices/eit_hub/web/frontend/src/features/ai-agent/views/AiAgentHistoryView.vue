@@ -3,6 +3,7 @@
 import { computed, nextTick, onActivated, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  ArrowLeft,
   ChatDotRound,
   Delete,
   EditPen,
@@ -13,6 +14,7 @@ import {
   Setting,
   Top,
 } from '@element-plus/icons-vue'
+import { useViewportMode } from '../../../composables/useViewportMode'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import {
@@ -41,6 +43,9 @@ const selectedSessionId = ref<string | null>(null)
 const detailLoading = ref(false)
 const historyInputText = ref('')
 const detailScroll = ref<HTMLDivElement | null>(null)
+const { isMobile } = useViewportMode()
+// 手机端两屏式: 选中会话后切换到详情, 详情顶部"返回"按钮回到列表
+const mobileShowDetail = computed(() => isMobile.value === true && selectedSessionId.value !== null)
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -461,8 +466,11 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
       </div>
 
       <div class="two-column">
-        <!-- 左侧: 会话列表 -->
-        <div class="ai-history-list">
+        <!-- 左侧: 会话列表 (手机端选中后切换到详情) -->
+        <div
+          v-show="isMobile === false || mobileShowDetail === false"
+          class="ai-history-list"
+        >
           <div v-if="listLoading === true" class="ai-history-empty">
             <el-icon class="is-loading"><Loading /></el-icon>
             加载中...
@@ -515,14 +523,26 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
           />
         </div>
 
-        <!-- 右侧: 详情 -->
-        <div class="ai-history-detail">
+        <!-- 右侧: 详情 (手机端独占显示) -->
+        <div
+          v-show="isMobile === false || mobileShowDetail === true"
+          class="ai-history-detail"
+        >
           <div v-if="selectedSessionId === null" class="ai-history-empty">
             <el-icon><ChatDotRound /></el-icon>
             <span>从左侧选择一个会话以查看详情</span>
           </div>
           <template v-else>
             <div class="ai-history-detail-header">
+              <el-button
+                v-if="isMobile === true"
+                class="ai-history-back-btn"
+                :icon="ArrowLeft"
+                size="small"
+                @click="selectedSessionId = null"
+              >
+                返回列表
+              </el-button>
               <div>
                 <h3 class="ai-history-detail-title">{{ selectedSummary?.title || '会话详情' }}</h3>
                 <div class="ai-history-detail-sub">
@@ -1232,5 +1252,44 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 .ai-config-model-id {
   color: #66758a;
   font-size: 11px;
+}
+
+@media (max-width: 767.98px) {
+  /* 双列 -> 单列 (两屏式由父组件 v-show 控制) */
+  .two-column {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-history-search {
+    width: 100%;
+  }
+
+  .ai-history-list,
+  .ai-history-detail {
+    width: 100%;
+    min-height: 50vh;
+  }
+
+  .ai-history-back-btn {
+    align-self: flex-start;
+    margin-bottom: 8px;
+  }
+
+  .ai-history-item {
+    padding-right: 8px;
+  }
+
+  .ai-history-item-menu {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    border-radius: 8px;
+  }
+
+  /* 模型选择按钮组在窄屏铺开 */
+  .ai-config-model-group :deep(.el-radio-button__inner) {
+    min-width: 0;
+    width: 100%;
+  }
 }
 </style>

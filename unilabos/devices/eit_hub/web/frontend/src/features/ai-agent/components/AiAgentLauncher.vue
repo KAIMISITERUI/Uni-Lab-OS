@@ -55,7 +55,9 @@ const messageScroll = ref<HTMLDivElement | null>(null)
 const drawerReady = ref(false)
 const drawerInteracting = ref(false)
 const showToolCalls = ref(true)
-const DESKTOP_QUERY = '(min-width: 921px)'
+// 与 useViewportMode 的 (max-width: 767.98px) 互补, 768 以上视为桌面布局.
+// 桌面布局下保留侧栏/悬浮窗双模式; 768 以下走"底部全屏 sheet"模式, 入口由 App.vue 的 mobile-topbar 接管, 不再渲染右下角 FAB.
+const DESKTOP_QUERY = '(min-width: 768px)'
 const isDesktopLayout = ref(
   typeof window !== 'undefined' ? window.matchMedia(DESKTOP_QUERY).matches : false,
 )
@@ -594,6 +596,11 @@ function onDocumentPointerDown(event: PointerEvent): void {
   }
   // 命中助手自身, 不隐藏
   if (target.closest('.ai-launcher-root') !== null) {
+    return
+  }
+  // 手机端顶部栏的 AI 入口按钮承担 toggle 语义, 它 click 后 App.vue 会调用 ai.toggle();
+  // 这里若再 close 一次会和 toggle 形成 close → open 的连续翻转, 面板看似不会关闭. 直接放行.
+  if (target.closest('.mobile-topbar') !== null) {
     return
   }
   // Element Plus 浮层 (tooltip / 下拉 / MessageBox / Message / Overlay) 挂载在 body 上,
@@ -1723,7 +1730,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   opacity: 1;
 }
 
-@media (min-width: 921px) {
+@media (min-width: 768px) {
   .ai-launcher-root {
     position: fixed;
     inset: 0;
@@ -1786,10 +1793,66 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   }
 }
 
-@media (max-width: 920px) {
-  .ai-fab {
-    right: 16px;
-    bottom: 16px;
+@media (max-width: 767.98px) {
+  /* 关键: root 在手机端必须 pointer-events:none, 否则其 fixed inset:0 会拦截 mobile-topbar 的点击,
+     使得 mobile-topbar 上的 AI 图标按钮无法再被点击关闭浮窗.
+     仅 .ai-drawer (浮窗自身) 与 .ai-fab 子元素恢复 auto 接收事件. */
+  .ai-launcher-mobile {
+    position: fixed;
+    inset: 0;
+    z-index: 1800;
+    pointer-events: none;
+  }
+
+  .ai-launcher-mobile .ai-drawer,
+  .ai-launcher-mobile .ai-fab {
+    pointer-events: auto;
+  }
+
+  /* 手机端入口由 App.vue 的 mobile-topbar AI 图标按钮提供, 隐藏右下角 FAB 避免争夺 viewport */
+  .ai-launcher-mobile .ai-fab {
+    display: none !important;
+  }
+
+  /* 抽屉切换为底部上拉的全屏 sheet, 用 !important 压住组件 :style 注入的 left/top/width/height.
+     起始 top 让出 56px mobile-topbar 高度, 使顶栏的汉堡/AI 按钮始终可点 */
+  .ai-launcher-mobile .ai-drawer {
+    position: fixed !important;
+    left: 0 !important;
+    top: var(--app-mobile-topbar-h) !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: calc(100dvh - var(--app-mobile-topbar-h)) !important;
+    max-width: 100vw !important;
+    max-height: calc(100dvh - var(--app-mobile-topbar-h)) !important;
+    border-radius: 0 !important;
+    border: 0 !important;
+    visibility: visible !important;
+    z-index: 1850;
+  }
+
+  /* 隐藏拖动改尺寸的手柄, 触屏无意义 */
+  .ai-launcher-mobile .ai-resize-handle,
+  .ai-launcher-mobile .ai-side-resize-handle {
+    display: none !important;
+  }
+
+  /* 头部不可拖动, 恢复正常 cursor */
+  .ai-launcher-mobile .ai-drawer-header {
+    cursor: default;
+    touch-action: auto;
+  }
+
+  /* 模式切换按钮 (侧栏/悬浮窗) 在手机端无意义, 隐藏 */
+  .ai-launcher-mobile .ai-drawer-header .ai-icon-btn[aria-label="切换为悬浮小窗"],
+  .ai-launcher-mobile .ai-drawer-header .ai-icon-btn[aria-label="切换为右侧栏"] {
+    display: none;
+  }
+
+  /* 输入区底部安全区 (iPhone home indicator) */
+  .ai-launcher-mobile .ai-drawer-footer {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
   }
 }
 </style>
