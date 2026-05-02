@@ -315,6 +315,8 @@ onBeforeUnmount(() => {
 }
 .popover-body {
   padding: 12px;
+  /* 试剂盘 (.reagent-slot-map 为 inline-flex) 在对话框中水平居中; 消耗品模式的 .info-row 是块级 flex, 不受影响 */
+  text-align: center;
 }
 .popover-footer {
   display: flex;
