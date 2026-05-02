@@ -1,0 +1,21 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - button "打开导航" [ref=e6] [cursor=pointer]:
+      - img [ref=e8]
+    - heading "现场监控" [level=2] [ref=e10]
+    - generic [ref=e11]:
+      - button "访问令牌" [ref=e12] [cursor=pointer]:
+        - img [ref=e14]
+      - button "AI 助手" [ref=e16] [cursor=pointer]:
+        - img [ref=e18]
+  - main [ref=e21]:
+    - generic [ref=e24]:
+      - heading "现场监控" [level=2] [ref=e25]:
+        - img [ref=e27]
+        - text: 现场监控
+      - generic [ref=e29]:
+        - generic [ref=e30]: 点击单路画面放大为主码流
+        - button "刷新列表" [disabled]:
+          - generic:
+            - img
+          - generic: 刷新列表

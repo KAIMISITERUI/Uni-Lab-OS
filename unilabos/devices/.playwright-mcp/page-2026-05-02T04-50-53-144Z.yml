@@ -1,0 +1,43 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - button "打开导航" [ref=e6] [cursor=pointer]:
+      - img [ref=e8]
+    - heading "设备总览" [level=2] [ref=e10]
+    - generic [ref=e11]:
+      - button "访问令牌" [ref=e12] [cursor=pointer]:
+        - img [ref=e14]
+      - button "AI 助手" [ref=e16] [cursor=pointer]:
+        - img [ref=e18]
+  - main [ref=e21]:
+    - generic [ref=e22]:
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - heading "设备状态" [level=2] [ref=e25]
+          - generic [ref=e26]:
+            - generic [ref=e27]: "最后刷新: --"
+            - button "刷新" [disabled]:
+              - generic:
+                - img
+              - generic: 刷新
+        - generic [ref=e28]:
+          - generic [ref=e29]:
+            - generic [ref=e30]: 设备总数
+            - generic [ref=e31]: "0"
+            - generic [ref=e32]: 含 EIT Hub
+          - generic [ref=e33]:
+            - generic [ref=e34]: 在线
+            - generic [ref=e35]: "0"
+            - generic [ref=e36]: 全部端口可联通
+          - generic [ref=e37]:
+            - generic [ref=e38]: 部分在线
+            - generic [ref=e39]: "0"
+            - generic [ref=e40]: 存在离线端口
+          - generic [ref=e41]:
+            - generic [ref=e42]: 离线
+            - generic [ref=e43]: "0"
+            - generic [ref=e44]: 端口不可联通
+      - generic [ref=e45]:
+        - generic [ref=e46]:
+          - heading "连接明细" [level=2] [ref=e47]
+          - generic [ref=e48]: 0 台设备
+        - generic [ref=e51]: 暂无数据

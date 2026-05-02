@@ -1,0 +1,628 @@
+[
+  {
+    "route": "/devices",
+    "label": "设备总览",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/devices",
+    "screenshot": "mobile-audit\\iphone-14-pro_devices.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 2.01
+  },
+  {
+    "route": "/synthesis",
+    "label": "合成工站",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/synthesis",
+    "screenshot": "mobile-audit\\iphone-14-pro_synthesis.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "BaseTray.fromModel(201000730, true) took 76.30ms"
+      },
+      {
+        "type": "warning",
+        "text": "Canvas2D: Multiple readback operations using getImageData are faster with the willReadFrequently attribute set to true. See: https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.82
+  },
+  {
+    "route": "/synthesis/cameras",
+    "label": "现场监控",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/synthesis/cameras",
+    "screenshot": "mobile-audit\\iphone-14-pro_synthesis_cameras.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.9
+  },
+  {
+    "route": "/analysis",
+    "label": "分析工站",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/analysis",
+    "screenshot": "mobile-audit\\iphone-14-pro_analysis.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "Deprecated: The `numericFormat.pattern` and `numericFormat.culture` options are deprecated and will be removed in the next major release. Pass `Intl.NumberFormat` options directly to `numericFormat` and use the `locale` cell property instead of `culture`.\n\nMigration guide: https://handsontable.com/docs/migration-from-16.2-to-17.0/\n`numericFormat` documentation: https://handsontable.com/docs/api/options/#numericformat\n`locale` documentation: https://handsontable.com/docs/api/options/#locale"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.68
+  },
+  {
+    "route": "/agv",
+    "label": "AGV 运输车",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/agv",
+    "screenshot": "mobile-audit\\iphone-14-pro_agv.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 2.02
+  },
+  {
+    "route": "/agv/positions",
+    "label": "AGV 点位",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/agv/positions",
+    "screenshot": "mobile-audit\\iphone-14-pro_agv_positions.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 2.38
+  },
+  {
+    "route": "/agv/shelf",
+    "label": "AGV 货架",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/agv/shelf",
+    "screenshot": "mobile-audit\\iphone-14-pro_agv_shelf.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.68
+  },
+  {
+    "route": "/chemicals",
+    "label": "化学品库",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/chemicals",
+    "screenshot": "mobile-audit\\iphone-14-pro_chemicals.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 2.28
+  },
+  {
+    "route": "/synthesis-task-editor",
+    "label": "任务编辑",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/synthesis-task-editor",
+    "screenshot": "mobile-audit\\iphone-14-pro_synthesis-task-editor.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.82
+  },
+  {
+    "route": "/synthesis-workflow",
+    "label": "工作流",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/synthesis-workflow",
+    "screenshot": "mobile-audit\\iphone-14-pro_synthesis-workflow.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.68
+  },
+  {
+    "route": "/task-history",
+    "label": "任务历史",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/task-history",
+    "screenshot": "mobile-audit\\iphone-14-pro_task-history.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.71
+  },
+  {
+    "route": "/maintenance",
+    "label": "运维管理",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/maintenance",
+    "screenshot": "mobile-audit\\iphone-14-pro_maintenance.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.92
+  },
+  {
+    "route": "/ai-agent-history",
+    "label": "AI 助手",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/ai-agent-history",
+    "screenshot": "mobile-audit\\iphone-14-pro_ai-agent-history.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.67
+  },
+  {
+    "route": "/label-printer",
+    "label": "标签打印机",
+    "device": "iphone-14-pro",
+    "url": "http://127.0.0.1:5174/label-printer",
+    "screenshot": "mobile-audit\\iphone-14-pro_label-printer.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.73
+  },
+  {
+    "device": "iphone-14-pro",
+    "interaction": {
+      "drawer": {
+        "opened": true,
+        "closed_after_nav": true,
+        "screenshot": "mobile-audit\\iphone-14-pro_drawer.png",
+        "error": ""
+      },
+      "ai_sheet": {
+        "sheet_visible": true,
+        "closed_via_topbar": true,
+        "screenshot": "mobile-audit\\iphone-14-pro_ai_sheet.png",
+        "error": ""
+      }
+    }
+  },
+  {
+    "route": "/devices",
+    "label": "设备总览",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/devices",
+    "screenshot": "mobile-audit\\iphone-se_devices.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.79
+  },
+  {
+    "route": "/synthesis",
+    "label": "合成工站",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/synthesis",
+    "screenshot": "mobile-audit\\iphone-se_synthesis.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "BaseTray.fromModel(201000730, true) took 74.70ms"
+      },
+      {
+        "type": "warning",
+        "text": "Canvas2D: Multiple readback operations using getImageData are faster with the willReadFrequently attribute set to true. See: https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.7
+  },
+  {
+    "route": "/synthesis/cameras",
+    "label": "现场监控",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/synthesis/cameras",
+    "screenshot": "mobile-audit\\iphone-se_synthesis_cameras.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.72
+  },
+  {
+    "route": "/analysis",
+    "label": "分析工站",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/analysis",
+    "screenshot": "mobile-audit\\iphone-se_analysis.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "Deprecated: The `numericFormat.pattern` and `numericFormat.culture` options are deprecated and will be removed in the next major release. Pass `Intl.NumberFormat` options directly to `numericFormat` and use the `locale` cell property instead of `culture`.\n\nMigration guide: https://handsontable.com/docs/migration-from-16.2-to-17.0/\n`numericFormat` documentation: https://handsontable.com/docs/api/options/#numericformat\n`locale` documentation: https://handsontable.com/docs/api/options/#locale"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.63
+  },
+  {
+    "route": "/agv",
+    "label": "AGV 运输车",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/agv",
+    "screenshot": "mobile-audit\\iphone-se_agv.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.79
+  },
+  {
+    "route": "/agv/positions",
+    "label": "AGV 点位",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/agv/positions",
+    "screenshot": "mobile-audit\\iphone-se_agv_positions.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      },
+      {
+        "type": "warning",
+        "text": "ElementPlusError: [el-radio] [API] label act as value is about to be deprecated in version 3.0.0, please use value instead.\nFor more detail, please visit: https://element-plus.org/en-US/component/radio.html\n\n    at debugWarn (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10429:37)\n    at watch.immediate (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10473:14)\n    at callWithErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2351:19)\n    at callWithAsyncErrorHandling (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2358:17)\n    at baseWatchOptions.call (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3043:47)\n    at job (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2081:18)\n    at watch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:2116:7)\n    at doWatch (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3071:23)\n    at watch2 (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NN6JWXTQ.js?v=91c543b8:3004:10)\n    at useDeprecated (http://127.0.0.1:5174/node_modules/.vite/deps/element-plus.js?v=91c543b8:10472:3)"
+      }
+    ],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.97
+  },
+  {
+    "route": "/agv/shelf",
+    "label": "AGV 货架",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/agv/shelf",
+    "screenshot": "mobile-audit\\iphone-se_agv_shelf.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.61
+  },
+  {
+    "route": "/chemicals",
+    "label": "化学品库",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/chemicals",
+    "screenshot": "mobile-audit\\iphone-se_chemicals.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.91
+  },
+  {
+    "route": "/synthesis-task-editor",
+    "label": "任务编辑",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/synthesis-task-editor",
+    "screenshot": "mobile-audit\\iphone-se_synthesis-task-editor.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.71
+  },
+  {
+    "route": "/synthesis-workflow",
+    "label": "工作流",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/synthesis-workflow",
+    "screenshot": "mobile-audit\\iphone-se_synthesis-workflow.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.63
+  },
+  {
+    "route": "/task-history",
+    "label": "任务历史",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/task-history",
+    "screenshot": "mobile-audit\\iphone-se_task-history.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.65
+  },
+  {
+    "route": "/maintenance",
+    "label": "运维管理",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/maintenance",
+    "screenshot": "mobile-audit\\iphone-se_maintenance.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.75
+  },
+  {
+    "route": "/ai-agent-history",
+    "label": "AI 助手",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/ai-agent-history",
+    "screenshot": "mobile-audit\\iphone-se_ai-agent-history.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.62
+  },
+  {
+    "route": "/label-printer",
+    "label": "标签打印机",
+    "device": "iphone-se",
+    "url": "http://127.0.0.1:5174/label-printer",
+    "screenshot": "mobile-audit\\iphone-se_label-printer.png",
+    "checks": {
+      "has_mobile_topbar": true,
+      "has_content": true,
+      "no_vite_overlay": true,
+      "sidebar_hidden_on_mobile": true
+    },
+    "console_errors": [],
+    "console_warnings": [],
+    "page_errors": [],
+    "navigation_error": "",
+    "elapsed_s": 1.66
+  },
+  {
+    "device": "iphone-se",
+    "interaction": {
+      "drawer": {
+        "opened": true,
+        "closed_after_nav": true,
+        "screenshot": "mobile-audit\\iphone-se_drawer.png",
+        "error": ""
+      },
+      "ai_sheet": {
+        "sheet_visible": true,
+        "closed_via_topbar": true,
+        "screenshot": "mobile-audit\\iphone-se_ai_sheet.png",
+        "error": ""
+      }
+    }
+  }
+]

@@ -1,0 +1,307 @@
+- generic [ref=e3]:
+  - dialog [ref=e53]:
+    - complementary [ref=e55]:
+      - generic [ref=e56]:
+        - heading "EIT Hub" [level=1] [ref=e57]
+        - paragraph [ref=e58]: Uni-Lab OS Workstations
+      - navigation [ref=e59]:
+        - link "设备总览" [ref=e60] [cursor=pointer]:
+          - /url: /devices
+          - img [ref=e62]
+          - generic [ref=e65]: 设备总览
+        - generic [ref=e66]:
+          - link "合成工站" [ref=e67] [cursor=pointer]:
+            - /url: /synthesis
+            - img [ref=e68]
+            - generic [ref=e70]: 合成工站
+          - button "展开合成工站子菜单" [ref=e71] [cursor=pointer]:
+            - img [ref=e73]
+        - link "分析工站" [ref=e75] [cursor=pointer]:
+          - /url: /analysis
+          - img [ref=e76]
+          - generic [ref=e78]: 分析工站
+        - generic [ref=e79]:
+          - link "AGV 运输车" [ref=e80] [cursor=pointer]:
+            - /url: /agv
+            - img [ref=e81]
+            - generic [ref=e85]: AGV 运输车
+          - button "展开 AGV 子菜单" [ref=e86] [cursor=pointer]:
+            - img [ref=e88]
+        - link "化学品库" [ref=e90] [cursor=pointer]:
+          - /url: /chemicals
+          - img [ref=e92]
+          - generic [ref=e94]: 化学品库
+        - link "任务编辑" [ref=e95] [cursor=pointer]:
+          - /url: /synthesis-task-editor
+          - img [ref=e97]
+          - generic [ref=e99]: 任务编辑
+        - link "工作流" [ref=e100] [cursor=pointer]:
+          - /url: /synthesis-workflow
+          - img [ref=e102]
+          - generic [ref=e104]: 工作流
+        - link "任务历史" [ref=e105] [cursor=pointer]:
+          - /url: /task-history
+          - img [ref=e107]
+          - generic [ref=e109]: 任务历史
+        - link "运维管理" [ref=e110] [cursor=pointer]:
+          - /url: /maintenance
+          - img [ref=e112]
+          - generic [ref=e114]: 运维管理
+        - link "AI 助手" [ref=e115] [cursor=pointer]:
+          - /url: /ai-agent-history
+          - img [ref=e117]
+          - generic [ref=e120]: AI 助手
+        - link "标签打印机" [ref=e121] [cursor=pointer]:
+          - /url: /label-printer
+          - img [ref=e123]
+          - generic [ref=e125]: 标签打印机
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - button "打开导航" [ref=e6] [cursor=pointer]:
+        - img [ref=e8]
+      - heading "设备总览" [level=2] [ref=e10]
+      - generic [ref=e11]:
+        - button "访问令牌" [ref=e12] [cursor=pointer]:
+          - img [ref=e14]
+        - button "AI 助手" [ref=e16] [cursor=pointer]:
+          - img [ref=e18]
+    - main [ref=e21]:
+      - generic [ref=e22]:
+        - generic [ref=e23]:
+          - generic [ref=e24]:
+            - heading "设备状态" [level=2] [ref=e25]
+            - generic [ref=e26]:
+              - generic [ref=e27]: "最后刷新: 2026-05-02T12:50:53"
+              - button "刷新" [ref=e126] [cursor=pointer]:
+                - img [ref=e128]
+                - generic [ref=e130]: 刷新
+          - generic [ref=e28]:
+            - generic [ref=e29]:
+              - generic [ref=e30]: 设备总数
+              - generic [ref=e31]: "9"
+              - generic [ref=e32]: 含 EIT Hub
+            - generic [ref=e33]:
+              - generic [ref=e34]: 在线
+              - generic [ref=e35]: "8"
+              - generic [ref=e36]: 全部端口可联通
+            - generic [ref=e37]:
+              - generic [ref=e38]: 部分在线
+              - generic [ref=e39]: "0"
+              - generic [ref=e40]: 存在离线端口
+            - generic [ref=e41]:
+              - generic [ref=e42]: 离线
+              - generic [ref=e43]: "1"
+              - generic [ref=e44]: 端口不可联通
+        - generic [ref=e45]:
+          - generic [ref=e46]:
+            - heading "连接明细" [level=2] [ref=e47]
+            - generic [ref=e48]: 9 台设备
+          - generic [ref=e50]:
+            - generic [ref=e131]:
+              - generic [ref=e132]: EIT Hub
+              - generic [ref=e133]:
+                - generic [ref=e134]:
+                  - generic [ref=e135]: 类别
+                  - generic [ref=e136]: Hub
+                - generic [ref=e137]:
+                  - generic [ref=e138]: 地址
+                  - generic [ref=e139]: "当前访问: 127.0.0.1:8770; 本机 IPv4: 10.32.2.28:8770, 192.168.1.35:8770, 192.168.1.30:8770"
+                - generic [ref=e140]:
+                  - generic [ref=e141]: 状态
+                  - generic [ref=e144]: 在线
+                - generic [ref=e145]:
+                  - generic [ref=e146]: 端口汇总
+                  - generic [ref=e147]: 当前服务可访问
+                - generic [ref=e148]:
+                  - generic [ref=e149]: 端口明细
+                  - generic [ref=e151]:
+                    - generic [ref=e152]:
+                      - generic [ref=e154]: 在线
+                      - generic [ref=e155]: 127.0.0.1:8770
+                      - generic [ref=e156]: 0.0 ms
+                    - generic [ref=e157]:
+                      - generic [ref=e159]: 在线
+                      - generic [ref=e160]: 10.32.2.28:8770
+                      - generic [ref=e161]: 0.0 ms
+                    - generic [ref=e162]:
+                      - generic [ref=e164]: 在线
+                      - generic [ref=e165]: 192.168.1.35:8770
+                      - generic [ref=e166]: 0.0 ms
+                    - generic [ref=e167]:
+                      - generic [ref=e169]: 在线
+                      - generic [ref=e170]: 192.168.1.30:8770
+                      - generic [ref=e171]: 0.0 ms
+            - generic [ref=e172]:
+              - generic [ref=e173]: AGV 底盘
+              - generic [ref=e174]:
+                - generic [ref=e175]:
+                  - generic [ref=e176]: 类别
+                  - generic [ref=e177]: AGV
+                - generic [ref=e178]:
+                  - generic [ref=e179]: 地址
+                  - generic [ref=e180]: 192.168.1.5:19204, 192.168.1.5:19206
+                - generic [ref=e181]:
+                  - generic [ref=e182]: 状态
+                  - generic [ref=e185]: 在线
+                - generic [ref=e186]:
+                  - generic [ref=e187]: 端口汇总
+                  - generic [ref=e188]: 2/2 端口在线
+                - generic [ref=e189]:
+                  - generic [ref=e190]: 端口明细
+                  - generic [ref=e192]:
+                    - generic [ref=e193]:
+                      - generic [ref=e195]: 在线
+                      - generic [ref=e196]: 192.168.1.5:19204
+                      - generic [ref=e197]: 13.3 ms
+                    - generic [ref=e198]:
+                      - generic [ref=e200]: 在线
+                      - generic [ref=e201]: 192.168.1.5:19206
+                      - generic [ref=e202]: 13.0 ms
+            - generic [ref=e203]:
+              - generic [ref=e204]: AGV 机械臂
+              - generic [ref=e205]:
+                - generic [ref=e206]:
+                  - generic [ref=e207]: 类别
+                  - generic [ref=e208]: AGV
+                - generic [ref=e209]:
+                  - generic [ref=e210]: 地址
+                  - generic [ref=e211]: 192.168.1.10:7003
+                - generic [ref=e212]:
+                  - generic [ref=e213]: 状态
+                  - generic [ref=e216]: 在线
+                - generic [ref=e217]:
+                  - generic [ref=e218]: 端口汇总
+                  - generic [ref=e219]: 1/1 端口在线
+                - generic [ref=e220]:
+                  - generic [ref=e221]: 端口明细
+                  - generic [ref=e224]:
+                    - generic [ref=e226]: 在线
+                    - generic [ref=e227]: 192.168.1.10:7003
+                    - generic [ref=e228]: 12.6 ms
+            - generic [ref=e229]:
+              - generic [ref=e230]: 耗材货架
+              - generic [ref=e231]:
+                - generic [ref=e232]:
+                  - generic [ref=e233]: 类别
+                  - generic [ref=e234]: 耗材
+                - generic [ref=e235]:
+                  - generic [ref=e236]: 地址
+                  - generic [ref=e237]: 192.168.1.45:6006
+                - generic [ref=e238]:
+                  - generic [ref=e239]: 状态
+                  - generic [ref=e242]: 离线
+                - generic [ref=e243]:
+                  - generic [ref=e244]: 端口汇总
+                  - generic [ref=e245]: 0/1 端口在线
+                - generic [ref=e246]:
+                  - generic [ref=e247]: 端口明细
+                  - generic [ref=e250]:
+                    - generic [ref=e252]: 离线
+                    - generic [ref=e253]: 192.168.1.45:6006
+                    - generic [ref=e254]: "--"
+                    - generic [ref=e255]: "连接失败: timed out"
+            - generic [ref=e256]:
+              - generic [ref=e257]: 合成工站
+              - generic [ref=e258]:
+                - generic [ref=e259]:
+                  - generic [ref=e260]: 类别
+                  - generic [ref=e261]: 合成
+                - generic [ref=e262]:
+                  - generic [ref=e263]: 地址
+                  - generic [ref=e264]: 10.32.2.106:4669
+                - generic [ref=e265]:
+                  - generic [ref=e266]: 状态
+                  - generic [ref=e269]: 在线
+                - generic [ref=e270]:
+                  - generic [ref=e271]: 端口汇总
+                  - generic [ref=e272]: 1/1 端口在线
+                - generic [ref=e273]:
+                  - generic [ref=e274]: 端口明细
+                  - generic [ref=e277]:
+                    - generic [ref=e279]: 在线
+                    - generic [ref=e280]: 10.32.2.106:4669
+                    - generic [ref=e281]: 0.8 ms
+            - generic [ref=e282]:
+              - generic [ref=e283]: GC-MS
+              - generic [ref=e284]:
+                - generic [ref=e285]:
+                  - generic [ref=e286]: 类别
+                  - generic [ref=e287]: 分析
+                - generic [ref=e288]:
+                  - generic [ref=e289]: 地址
+                  - generic [ref=e290]: 10.40.6.101:5792
+                - generic [ref=e291]:
+                  - generic [ref=e292]: 状态
+                  - generic [ref=e295]: 在线
+                - generic [ref=e296]:
+                  - generic [ref=e297]: 端口汇总
+                  - generic [ref=e298]: 1/1 端口在线
+                - generic [ref=e299]:
+                  - generic [ref=e300]: 端口明细
+                  - generic [ref=e303]:
+                    - generic [ref=e305]: 在线
+                    - generic [ref=e306]: 10.40.6.101:5792
+                    - generic [ref=e307]: 23.5 ms
+            - generic [ref=e308]:
+              - generic [ref=e309]: UPLC_QTOF
+              - generic [ref=e310]:
+                - generic [ref=e311]:
+                  - generic [ref=e312]: 类别
+                  - generic [ref=e313]: 分析
+                - generic [ref=e314]:
+                  - generic [ref=e315]: 地址
+                  - generic [ref=e316]: 10.40.0.103:5792
+                - generic [ref=e317]:
+                  - generic [ref=e318]: 状态
+                  - generic [ref=e321]: 在线
+                - generic [ref=e322]:
+                  - generic [ref=e323]: 端口汇总
+                  - generic [ref=e324]: 1/1 端口在线
+                - generic [ref=e325]:
+                  - generic [ref=e326]: 端口明细
+                  - generic [ref=e329]:
+                    - generic [ref=e331]: 在线
+                    - generic [ref=e332]: 10.40.0.103:5792
+                    - generic [ref=e333]: 23.2 ms
+            - generic [ref=e334]:
+              - generic [ref=e335]: HPLC
+              - generic [ref=e336]:
+                - generic [ref=e337]:
+                  - generic [ref=e338]: 类别
+                  - generic [ref=e339]: 分析
+                - generic [ref=e340]:
+                  - generic [ref=e341]: 地址
+                  - generic [ref=e342]: 10.40.16.204:5792
+                - generic [ref=e343]:
+                  - generic [ref=e344]: 状态
+                  - generic [ref=e347]: 在线
+                - generic [ref=e348]:
+                  - generic [ref=e349]: 端口汇总
+                  - generic [ref=e350]: 1/1 端口在线
+                - generic [ref=e351]:
+                  - generic [ref=e352]: 端口明细
+                  - generic [ref=e355]:
+                    - generic [ref=e357]: 在线
+                    - generic [ref=e358]: 10.40.16.204:5792
+                    - generic [ref=e359]: 90.8 ms
+            - generic [ref=e360]:
+              - generic [ref=e361]: 标签打印机
+              - generic [ref=e362]:
+                - generic [ref=e363]:
+                  - generic [ref=e364]: 类别
+                  - generic [ref=e365]: 打印
+                - generic [ref=e366]:
+                  - generic [ref=e367]: 地址
+                  - generic [ref=e368]: 192.168.1.20:9100
+                - generic [ref=e369]:
+                  - generic [ref=e370]: 状态
+                  - generic [ref=e373]: 在线
+                - generic [ref=e374]:
+                  - generic [ref=e375]: 端口汇总
+                  - generic [ref=e376]: 1/1 端口在线
+                - generic [ref=e377]:
+                  - generic [ref=e378]: 端口明细
+                  - generic [ref=e381]:
+                    - generic [ref=e383]: 在线
+                    - generic [ref=e384]: 192.168.1.20:9100
+                    - generic [ref=e385]: 8.8 ms

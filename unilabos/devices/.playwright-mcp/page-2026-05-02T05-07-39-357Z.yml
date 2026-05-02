@@ -1,0 +1,11 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - button "打开导航" [ref=e6] [cursor=pointer]:
+      - img [ref=e8]
+    - heading "EIT Hub" [level=2] [ref=e10]
+    - generic [ref=e11]:
+      - button "访问令牌" [ref=e12] [cursor=pointer]:
+        - img [ref=e14]
+      - button "AI 助手" [ref=e16] [cursor=pointer]:
+        - img [ref=e18]
+  - main [ref=e21]
