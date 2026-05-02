@@ -711,4 +711,27 @@ function onCancel (): void {
   justify-content: flex-end;
   gap: 8px;
 }
+
+@media (max-width: 767.98px) {
+  .dialog-body {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 0;
+  }
+  .two-col {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .col {
+    height: auto;
+    overflow: visible;
+  }
+  .preview-inner :deep(.ntu-station-graph) {
+    max-height: 38vh;
+  }
+  .position-input-bar {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

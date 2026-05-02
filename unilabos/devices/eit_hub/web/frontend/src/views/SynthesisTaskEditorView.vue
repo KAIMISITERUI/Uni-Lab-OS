@@ -2190,32 +2190,49 @@ watch(
   min-height: 360px;
 }
 
-@media (max-width: 1100px) {
-  .settings-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .settings-column-right .settings-group-fields,
-  .analysis-method-grid,
-  .yield-form-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
+@media (max-width: 767.98px) {
+  .settings-grid,
   .settings-column-right .settings-group-fields,
   .analysis-method-grid,
   .yield-form-grid,
-  .settings-group-fields {
+  .settings-group-fields,
+  .gc-product-grid {
     grid-template-columns: 1fr;
+  }
+
+  .editor-panel .panel-title {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .history-toolbar {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(120px, 1fr) 88px;
   }
 
   .analysis-method-row {
-    grid-template-columns: minmax(150px, 1fr) 88px;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .spreadsheet-wrap {
+    min-height: 300px;
+  }
+
+  .editor-button-row {
+    justify-content: flex-start;
+  }
+
+  .editor-button-row :deep(.el-button),
+  .table-button-row :deep(.el-button),
+  .table-button-row :deep(.el-select) {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .resource-check-option {
+    flex: 1 1 100%;
+    margin-left: 0;
   }
 }
 </style>

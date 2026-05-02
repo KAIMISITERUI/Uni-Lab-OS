@@ -87,11 +87,13 @@ function formatTimestamp(value: string | undefined): string {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .shelf-slot {
   display: grid;
   gap: 4px;
+  min-width: 0;
   min-height: 92px;
   padding: 12px;
   color: #24344d;
@@ -119,20 +121,29 @@ function formatTimestamp(value: string | undefined): string {
 }
 
 .slot-title {
+  min-width: 0;
   font-weight: 600;
   font-size: 12px;
   color: #12325a;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .slot-material {
+  min-width: 0;
   font-weight: 600;
   font-size: 13px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .slot-source,
 .slot-time {
+  min-width: 0;
   color: #66758a;
   font-size: 11px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .slot-empty-label {
@@ -141,9 +152,20 @@ function formatTimestamp(value: string | undefined): string {
   color: #a1a9b8;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767.98px) {
+  /* 手机端: 行标签换行到上, 槽位 2 列网格 */
+  .shelf-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
   .shelf-row-slots {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shelf-slot {
+    min-height: 84px;
+    padding: 10px;
   }
 }
 </style>

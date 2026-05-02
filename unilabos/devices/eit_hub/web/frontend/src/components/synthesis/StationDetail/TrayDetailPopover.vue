@@ -12,6 +12,7 @@
     <div
       ref="popoverRef"
       class="tray-detail-popover"
+      :class="{ 'tray-detail-popover-mobile': isMobile === true }"
       :style="positionStyle"
       @mousedown.stop
     >
@@ -50,10 +51,10 @@
         :virtual-ref="selectedSlot?.el"
         virtual-triggering
         :visible="selectedSlot !== null"
-        placement="right"
+        :placement="isMobile === true ? 'bottom' : 'right'"
         trigger="manual"
-        :width="196"
-        :show-arrow="true"
+        :width="isMobile === true ? 240 : 196"
+        :show-arrow="isMobile === false"
         popper-class="tray-detail-reagent-popper"
         :popper-style="{ zIndex: 4600 }"
       >
@@ -87,6 +88,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElPopover } from 'element-plus'
 import StructurePreview from '@/components/StructurePreview.vue'
 import { getChemicalBySubstance } from '@/api/chemicals'
+import { useViewportMode } from '@/composables/useViewportMode'
 import type { TrayDetail } from './buildTrayDetail'
 import type { WellInfo } from '../ResourcePanel/types'
 import ReagentSlotMap from './ReagentSlotMap.vue'
@@ -103,6 +105,7 @@ const emit = defineEmits<{
 
 const popoverRef = ref<HTMLDivElement | null>(null)
 const positionStyle = ref<Record<string, string>>({ left: '0px', top: '0px', visibility: 'hidden' })
+const { isMobile } = useViewportMode()
 
 interface SelectedSlot {
   slotIndex: number
@@ -120,7 +123,12 @@ const POPOVER_HEIGHT_FALLBACK = 280
 const ANCHOR_OFFSET = 12
 
 function applyPosition (): void {
-  // 默认锚点右下方; 若超出 viewport 则向左/上翻转
+  // 手机端: 直接固定为底部 sheet, 不再按 anchor 计算 (CSS 在 .tray-detail-popover-mobile 上接管)
+  if (isMobile.value === true) {
+    positionStyle.value = { visibility: 'visible' }
+    return
+  }
+  // 桌面端: 默认锚点右下方; 若超出 viewport 则向左/上翻转
   const dom = popoverRef.value
   const w = dom?.offsetWidth || POPOVER_WIDTH_FALLBACK
   const h = dom?.offsetHeight || POPOVER_HEIGHT_FALLBACK
@@ -359,5 +367,27 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   margin-top: 2px;
+}
+
+/* 手机端: 底部上拉 sheet, 覆盖桌面端的 anchor 跟随定位 */
+@media (max-width: 767.98px) {
+  .tray-detail-popover-mobile {
+    position: fixed;
+    inset: auto 0 0 0;
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    bottom: 0;
+    width: 100vw;
+    max-width: 100vw;
+    min-width: 0;
+    max-height: 70dvh;
+    overflow: auto;
+    border: 0;
+    border-top: 1px solid #e0e6f0;
+    border-radius: 12px 12px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.16);
+  }
 }
 </style>

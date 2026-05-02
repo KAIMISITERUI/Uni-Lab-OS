@@ -530,4 +530,35 @@ async function onConfirm (): Promise<void> {
   display: flex;
   gap: 8px;
 }
+
+@media (max-width: 767.98px) {
+  .dialog-body {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .two-col {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .col {
+    overflow: visible;
+  }
+  .col-inner.preview-inner :deep(.ntu-station-graph) {
+    max-height: 38vh;
+  }
+  .position-input-bar :deep(.el-input) {
+    flex: 1 1 100%;
+  }
+  .dialog-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .footer-right {
+    justify-content: flex-end;
+  }
+}
 </style>

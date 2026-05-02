@@ -220,4 +220,24 @@ function stopDrag() {
   align-items: center;
   justify-content: center;
 }
+
+@media (max-width: 767.98px) {
+  .agv-map {
+    min-height: 240px;
+    aspect-ratio: 16 / 11;
+  }
+
+  .map-station {
+    min-width: 64px;
+    padding: 6px 8px;
+  }
+
+  .station-id {
+    font-size: 11px;
+  }
+
+  .station-label {
+    font-size: 12px;
+  }
+}
 </style>

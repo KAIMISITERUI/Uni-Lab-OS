@@ -976,21 +976,25 @@ function workflowStepClass(stepId: WorkflowStepId): string {
   margin: 0;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 767.98px) {
   .workflow-form-grid,
   .workflow-header {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .workflow-actions {
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
-}
 
-@media (max-width: 640px) {
-  .workflow-form-grid,
-  .workflow-header {
-    grid-template-columns: 1fr;
+  /* 步骤卡: 手机端 2 列网格, 而非随步骤数横铺 */
+  .workflow-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .workflow-step-card {
+    min-height: 76px;
+    padding: 10px;
   }
 }
 </style>

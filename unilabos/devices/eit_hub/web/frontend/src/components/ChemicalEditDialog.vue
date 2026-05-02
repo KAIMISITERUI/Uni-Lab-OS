@@ -10,6 +10,13 @@ import {
 } from '../api/chemicals'
 import HazardDisplay from './HazardDisplay.vue'
 import StructurePreview from './StructurePreview.vue'
+import { useViewportMode } from '../composables/useViewportMode'
+
+const { isMobile } = useViewportMode()
+// 手机端 SMILES 预览使用 240x180, 桌面 320x240
+const previewSize = computed(() => isMobile.value === true
+  ? { width: 240, height: 180 }
+  : { width: 320, height: 240 })
 
 interface Props {
   modelValue: boolean
@@ -301,8 +308,8 @@ async function submit() {
           <StructurePreview
             class="smiles-preview"
             :smiles="previewSmiles"
-            :width="320"
-            :height="220"
+            :width="previewSize.width"
+            :height="previewSize.height"
           />
         </div>
       </el-form-item>

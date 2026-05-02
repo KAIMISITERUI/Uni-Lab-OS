@@ -10,6 +10,17 @@ import {
   type DeviceStatusText,
 } from '../api/devices'
 import { getErrorMessage } from '../api/http'
+import ResponsiveTable from '../components/ResponsiveTable.vue'
+
+// 设备表手机端卡片字段
+const deviceCardFields = [
+  { key: 'name', label: '设备', primary: true },
+  { key: 'category', label: '类别' },
+  { key: 'address', label: '地址' },
+  { key: 'status', label: '状态' },
+  { key: 'summary', label: '端口汇总' },
+  { key: 'endpoints', label: '端口明细' },
+] as const
 
 interface DeviceStatusStats {
   total: number
@@ -177,45 +188,70 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="table-wrap">
-        <el-table :data="items" v-loading="initialLoading" row-key="key">
-          <el-table-column label="设备" min-width="160">
-            <template #default="{ row }">
-              <div class="device-name-cell">
-                <span class="device-name">{{ row.name }}</span>
-                <span class="device-category">{{ row.category }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="address" label="地址" min-width="260" show-overflow-tooltip />
-          <el-table-column label="状态" width="120">
-            <template #default="{ row }">
-              <el-tag :type="statusTagType(row.status)" effect="light">
-                {{ row.status }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="summary" label="端口汇总" width="130" />
-          <el-table-column label="端口明细" min-width="340">
-            <template #default="{ row }">
-              <div class="endpoint-list">
-                <div
-                  v-for="endpoint in row.endpoints"
-                  :key="`${endpoint.host}:${endpoint.port}`"
-                  class="endpoint-row"
-                >
-                  <el-tag :type="endpointTagType(endpoint)" size="small" effect="plain">
-                    {{ endpointStatusText(endpoint) }}
-                  </el-tag>
-                  <span class="endpoint-address">{{ endpoint.host }}:{{ endpoint.port }}</span>
-                  <span class="endpoint-latency">{{ formatLatency(endpoint.latency_ms) }}</span>
-                  <span v-if="endpoint.error !== ''" class="endpoint-error">
-                    {{ endpoint.error }}
-                  </span>
+        <ResponsiveTable
+          :data="items"
+          row-key="key"
+          :card-fields="deviceCardFields"
+        >
+          <el-table :data="items" v-loading="initialLoading" row-key="key">
+            <el-table-column label="设备" min-width="160">
+              <template #default="{ row }">
+                <div class="device-name-cell">
+                  <span class="device-name">{{ row.name }}</span>
+                  <span class="device-category">{{ row.category }}</span>
                 </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="address" label="地址" min-width="260" show-overflow-tooltip />
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <el-tag :type="statusTagType(row.status)" effect="light">
+                  {{ row.status }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="summary" label="端口汇总" width="130" />
+            <el-table-column label="端口明细" min-width="340">
+              <template #default="{ row }">
+                <div class="endpoint-list">
+                  <div
+                    v-for="endpoint in row.endpoints"
+                    :key="`${endpoint.host}:${endpoint.port}`"
+                    class="endpoint-row"
+                  >
+                    <el-tag :type="endpointTagType(endpoint)" size="small" effect="plain">
+                      {{ endpointStatusText(endpoint) }}
+                    </el-tag>
+                    <span class="endpoint-address">{{ endpoint.host }}:{{ endpoint.port }}</span>
+                    <span class="endpoint-latency">{{ formatLatency(endpoint.latency_ms) }}</span>
+                    <span v-if="endpoint.error !== ''" class="endpoint-error">
+                      {{ endpoint.error }}
+                    </span>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+          <template #cell:status="{ row }">
+            <el-tag :type="statusTagType(row.status)" effect="light">{{ row.status }}</el-tag>
+          </template>
+          <template #cell:endpoints="{ row }">
+            <div class="endpoint-list">
+              <div
+                v-for="endpoint in row.endpoints"
+                :key="`${endpoint.host}:${endpoint.port}`"
+                class="endpoint-row"
+              >
+                <el-tag :type="endpointTagType(endpoint)" size="small" effect="plain">
+                  {{ endpointStatusText(endpoint) }}
+                </el-tag>
+                <span class="endpoint-address">{{ endpoint.host }}:{{ endpoint.port }}</span>
+                <span class="endpoint-latency">{{ formatLatency(endpoint.latency_ms) }}</span>
+                <span v-if="endpoint.error !== ''" class="endpoint-error">{{ endpoint.error }}</span>
               </div>
-            </template>
-          </el-table-column>
-        </el-table>
+            </div>
+          </template>
+        </ResponsiveTable>
       </div>
     </section>
   </div>
@@ -286,19 +322,33 @@ onBeforeUnmount(() => {
   word-break: break-all;
 }
 
-@media (max-width: 920px) {
+@media (max-width: 767.98px) {
   .device-toolbar {
     justify-content: flex-start;
   }
 
+  /* device-metrics 不再写死列数, 走全局 .metrics-grid 的 auto-fit */
   .device-metrics {
-    grid-template-columns: repeat(2, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   }
-}
 
-@media (max-width: 560px) {
-  .device-metrics {
-    grid-template-columns: 1fr;
+  .endpoint-error {
+    min-width: 0;
+  }
+
+  .endpoint-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 4px 8px;
+  }
+
+  .endpoint-address,
+  .endpoint-latency,
+  .endpoint-error {
+    grid-column: 2;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 }
 </style>

@@ -169,8 +169,8 @@ defineExpose({ openDialog, openRemoveDialog, openEditDialog, openMoveDialog })
 .resource-action-button {
   justify-content: center;
   width: 100%;
-  height: 42px;
-  min-height: 42px;
+  height: 44px;
+  min-height: 44px;
   margin-left: 0;
   padding: 0 8px;
   color: #12325a;

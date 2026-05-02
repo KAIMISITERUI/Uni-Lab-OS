@@ -268,4 +268,15 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: #fff;
 }
+
+@media (max-width: 767.98px) {
+  .structure-editor {
+    height: calc(100dvh - 240px);
+    min-height: 360px;
+  }
+
+  .search-toolbar {
+    flex-wrap: wrap;
+  }
+}
 </style>

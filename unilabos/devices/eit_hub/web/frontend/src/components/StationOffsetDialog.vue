@@ -447,4 +447,14 @@ function formatOffsetField(value: number, isAngle: boolean): string {
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
 }
+
+@media (max-width: 767.98px) {
+  /* x/y/z 三列偏移网格 -> 单列 */
+  .diff-grid {
+    grid-template-columns: 1fr;
+  }
+  .dialog-body {
+    max-height: none;
+  }
+}
 </style>

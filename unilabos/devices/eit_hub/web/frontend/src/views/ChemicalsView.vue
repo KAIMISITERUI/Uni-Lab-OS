@@ -23,8 +23,10 @@ import HazardDisplay from '../components/HazardDisplay.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import IntegrityPanel from '../components/IntegrityPanel.vue'
 import JobPanel from '../components/JobPanel.vue'
+import ResponsiveTable from '../components/ResponsiveTable.vue'
 import StructurePreview from '../components/StructurePreview.vue'
 import StructureSearchDialog from '../components/StructureSearchDialog.vue'
+import { useViewportMode } from '../composables/useViewportMode'
 
 type StoredStructureSearch = Omit<StructureSearchRequest, 'page' | 'page_size'>
 
@@ -32,6 +34,29 @@ const loading = ref(false)
 const total = ref(0)
 const rows = ref<ChemicalRow[]>([])
 const activeTab = ref('chemical-list')
+const { isMobile } = useViewportMode()
+
+// 手机端卡片字段定义: 中文名作为大标题, 结构式紧跟其下作为视觉锚点, 其余信息按 标签:值 排列
+const chemicalCardFields = [
+  { key: 'substance', label: '中文名', primary: true },
+  { key: 'smiles', label: '结构式' },
+  { key: 'substance_english_name', label: '英文名' },
+  { key: 'cas_number', label: 'CAS' },
+  { key: 'hazard', label: '危害' },
+  { key: 'storage_location', label: '储位' },
+  { key: 'physical_state', label: '物态' },
+  { key: 'physical_form', label: '形态' },
+  { key: 'brand', label: '品牌' },
+  { key: 'package_size', label: '规格' },
+] as const
+
+function buildChemicalActions (row: ChemicalRow) {
+  return [
+    { label: '查看', type: 'primary' as const, link: true, onClick: () => openDetail(row) },
+    { label: '编辑', type: 'primary' as const, link: true, onClick: () => openEdit(row) },
+    { label: '删除', type: 'danger' as const, link: true, onClick: () => onDelete(row) },
+  ]
+}
 
 const query = reactive<{
   q: string
@@ -243,7 +268,7 @@ onActivated(load)
       <el-tab-pane label="化学品列表" name="chemical-list">
         <el-card shadow="never">
           <template #header>
-            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
+            <div class="chemicals-toolbar">
               <el-input
                 v-model="query.q"
                 placeholder="按表格字段模糊搜索"
@@ -254,7 +279,7 @@ onActivated(load)
               <el-button type="primary" @click="onSearch">搜索</el-button>
               <el-button @click="resetSearch">重置</el-button>
               <el-button :icon="Search" @click="structureSearchDialogVisible = true">结构式搜索</el-button>
-              <div style="flex: 1" />
+              <div class="chemicals-toolbar-spacer" />
               <el-button type="success" @click="openCreate">新增</el-button>
               <el-button @click="importDialogVisible = true">从文件导入</el-button>
               <el-button :icon="Refresh" :loading="syncLoading" @click="syncToStation">
@@ -265,73 +290,106 @@ onActivated(load)
             </div>
           </template>
 
-          <el-table v-loading="loading" :data="rows" border stripe size="small">
-            <el-table-column prop="id" label="ID" width="70" sortable align="center" header-align="center" />
-            <el-table-column label="结构式" width="140" align="center" header-align="center">
-              <template #default="{ row }">
-                <button
-                  type="button"
-                  class="structure-detail-entry"
-                  :aria-label="detailEntryLabel(row)"
-                  @click="openDetail(row)"
-                >
-                  <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
-                </button>
-              </template>
-            </el-table-column>
-            <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center">
-              <template #default="{ row }">
-                <button
-                  v-if="hasDisplayText(row.substance)"
-                  type="button"
-                  class="name-detail-entry"
-                  :aria-label="detailEntryLabel(row)"
-                  @click="openDetail(row)"
-                >
-                  {{ displayText(row.substance) }}
-                </button>
-                <span v-else>-</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center">
-              <template #default="{ row }">
-                <button
-                  v-if="hasDisplayText(row.substance_english_name)"
-                  type="button"
-                  class="name-detail-entry"
-                  :aria-label="detailEntryLabel(row)"
-                  @click="openDetail(row)"
-                >
-                  {{ displayText(row.substance_english_name) }}
-                </button>
-                <span v-else>-</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
-            <el-table-column label="危害" width="100" align="center" header-align="center">
-              <template #default="{ row }">
-                <HazardDisplay :chemical="row" mode="summary" summary-part="level" />
-              </template>
-            </el-table-column>
-            <el-table-column label="具体内容" width="260" align="center" header-align="center">
-              <template #default="{ row }">
-                <HazardDisplay :chemical="row" mode="summary" summary-part="content" />
-              </template>
-            </el-table-column>
-            <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
-            <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
-            <el-table-column prop="physical_form" label="形态" width="100" align="center" header-align="center" />
-            <el-table-column prop="density" label="density (g/mL)" width="120" align="center" header-align="center" />
-            <el-table-column prop="molecular_weight" label="MW" width="100" align="center" header-align="center" />
-            <el-table-column prop="brand" label="品牌" width="120" align="center" header-align="center" />
-            <el-table-column prop="package_size" label="规格" width="100" align="center" header-align="center" />
-            <el-table-column label="操作" fixed="right" width="120" align="center" header-align="center">
-              <template #default="{ row }">
-                <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" type="danger" link @click="onDelete(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+          <ResponsiveTable
+            :data="rows"
+            row-key="id"
+            :card-fields="chemicalCardFields"
+            :card-actions="buildChemicalActions"
+          >
+            <el-table v-loading="loading" :data="rows" border stripe size="small">
+              <el-table-column prop="id" label="ID" width="70" sortable align="center" header-align="center" />
+              <el-table-column label="结构式" width="140" align="center" header-align="center">
+                <template #default="{ row }">
+                  <button
+                    type="button"
+                    class="structure-detail-entry"
+                    :aria-label="detailEntryLabel(row)"
+                    @click="openDetail(row)"
+                  >
+                    <StructurePreview :smiles="row.smiles" :width="120" :height="90" />
+                  </button>
+                </template>
+              </el-table-column>
+              <el-table-column prop="substance" label="中文名" min-width="140" sortable align="center" header-align="center">
+                <template #default="{ row }">
+                  <button
+                    v-if="hasDisplayText(row.substance)"
+                    type="button"
+                    class="name-detail-entry"
+                    :aria-label="detailEntryLabel(row)"
+                    @click="openDetail(row)"
+                  >
+                    {{ displayText(row.substance) }}
+                  </button>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="substance_english_name" label="英文名" min-width="160" align="center" header-align="center">
+                <template #default="{ row }">
+                  <button
+                    v-if="hasDisplayText(row.substance_english_name)"
+                    type="button"
+                    class="name-detail-entry"
+                    :aria-label="detailEntryLabel(row)"
+                    @click="openDetail(row)"
+                  >
+                    {{ displayText(row.substance_english_name) }}
+                  </button>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="cas_number" label="CAS" width="120" align="center" header-align="center" />
+              <el-table-column label="危害" width="100" align="center" header-align="center">
+                <template #default="{ row }">
+                  <HazardDisplay :chemical="row" mode="summary" summary-part="level" />
+                </template>
+              </el-table-column>
+              <el-table-column label="具体内容" width="260" align="center" header-align="center">
+                <template #default="{ row }">
+                  <HazardDisplay :chemical="row" mode="summary" summary-part="content" />
+                </template>
+              </el-table-column>
+              <el-table-column prop="storage_location" label="储位" width="110" align="center" header-align="center" />
+              <el-table-column prop="physical_state" label="物态" width="80" align="center" header-align="center" />
+              <el-table-column prop="physical_form" label="形态" width="100" align="center" header-align="center" />
+              <el-table-column prop="density" label="density (g/mL)" width="120" align="center" header-align="center" />
+              <el-table-column prop="molecular_weight" label="MW" width="100" align="center" header-align="center" />
+              <el-table-column prop="brand" label="品牌" width="120" align="center" header-align="center" />
+              <el-table-column prop="package_size" label="规格" width="100" align="center" header-align="center" />
+              <el-table-column label="操作" fixed="right" width="120" align="center" header-align="center">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
+                  <el-button size="small" type="danger" link @click="onDelete(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <!-- 手机端卡片字段插槽 -->
+            <template #cell:substance="{ row }">
+              <button
+                v-if="hasDisplayText(row.substance)"
+                type="button"
+                class="name-detail-entry"
+                :aria-label="detailEntryLabel(row)"
+                @click="openDetail(row)"
+              >
+                {{ displayText(row.substance) }}
+              </button>
+              <span v-else>{{ displayText(row.substance_english_name) }}</span>
+            </template>
+            <template #cell:hazard="{ row }">
+              <HazardDisplay :chemical="row" mode="summary" summary-part="level" />
+            </template>
+            <template #cell:smiles="{ row }">
+              <button
+                type="button"
+                class="structure-detail-entry"
+                :aria-label="detailEntryLabel(row)"
+                @click="openDetail(row)"
+              >
+                <StructurePreview :smiles="row.smiles" :width="160" :height="120" />
+              </button>
+            </template>
+          </ResponsiveTable>
 
           <el-pagination
             style="margin-top: 16px; justify-content: flex-end; display: flex"
@@ -386,6 +444,17 @@ onActivated(load)
   min-width: 0;
 }
 
+.chemicals-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.chemicals-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
 .structure-detail-entry,
 .name-detail-entry {
   border: 0;
@@ -431,5 +500,37 @@ onActivated(load)
 .name-detail-entry:focus-visible {
   outline: 2px solid var(--el-color-primary);
   outline-offset: 2px;
+}
+
+@media (max-width: 767.98px) {
+  .chemicals-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .chemicals-toolbar :deep(.el-input) {
+    grid-column: 1 / -1;
+  }
+
+  .chemicals-toolbar :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+    white-space: normal;
+  }
+
+  .chemicals-toolbar-spacer {
+    display: none;
+  }
+
+  .structure-detail-entry,
+  .name-detail-entry {
+    min-height: 44px;
+  }
+
+  .name-detail-entry {
+    display: inline-flex;
+    align-items: center;
+  }
 }
 </style>

@@ -31,6 +31,19 @@ import TrayCalibrationDialog from '../components/TrayCalibrationDialog.vue'
 import StationOffsetDialog from '../components/StationOffsetDialog.vue'
 import AllPositionsTestDialog from '../components/AllPositionsTestDialog.vue'
 import BatchTransferCycleDialog from '../components/BatchTransferCycleDialog.vue'
+import ResponsiveTable from '../components/ResponsiveTable.vue'
+
+// 点位管理表 手机端卡片字段
+const positionCardFields = [
+  { key: 'name', label: '名称', primary: true },
+  { key: 'pose', label: 'pose [x,y,z,rx,ry,rz]' },
+  { key: 'descend_z', label: 'descend_z' },
+  { key: 'lift_z', label: 'lift_z' },
+  { key: 'drop_z', label: 'drop_z' },
+  { key: 'speed', label: 'speed' },
+  { key: 'acceleration', label: 'acc' },
+  { key: 'description', label: '描述' },
+] as const
 
 interface EditForm {
   name: string
@@ -772,31 +785,42 @@ onBeforeUnmount(stopAutoRefresh)
           <el-button size="small" @click="loadPositions">刷新</el-button>
         </div>
       </div>
-      <el-table
-        v-loading="positionsLoading"
+      <ResponsiveTable
         :data="filteredPositions"
-        size="small"
-        stripe
-        border
-        max-height="540"
+        row-key="name"
+        :card-fields="positionCardFields"
+        :card-actions="(row) => [
+          { label: '编辑', type: 'primary', link: true, onClick: () => openEditDialog(row) },
+          { label: '删除', type: 'danger', link: true, onClick: () => handleDeletePosition(row) },
+        ]"
       >
-        <el-table-column label="名称" prop="name" min-width="180" fixed />
-        <el-table-column label="pose [x,y,z,rx,ry,rz]" min-width="320">
-          <template #default="{ row }">{{ formatPoseShort(row.pose) }}</template>
-        </el-table-column>
-        <el-table-column label="descend_z" prop="descend_z" width="100" />
-        <el-table-column label="lift_z" prop="lift_z" width="80" />
-        <el-table-column label="drop_z" prop="drop_z" width="80" />
-        <el-table-column label="speed" prop="speed" width="80" />
-        <el-table-column label="acc" prop="acceleration" width="80" />
-        <el-table-column label="描述" prop="description" min-width="160" show-overflow-tooltip />
-        <el-table-column label="操作" width="140" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openEditDialog(row)">编辑</el-button>
-            <el-button size="small" link type="danger" @click="handleDeletePosition(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <el-table
+          v-loading="positionsLoading"
+          :data="filteredPositions"
+          size="small"
+          stripe
+          border
+          max-height="540"
+        >
+          <el-table-column label="名称" prop="name" min-width="180" fixed />
+          <el-table-column label="pose [x,y,z,rx,ry,rz]" min-width="320">
+            <template #default="{ row }">{{ formatPoseShort(row.pose) }}</template>
+          </el-table-column>
+          <el-table-column label="descend_z" prop="descend_z" width="100" />
+          <el-table-column label="lift_z" prop="lift_z" width="80" />
+          <el-table-column label="drop_z" prop="drop_z" width="80" />
+          <el-table-column label="speed" prop="speed" width="80" />
+          <el-table-column label="acc" prop="acceleration" width="80" />
+          <el-table-column label="描述" prop="description" min-width="160" show-overflow-tooltip />
+          <el-table-column label="操作" width="140" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" link type="primary" @click="openEditDialog(row)">编辑</el-button>
+              <el-button size="small" link type="danger" @click="handleDeletePosition(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <template #cell:pose="{ row }">{{ formatPoseShort(row.pose) }}</template>
+      </ResponsiveTable>
     </section>
 
     <!-- 中间托盘自动计算 -->
@@ -1196,29 +1220,50 @@ onBeforeUnmount(stopAutoRefresh)
 .three-column .panel > .muted {
   margin-top: 0;
 }
-@media (max-width: 1180px) {
+@media (max-width: 767.98px) {
+  /* 三列操作面板 -> 单列叠放 */
   .three-column {
     grid-template-columns: 1fr;
   }
   .operation-panel {
     min-height: 0;
   }
-}
-@media (max-width: 720px) {
+  /* 状态条仍横向滚动: 5 项摘要在窄屏不易折行, 横滚比换行更易读 */
   .status-grid {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 1fr;
     overflow-x: visible;
   }
   .status-item {
-    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    background: #f7f9fc;
+    border: 1px solid #dce5f0;
+    border-radius: 8px;
+  }
+  .status-value {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .pose-mono {
     width: auto;
-    overflow-x: auto;
+    overflow-x: visible;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
+  /* 偏移量 / 取放表单 -> 单列 */
   .offset-grid,
   .pick-put-fields {
     grid-template-columns: 1fr;
+  }
+  /* 取放动作行: radio 占满 + 执行按钮另起一行 */
+  .pick-put-action-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
   }
   .action-toggle {
     flex-basis: 100%;
@@ -1227,5 +1272,6 @@ onBeforeUnmount(stopAutoRefresh)
   .pick-put-execute-button {
     width: 100%;
   }
+  /* 编辑/新增点位弹窗内的 input-number 不再固定 220px, 走 :where(.el-input-number){width:100%} */
 }
 </style>

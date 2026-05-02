@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, type CSSProperties } from 'vue'
 import { ElMessage } from 'element-plus'
 import { HotTable } from '@handsontable/vue3'
 import { registerAllModules } from 'handsontable/registry'
@@ -71,11 +71,13 @@ const props = withDefaults(
     rowHeights?: number | number[]
     rowHeaders?: boolean
     stretchH?: 'all' | 'last' | 'none'
+    mobileMinWidth?: number | 'auto'
   }>(),
   {
     height: 380,
     rowHeaders: true,
     stretchH: 'none',
+    mobileMinWidth: 'auto',
   },
 )
 
@@ -105,6 +107,21 @@ const normalizedColumns = computed(() => {
     }
     return column
   })
+})
+
+const mobileTableMinWidth = computed(() => {
+  if (props.mobileMinWidth !== 'auto') {
+    return Math.max(Number(props.mobileMinWidth), 320)
+  }
+  const rowHeaderWidth = props.rowHeaders === true ? 54 : 0
+  const columnsWidth = props.columns.reduce((total, column) => total + resolveColumnWidth(column), 0)
+  return Math.max(columnsWidth + rowHeaderWidth, 320)
+})
+
+const spreadsheetInnerStyle = computed<CSSProperties>(() => {
+  return {
+    '--editable-spreadsheet-mobile-min-width': `${mobileTableMinWidth.value}px`,
+  } as CSSProperties
 })
 
 watch(
@@ -179,6 +196,20 @@ function cloneRows(rows: SpreadsheetRow[]): SpreadsheetRow[] {
     }
     return { ...row }
   })
+}
+
+function resolveColumnWidth(column: SpreadsheetColumn): number {
+  const rawWidth = column.width ?? column.minWidth
+  if (typeof rawWidth === 'number' && Number.isFinite(rawWidth) === true) {
+    return Math.max(rawWidth, 72)
+  }
+  if (typeof rawWidth === 'string') {
+    const parsedWidth = Number.parseFloat(rawWidth)
+    if (Number.isFinite(parsedWidth) === true) {
+      return Math.max(parsedWidth, 72)
+    }
+  }
+  return 120
 }
 
 function getHotInstance(): HotInstanceLike | undefined {
@@ -662,7 +693,9 @@ function formatIntegerText(value: number, width: number): string {
 
 <template>
   <div class="editable-spreadsheet">
-    <HotTable ref="hotTableRef" :settings="hotSettings" />
+    <div class="editable-spreadsheet-inner" :style="spreadsheetInnerStyle">
+      <HotTable ref="hotTableRef" :settings="hotSettings" />
+    </div>
   </div>
 </template>
 
@@ -670,10 +703,15 @@ function formatIntegerText(value: number, width: number): string {
 .editable-spreadsheet {
   width: 100%;
   min-width: 0;
-  overflow: hidden;
+  overflow: auto hidden;
   border: 1px solid #dce5f0;
   border-radius: 8px;
   background: #ffffff;
+  -webkit-overflow-scrolling: touch;
+}
+
+.editable-spreadsheet-inner {
+  min-width: 100%;
 }
 
 .editable-spreadsheet :deep(.handsontable) {
@@ -724,5 +762,11 @@ function formatIntegerText(value: number, width: number): string {
 .editable-spreadsheet :deep(.handsontable td.current),
 .editable-spreadsheet :deep(.handsontable td.area) {
   background: #eaf3ff;
+}
+
+@media (max-width: 767.98px) {
+  .editable-spreadsheet-inner {
+    min-width: var(--editable-spreadsheet-mobile-min-width);
+  }
 }
 </style>

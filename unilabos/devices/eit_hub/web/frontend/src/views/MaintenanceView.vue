@@ -16,6 +16,36 @@ import {
   type MaintenanceOverviewResponse,
   type MaintenanceRecord,
 } from '../api/maintenance'
+import ResponsiveTable from '../components/ResponsiveTable.vue'
+
+// 待办/逾期表 手机端卡片字段; primary 用 displayTitle 渲染 (检查内容)
+const dueCardFields = [
+  { key: 'title', label: '检查内容', primary: true },
+  { key: 'station', label: '工站' },
+  { key: 'due_date', label: '到期' },
+  { key: 'interval_days', label: '周期' },
+  { key: 'status', label: '状态' },
+  { key: 'value_text', label: '运维信息' },
+  { key: 'completed', label: '完成' },
+] as const
+
+const recordCardFields = [
+  { key: 'title_snapshot', label: '检查内容', primary: true },
+  { key: 'due_date', label: '到期日期' },
+  { key: 'station_snapshot', label: '工站' },
+  { key: 'operator', label: '操作人' },
+  { key: 'value_text', label: '运维信息' },
+  { key: 'completed_at', label: '完成时间' },
+] as const
+
+const eventCardFields = [
+  { key: 'title', label: '检查内容', primary: true },
+  { key: 'station', label: '工站' },
+  { key: 'start_date', label: '开始日期' },
+  { key: 'interval_days', label: '周期' },
+  { key: 'enabled', label: '状态' },
+  { key: 'sort_order', label: '排序' },
+] as const
 
 interface MaintenanceDraft {
   value_text: string
@@ -99,6 +129,16 @@ function paginateItems<T>(items: T[], page: number): T[] {
 
 function recordDisplayIndex(rowIndex: number): number {
   return (recordsPage.value - 1) * maintenancePageSize + rowIndex + 1
+}
+
+function buildEventCardActions(row: MaintenanceEvent) {
+  return [
+    {
+      label: '编辑',
+      type: 'primary' as const,
+      onClick: () => openEditEventDialog(row),
+    },
+  ]
 }
 
 async function loadAll(): Promise<void> {
@@ -459,38 +499,59 @@ onActivated(() => {
       <el-tabs v-model="activeReminderTab" class="maintenance-tabs">
         <el-tab-pane label="当日待办" name="today">
           <div class="table-wrap">
-            <el-table :data="pagedDueItems" :row-key="rowKey" v-loading="loadingOverview">
-              <el-table-column label="编号" width="80">
-                <template #default="{ row }">{{ displayNumber(row.title) }}</template>
-              </el-table-column>
-              <el-table-column prop="station" label="工站" width="140" />
-              <el-table-column label="检查内容" min-width="260" show-overflow-tooltip>
-                <template #default="{ row }">{{ displayTitle(row.title) }}</template>
-              </el-table-column>
-              <el-table-column prop="due_date" label="到期日期" width="120" />
-              <el-table-column label="周期" width="110">
-                <template #default="{ row }">{{ formatCycle(row.interval_days) }}</template>
-              </el-table-column>
-              <el-table-column label="状态" width="110">
-                <template #default="{ row }">
-                  <el-tag :type="statusTagType(row)" effect="light">{{ statusText(row) }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="运维信息" min-width="210">
-                <template #default="{ row }">
-                  <el-input v-model="draftFor(row).value_text" placeholder="填写运维信息" />
-                </template>
-              </el-table-column>
-              <el-table-column label="完成" width="92" fixed="right" align="center">
-                <template #default="{ row }">
-                  <el-checkbox
-                    class="maintenance-complete-checkbox"
-                    :model-value="isSelected(row)"
-                    @change="(checked) => setSelected(row, checked === true)"
-                  />
-                </template>
-              </el-table-column>
-            </el-table>
+            <ResponsiveTable
+              :data="pagedDueItems"
+              :row-key="rowKey"
+              :card-fields="dueCardFields"
+            >
+              <el-table :data="pagedDueItems" :row-key="rowKey" v-loading="loadingOverview">
+                <el-table-column label="编号" width="80">
+                  <template #default="{ row }">{{ displayNumber(row.title) }}</template>
+                </el-table-column>
+                <el-table-column prop="station" label="工站" width="140" />
+                <el-table-column label="检查内容" min-width="260" show-overflow-tooltip>
+                  <template #default="{ row }">{{ displayTitle(row.title) }}</template>
+                </el-table-column>
+                <el-table-column prop="due_date" label="到期日期" width="120" />
+                <el-table-column label="周期" width="110">
+                  <template #default="{ row }">{{ formatCycle(row.interval_days) }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="110">
+                  <template #default="{ row }">
+                    <el-tag :type="statusTagType(row)" effect="light">{{ statusText(row) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="运维信息" min-width="210">
+                  <template #default="{ row }">
+                    <el-input v-model="draftFor(row).value_text" placeholder="填写运维信息" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="完成" width="92" fixed="right" align="center">
+                  <template #default="{ row }">
+                    <el-checkbox
+                      class="maintenance-complete-checkbox"
+                      :model-value="isSelected(row)"
+                      @change="(checked) => setSelected(row, checked === true)"
+                    />
+                  </template>
+                </el-table-column>
+              </el-table>
+              <template #cell:title="{ row }">{{ displayTitle(row.title) }}</template>
+              <template #cell:interval_days="{ row }">{{ formatCycle(row.interval_days) }}</template>
+              <template #cell:status="{ row }">
+                <el-tag :type="statusTagType(row)" effect="light">{{ statusText(row) }}</el-tag>
+              </template>
+              <template #cell:value_text="{ row }">
+                <el-input v-model="draftFor(row).value_text" placeholder="填写运维信息" size="small" />
+              </template>
+              <template #cell:completed="{ row }">
+                <el-checkbox
+                  class="maintenance-complete-checkbox"
+                  :model-value="isSelected(row)"
+                  @change="(checked) => setSelected(row, checked === true)"
+                />
+              </template>
+            </ResponsiveTable>
             <el-pagination
               v-if="dueItems.length > maintenancePageSize"
               v-model:current-page="duePage"
@@ -503,38 +564,59 @@ onActivated(() => {
         </el-tab-pane>
         <el-tab-pane label="逾期提醒" name="overdue">
           <div class="table-wrap">
-            <el-table :data="pagedOverdueItems" :row-key="rowKey" v-loading="loadingOverview">
-              <el-table-column label="编号" width="80">
-                <template #default="{ row }">{{ displayNumber(row.title) }}</template>
-              </el-table-column>
-              <el-table-column prop="station" label="工站" width="140" />
-              <el-table-column label="检查内容" min-width="260" show-overflow-tooltip>
-                <template #default="{ row }">{{ displayTitle(row.title) }}</template>
-              </el-table-column>
-              <el-table-column prop="due_date" label="到期日期" width="120" />
-              <el-table-column label="周期" width="110">
-                <template #default="{ row }">{{ formatCycle(row.interval_days) }}</template>
-              </el-table-column>
-              <el-table-column label="状态" width="110">
-                <template #default="{ row }">
-                  <el-tag :type="statusTagType(row)" effect="light">{{ statusText(row) }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="运维信息" min-width="210">
-                <template #default="{ row }">
-                  <el-input v-model="draftFor(row).value_text" placeholder="填写运维信息" />
-                </template>
-              </el-table-column>
-              <el-table-column label="完成" width="92" fixed="right" align="center">
-                <template #default="{ row }">
-                  <el-checkbox
-                    class="maintenance-complete-checkbox"
-                    :model-value="isSelected(row)"
-                    @change="(checked) => setSelected(row, checked === true)"
-                  />
-                </template>
-              </el-table-column>
-            </el-table>
+            <ResponsiveTable
+              :data="pagedOverdueItems"
+              :row-key="rowKey"
+              :card-fields="dueCardFields"
+            >
+              <el-table :data="pagedOverdueItems" :row-key="rowKey" v-loading="loadingOverview">
+                <el-table-column label="编号" width="80">
+                  <template #default="{ row }">{{ displayNumber(row.title) }}</template>
+                </el-table-column>
+                <el-table-column prop="station" label="工站" width="140" />
+                <el-table-column label="检查内容" min-width="260" show-overflow-tooltip>
+                  <template #default="{ row }">{{ displayTitle(row.title) }}</template>
+                </el-table-column>
+                <el-table-column prop="due_date" label="到期日期" width="120" />
+                <el-table-column label="周期" width="110">
+                  <template #default="{ row }">{{ formatCycle(row.interval_days) }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="110">
+                  <template #default="{ row }">
+                    <el-tag :type="statusTagType(row)" effect="light">{{ statusText(row) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="运维信息" min-width="210">
+                  <template #default="{ row }">
+                    <el-input v-model="draftFor(row).value_text" placeholder="填写运维信息" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="完成" width="92" fixed="right" align="center">
+                  <template #default="{ row }">
+                    <el-checkbox
+                      class="maintenance-complete-checkbox"
+                      :model-value="isSelected(row)"
+                      @change="(checked) => setSelected(row, checked === true)"
+                    />
+                  </template>
+                </el-table-column>
+              </el-table>
+              <template #cell:title="{ row }">{{ displayTitle(row.title) }}</template>
+              <template #cell:interval_days="{ row }">{{ formatCycle(row.interval_days) }}</template>
+              <template #cell:status="{ row }">
+                <el-tag :type="statusTagType(row)" effect="light">{{ statusText(row) }}</el-tag>
+              </template>
+              <template #cell:value_text="{ row }">
+                <el-input v-model="draftFor(row).value_text" placeholder="填写运维信息" size="small" />
+              </template>
+              <template #cell:completed="{ row }">
+                <el-checkbox
+                  class="maintenance-complete-checkbox"
+                  :model-value="isSelected(row)"
+                  @change="(checked) => setSelected(row, checked === true)"
+                />
+              </template>
+            </ResponsiveTable>
             <el-pagination
               v-if="overdueItems.length > maintenancePageSize"
               v-model:current-page="overduePage"
@@ -580,7 +662,12 @@ onActivated(() => {
         </div>
       </div>
       <div class="table-wrap">
-        <el-table :data="pagedRecords" v-loading="loadingRecords" row-key="record_id">
+        <ResponsiveTable
+          :data="pagedRecords"
+          row-key="record_id"
+          :card-fields="recordCardFields"
+        >
+          <el-table :data="pagedRecords" v-loading="loadingRecords" row-key="record_id">
           <el-table-column label="编号" width="80">
             <template #default="{ $index }">{{ recordDisplayIndex($index) }}</template>
           </el-table-column>
@@ -594,7 +681,10 @@ onActivated(() => {
           <el-table-column label="完成时间" width="180">
             <template #default="{ row }">{{ formatDateTime(row.completed_at) }}</template>
           </el-table-column>
-        </el-table>
+          </el-table>
+          <template #cell:title_snapshot="{ row }">{{ displayTitle(row.title_snapshot) }}</template>
+          <template #cell:completed_at="{ row }">{{ formatDateTime(row.completed_at) }}</template>
+        </ResponsiveTable>
         <el-pagination
           v-if="records.length > maintenancePageSize"
           v-model:current-page="recordsPage"
@@ -612,7 +702,13 @@ onActivated(() => {
         <el-button type="primary" :icon="Plus" @click="openCreateEventDialog">新增事件</el-button>
       </div>
       <div class="table-wrap">
-        <el-table :data="pagedEvents" v-loading="loadingEvents" row-key="id">
+        <ResponsiveTable
+          :data="pagedEvents"
+          row-key="id"
+          :card-fields="eventCardFields"
+          :card-actions="buildEventCardActions"
+        >
+          <el-table :data="pagedEvents" v-loading="loadingEvents" row-key="id">
           <el-table-column label="编号" width="80">
             <template #default="{ row }">{{ displayNumber(row.title) }}</template>
           </el-table-column>
@@ -637,7 +733,15 @@ onActivated(() => {
               <el-button :icon="Edit" text type="primary" @click="openEditEventDialog(row)">编辑</el-button>
             </template>
           </el-table-column>
-        </el-table>
+          </el-table>
+          <template #cell:title="{ row }">{{ displayTitle(row.title) }}</template>
+          <template #cell:interval_days="{ row }">{{ formatCycle(row.interval_days) }}</template>
+          <template #cell:enabled="{ row }">
+            <el-tag :type="eventStatusType(row)" effect="light">
+              {{ row.enabled ? '启用' : '停用' }}
+            </el-tag>
+          </template>
+        </ResponsiveTable>
         <el-pagination
           v-if="events.length > maintenancePageSize"
           v-model:current-page="eventsPage"
@@ -751,9 +855,9 @@ onActivated(() => {
   width: 220px;
 }
 
-@media (max-width: 920px) {
+@media (max-width: 767.98px) {
   .maintenance-metrics {
-    grid-template-columns: repeat(2, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   }
 
   .maintenance-header {
@@ -771,12 +875,6 @@ onActivated(() => {
 
   .maintenance-pagination {
     justify-content: flex-start;
-  }
-}
-
-@media (max-width: 560px) {
-  .maintenance-metrics {
-    grid-template-columns: 1fr;
   }
 
   .operator-input {

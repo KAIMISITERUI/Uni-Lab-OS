@@ -170,6 +170,10 @@ function colAllFilled (c: number): boolean {
   border: 1px solid #e0e6f0;
   border-radius: 8px;
   padding: 14px;
+  /* 大尺寸托盘 (例如 8 列 12 行) 在窄屏可能超过 360px,
+     设置 max-width 与 overflow-x:auto 让用户横向滑动孔位, 保持触屏可点 */
+  max-width: 100%;
+  overflow-x: auto;
 }
 .grid-table {
   border-collapse: separate;

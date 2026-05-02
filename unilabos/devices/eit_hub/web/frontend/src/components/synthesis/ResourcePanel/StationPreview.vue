@@ -499,4 +499,27 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
 }
+
+@media (max-width: 767.98px) {
+  .station-preview {
+    min-height: 200px;
+    max-height: 38vh;
+  }
+
+  .position-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .position-bar :deep(.el-input) {
+    width: 100%;
+  }
+
+  .tag-list :deep(.el-tag) {
+    min-height: 28px;
+    border-color: #0dbf75;
+    background: #e8fff5;
+    color: #087d52;
+  }
+}
 </style>

@@ -286,7 +286,7 @@ onBeforeUnmount(() => {
 
 .camera-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
   gap: 16px;
   margin-top: 14px;
 }
@@ -403,5 +403,32 @@ onBeforeUnmount(() => {
   height: 100%;
   object-fit: contain;
   background: #000;
+}
+
+@media (max-width: 767.98px) {
+  .camera-zoom-dialog :deep(.el-dialog__body) {
+    display: flex;
+    align-items: center;
+  }
+
+  .zoom-frame {
+    aspect-ratio: auto;
+    height: min(48dvh, 360px);
+  }
+
+  .zoom-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .panel-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .hint-text {
+    font-size: 12px;
+  }
 }
 </style>

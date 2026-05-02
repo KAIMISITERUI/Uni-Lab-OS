@@ -136,13 +136,20 @@ function onEdit(): void {
   word-break: break-all;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 767.98px) {
+  /* 详情双列 -> 单列叠放; 结构图缩到 320px max 居中 */
   .detail-body {
     grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .detail-left :deep(.structure-preview) {
+    max-width: 280px;
+    margin: 0 auto;
   }
 
   .detail-right {
-    max-height: 420px;
+    max-height: 40vh;
   }
 }
 </style>

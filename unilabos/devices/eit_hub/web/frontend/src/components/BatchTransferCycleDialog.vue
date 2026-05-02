@@ -236,4 +236,18 @@ async function handleSubmit() {
   color: var(--el-text-color-secondary);
   font-family: monospace;
 }
+
+@media (max-width: 767.98px) {
+  /* 任务字段在窄屏改纵向叠放, 箭头改文字 */
+  .task-fields {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .arrow {
+    text-align: center;
+  }
+  .arrow::before {
+    content: "↓ ";
+  }
+}
 </style>

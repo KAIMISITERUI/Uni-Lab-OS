@@ -1866,14 +1866,13 @@ onBeforeUnmount(() => {
   height: 300px;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 767.98px) {
+  /* 地图 + 控制 / 充电 + 电池: 双列 -> 单列叠放 */
   .agv-map-control-layout,
   .agv-charge-layout {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 760px) {
   .charge-form-grid,
   .control-actions,
   .charge-action-row {
@@ -1886,6 +1885,10 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
+  .interstation-task-row {
+    align-items: stretch;
+  }
+
   .transfer-action-grid {
     width: 100%;
     max-width: none;
@@ -1893,6 +1896,39 @@ onBeforeUnmount(() => {
 
   .transfer-arrow {
     display: none;
+  }
+
+  /* 充电参数表单偏移在手机端清零, 标签也顶置不再占左侧 36px */
+  .charge-form-grid {
+    transform: none;
+  }
+
+  .charge-action-row {
+    width: 100%;
+    margin: 12px 0 0;
+  }
+
+  /* 电池图压缩到 220px 节省纵向空间 */
+  .battery-panel :deep(.battery-chart) {
+    height: 220px;
+  }
+
+  /* AGV 地图最小高度 */
+  :deep(.agv-map) {
+    min-height: 240px;
+  }
+
+  .panel-title-actions {
+    justify-content: flex-start;
+  }
+
+  .jog-title-controls {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .jog-coord-select {
+    width: 100%;
   }
 }
 </style>

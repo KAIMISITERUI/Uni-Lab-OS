@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Check, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, Check, Refresh, Search } from '@element-plus/icons-vue'
+import { useViewportMode } from '../composables/useViewportMode'
 import { getErrorMessage } from '../api/http'
 import {
   fetchTaskHistoryList,
@@ -31,6 +32,9 @@ const queryText = ref('')
 const selectedFileFilters = ref<FileKey[]>([])
 const listLoading = ref(false)
 const selectedTaskId = ref<number | null>(null)
+const { isMobile } = useViewportMode()
+// 手机端两屏式: 选中任务后切换到详情屏, 列表屏点返回按钮回到列表
+const mobileShowDetail = computed(() => isMobile.value === true && selectedTaskId.value !== null)
 const activeTab = ref<'experiment_plan' | 'task_report' | 'methods' | 'integration' | 'yield'>('experiment_plan')
 const integrationReloadToken = ref(0)
 const yieldReloadToken = ref(0)
@@ -204,8 +208,12 @@ watch(visibleItems, () => {
       <span class="toolbar-meta">共 {{ visibleItems.length }} 个任务</span>
     </header>
 
-    <div class="split-layout">
-      <aside v-loading="listLoading" class="list-pane">
+    <div class="split-layout" :class="{ 'split-layout-mobile-detail': mobileShowDetail }">
+      <aside
+        v-show="isMobile === false || mobileShowDetail === false"
+        v-loading="listLoading"
+        class="list-pane"
+      >
         <ul v-if="visibleItems.length > 0" class="task-list">
           <li
             v-for="item in visibleItems"
@@ -249,10 +257,22 @@ watch(visibleItems, () => {
         />
       </aside>
 
-      <section class="detail-pane">
+      <section
+        v-show="isMobile === false || mobileShowDetail === true"
+        class="detail-pane"
+      >
         <template v-if="selectedTask !== null">
           <header class="detail-header">
             <div class="detail-title">
+              <el-button
+                v-if="isMobile === true"
+                class="mobile-back-btn"
+                :icon="ArrowLeft"
+                size="small"
+                @click="selectedTaskId = null"
+              >
+                返回列表
+              </el-button>
               <span class="big-id">#{{ selectedTask.task_id }}</span>
               <span class="big-name">{{ selectedTask.task_name || '(未命名)' }}</span>
               <el-tag size="small" :type="statusType(selectedTask.status)">{{ selectedTask.status ?? '-' }}</el-tag>
@@ -519,5 +539,62 @@ watch(visibleItems, () => {
   flex: 1;
   overflow-y: auto;
   padding: 12px;
+}
+
+@media (max-width: 767.98px) {
+  /* 手机端两屏式: 列表 / 详情各占满, 一次只显示一个 */
+  .split-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .list-pane,
+  .detail-pane {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+  }
+
+  .detail-header {
+    gap: 8px;
+  }
+
+  .detail-title,
+  .detail-times {
+    flex-wrap: wrap;
+  }
+
+  .detail-tabs {
+    min-width: 0;
+  }
+
+  .detail-tabs :deep(.el-tabs__content) {
+    padding: 10px;
+    overflow-x: hidden;
+  }
+
+  .detail-tabs :deep(.el-tabs__nav) {
+    min-width: max-content;
+  }
+
+  /* 详情屏顶部返回按钮 */
+  .mobile-back-btn {
+    margin-right: 8px;
+  }
+
+  .task-history-page {
+    padding: 0;
+  }
+
+  .toolbar {
+    padding: 0 4px;
+  }
+
+  .search-input {
+    width: 100%;
+  }
+
+  .file-filter-group {
+    flex-basis: 100%;
+  }
 }
 </style>

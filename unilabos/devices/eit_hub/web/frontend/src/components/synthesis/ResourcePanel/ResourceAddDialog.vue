@@ -592,6 +592,31 @@ function onCancel (): void {
   justify-content: flex-end;
   gap: 8px;
 }
+
+@media (max-width: 767.98px) {
+  .dialog-body {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 0;
+  }
+  /* 双列 (站位预览 + 表单) -> 单列叠放 */
+  .two-col {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .col {
+    height: auto;
+    overflow: visible;
+  }
+  .col-inner.scroll {
+    overflow: visible;
+  }
+  /* 站位预览限高, 不抢占表单空间 */
+  .preview-inner :deep(.station-preview) {
+    max-height: 38vh;
+  }
+}
 </style>
 
 <style>

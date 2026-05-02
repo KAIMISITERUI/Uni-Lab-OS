@@ -390,4 +390,13 @@ function formatDelta(a: number | undefined, b: number | undefined, isAngle: bool
   align-items: center;
   gap: 6px;
 }
+
+@media (max-width: 767.98px) {
+  .diff-grid {
+    grid-template-columns: 1fr;
+  }
+  .dialog-body {
+    max-height: none;
+  }
+}
 </style>

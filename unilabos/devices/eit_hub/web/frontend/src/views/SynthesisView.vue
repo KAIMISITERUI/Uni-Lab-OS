@@ -24,6 +24,17 @@ import TrayDetailPopover from '../components/synthesis/StationDetail/TrayDetailP
 import { buildTrayDetail, type TrayDetail } from '../components/synthesis/StationDetail/buildTrayDetail'
 import type { TrayModelOption } from '../components/synthesis/ResourcePanel/types'
 import { getModule } from '../lib/dynamic-graph'
+import ResponsiveTable from '../components/ResponsiveTable.vue'
+
+// 试剂表 手机端卡片字段; substance 作为标题, structureSmiles 渲染结构图, occurrences 列表渲染剩余/位置/托盘
+const reagentCardFields = [
+  { key: 'substance', label: '物质名称', primary: true },
+  { key: 'structureSmiles', label: '结构式' },
+  { key: 'physicalState', label: '物态' },
+  { key: 'amount', label: '剩余量' },
+  { key: 'position', label: '位置' },
+  { key: 'trayType', label: '托盘种类' },
+] as const
 
 interface ReagentOccurrence {
   amount: string
@@ -950,68 +961,104 @@ onBeforeUnmount(stopDashboardPolling)
                 <h3>化学品库</h3>
               </div>
               <div class="table-wrap chemical-table-wrap">
-                <el-table class="reagent-table" :data="reagentDisplayRows" border stripe height="520">
-                  <el-table-column label="结构式" width="142" align="center">
-                    <template #default="{ row }">
-                      <StructurePreview
-                        :smiles="row.structureSmiles"
-                        :width="118"
-                        :height="86"
-                      />
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="物质名称" min-width="260" align="center">
-                    <template #default="{ row }">
-                      <el-button
-                        v-if="row.chemical !== null"
-                        class="reagent-name-button"
-                        type="primary"
-                        link
-                        @click="openReagentDetail(row)"
-                      >
-                        {{ row.substance }}
-                      </el-button>
-                      <span v-else class="reagent-name-text">{{ row.substance }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="physicalState" label="物态" width="90" align="center" />
-                  <el-table-column label="剩余量" width="140" align="center">
-                    <template #default="{ row }">
-                      <div class="reagent-occurrence-list">
-                        <div
-                          v-for="(item, index) in row.occurrences"
-                          :key="`${item.position}-${index}`"
+                <ResponsiveTable
+                  :data="reagentDisplayRows"
+                  :row-key="(row) => row.substance"
+                  :card-fields="reagentCardFields"
+                >
+                  <el-table class="reagent-table" :data="reagentDisplayRows" border stripe height="520">
+                    <el-table-column label="结构式" width="142" align="center">
+                      <template #default="{ row }">
+                        <StructurePreview
+                          :smiles="row.structureSmiles"
+                          :width="118"
+                          :height="86"
+                        />
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="物质名称" min-width="260" align="center">
+                      <template #default="{ row }">
+                        <el-button
+                          v-if="row.chemical !== null"
+                          class="reagent-name-button"
+                          type="primary"
+                          link
+                          @click="openReagentDetail(row)"
                         >
-                          {{ item.amount }}
+                          {{ row.substance }}
+                        </el-button>
+                        <span v-else class="reagent-name-text">{{ row.substance }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="physicalState" label="物态" width="90" align="center" />
+                    <el-table-column label="剩余量" width="140" align="center">
+                      <template #default="{ row }">
+                        <div class="reagent-occurrence-list">
+                          <div
+                            v-for="(item, index) in row.occurrences"
+                            :key="`${item.position}-${index}`"
+                          >
+                            {{ item.amount }}
+                          </div>
                         </div>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="位置" width="170" align="center">
-                    <template #default="{ row }">
-                      <div class="reagent-occurrence-list">
-                        <div
-                          v-for="(item, index) in row.occurrences"
-                          :key="`${item.position}-${index}`"
-                        >
-                          {{ item.position }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="位置" width="170" align="center">
+                      <template #default="{ row }">
+                        <div class="reagent-occurrence-list">
+                          <div
+                            v-for="(item, index) in row.occurrences"
+                            :key="`${item.position}-${index}`"
+                          >
+                            {{ item.position }}
+                          </div>
                         </div>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="托盘种类" min-width="180" align="center">
-                    <template #default="{ row }">
-                      <div class="reagent-occurrence-list">
-                        <div
-                          v-for="(item, index) in row.occurrences"
-                          :key="`${item.position}-${index}`"
-                        >
-                          {{ item.trayType }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="托盘种类" min-width="180" align="center">
+                      <template #default="{ row }">
+                        <div class="reagent-occurrence-list">
+                          <div
+                            v-for="(item, index) in row.occurrences"
+                            :key="`${item.position}-${index}`"
+                          >
+                            {{ item.trayType }}
+                          </div>
                         </div>
-                      </div>
-                    </template>
-                  </el-table-column>
-                </el-table>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                  <template #cell:substance="{ row }">
+                    <el-button
+                      v-if="row.chemical !== null"
+                      class="reagent-name-button"
+                      type="primary"
+                      link
+                      @click="openReagentDetail(row)"
+                    >
+                      {{ row.substance }}
+                    </el-button>
+                    <span v-else>{{ row.substance }}</span>
+                  </template>
+                  <template #cell:structureSmiles="{ row }">
+                    <StructurePreview :smiles="row.structureSmiles" :width="160" :height="120" />
+                  </template>
+                  <template #cell:amount="{ row }">
+                    <div class="reagent-occurrence-list">
+                      <div v-for="(item, index) in row.occurrences" :key="`${item.position}-${index}`">{{ item.amount }}</div>
+                    </div>
+                  </template>
+                  <template #cell:position="{ row }">
+                    <div class="reagent-occurrence-list">
+                      <div v-for="(item, index) in row.occurrences" :key="`${item.position}-${index}`">{{ item.position }}</div>
+                    </div>
+                  </template>
+                  <template #cell:trayType="{ row }">
+                    <div class="reagent-occurrence-list">
+                      <div v-for="(item, index) in row.occurrences" :key="`${item.position}-${index}`">{{ item.trayType }}</div>
+                    </div>
+                  </template>
+                </ResponsiveTable>
               </div>
             </div>
 
@@ -1390,15 +1437,63 @@ onBeforeUnmount(stopDashboardPolling)
   border-color: transparent;
 }
 
-@media (max-width: 860px) {
-  .chemical-status-layout,
-  .station-with-panel,
-  .operation-row {
+@media (max-width: 767.98px) {
+  /* 手机端: 3D 视图 + 资源/设备管理双列叠放 */
+  .station-with-panel {
     grid-template-columns: 1fr;
   }
 
   .station-side-panel {
     width: 100%;
+  }
+
+  /* 化学品库 + 设备状态: 单列叠放 */
+  .chemical-status-layout {
+    grid-template-columns: 1fr;
+  }
+
+  /* 耗材卡片: 2 列网格让 8 张耗材卡可见 */
+  .consumable-card-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .consumable-card {
+    min-height: 76px;
+    padding: 12px;
+  }
+
+  .consumable-card-count {
+    font-size: 22px;
+  }
+
+  /* 化学品库表格在手机端高度收紧, 让出空间给设备状态 */
+  .chemical-table-wrap {
+    min-height: auto;
+  }
+
+  .device-status-grid {
+    height: auto;
+    max-height: 50vh;
+  }
+
+  /* W1 排货架: 让位置名占满, 按钮宽 96px 对齐右侧 */
+  .w1-control-row {
+    grid-template-columns: 1fr 96px;
+  }
+
+  .w1-position-name {
+    text-align: left;
+    justify-self: start;
+  }
+
+  /* 操作组并排两按钮 -> 单列 */
+  .operation-row {
+    grid-template-columns: 1fr;
+  }
+
+  /* 3D 视图最低高度兜底, 防止极窄屏被压成扁条 */
+  .station-graph-wrap {
+    min-height: 320px;
   }
 }
 </style>

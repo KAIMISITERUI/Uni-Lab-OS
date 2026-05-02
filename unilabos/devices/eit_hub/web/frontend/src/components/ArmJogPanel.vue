@@ -713,16 +713,15 @@ defineExpose<{
   white-space: nowrap;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 767.98px) {
   .panel-layout {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 900px) {
   .pose-card {
     flex-direction: column;
     row-gap: 8px;
+    overflow-x: visible;
   }
 
   .pose-line {
@@ -731,9 +730,14 @@ defineExpose<{
   }
 
   .pose-value {
-    overflow-x: auto;
+    width: auto;
+    overflow-x: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
+  /* TCP 双列改单列叠放; +/-/读数 三列布局 (核心交互) 保持不变 */
   .tcp-grid {
     grid-template-columns: 1fr;
   }
@@ -741,6 +745,78 @@ defineExpose<{
   .tcp-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  /* +/− 大按钮触屏可达性 */
+  .side-btn {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .movement-shell {
+    padding: 10px;
+    overflow: hidden;
+    border-radius: 12px;
+  }
+
+  .panel-layout {
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .tcp-zone,
+  .tcp-panel,
+  .joint-panel {
+    min-width: 0;
+  }
+
+  .tcp-toolbar {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .mode-switch {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .mode-switch :deep(.el-radio-button) {
+    min-width: 0;
+  }
+
+  .mode-switch :deep(.el-radio-button__inner) {
+    width: 100%;
+    min-width: 0;
+    padding: 0 10px;
+  }
+
+  .toolbar-param {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) 32px;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .toolbar-param :deep(.el-input-number) {
+    width: 100%;
+  }
+
+  .joint-row,
+  .tcp-row {
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    gap: 8px;
+  }
+
+  .value-rail {
+    min-width: 0;
+    padding: 0 48px;
+  }
+
+  .side-btn {
+    width: 44px;
+    min-height: 44px;
   }
 }
 </style>

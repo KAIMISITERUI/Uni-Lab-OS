@@ -437,7 +437,12 @@ onActivated(() => {
           </el-select>
         </el-form-item>
         <el-form-item label="当前路径" class="profile-path-item">
-          <el-input :model-value="profileData?.path || ''" readonly />
+          <el-input
+            :model-value="profileData?.path || ''"
+            readonly
+            type="textarea"
+            :autosize="{ minRows: 1, maxRows: 3 }"
+          />
         </el-form-item>
       </div>
 
@@ -699,23 +704,46 @@ onActivated(() => {
   min-width: 132px;
 }
 
-@media (max-width: 1120px) {
+@media (max-width: 767.98px) {
+  .label-printer-panel .panel-title,
+  .label-table-title {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .profile-toolbar,
-  .settings-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .paper-fields,
-  .font-fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
+  .settings-grid,
   .settings-group-fields,
   .paper-fields,
   .font-fields {
     grid-template-columns: 1fr;
+  }
+
+  .table-button-row {
+    justify-content: flex-start;
+  }
+
+  .profile-path-item :deep(.el-input__inner) {
+    text-overflow: clip;
+  }
+
+  .table-button-row :deep(.el-button) {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .print-footer {
+    justify-content: stretch;
+  }
+
+  .print-button {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .spreadsheet-wrap {
+    min-height: 300px;
   }
 }
 </style>
