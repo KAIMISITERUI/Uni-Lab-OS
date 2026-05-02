@@ -4,7 +4,12 @@
       "Bash(/c/ProgramData/miniforge3/python.exe -c ' *)",
       "Read(//Users/**)",
       "Read(//Users/nskyoc/D:/Uni-Lab-OS/unilabos/devices/eit_hub/web/frontend/**)",
-      "Bash(curl -s http://127.0.0.1:5174/ -m 5)"
+      "Bash(curl -s http://127.0.0.1:5174/ -m 5)",
+      "PowerShell(where.exe python 2>&1; where.exe pytest 2>&1; $pythonExe = \\(Get-Command python -ErrorAction SilentlyContinue\\).Source; if \\($pythonExe\\) { & $pythonExe --version 2>&1; & $pythonExe -c \"import websockets; print\\('websockets', websockets.__version__\\)\" 2>&1 } else { Write-Host \"no python\" })",
+      "PowerShell($env:PYTHON = \"C:\\\\ProgramData\\\\miniforge3\\\\envs\\\\unilab\\\\python.exe\"; if \\(-not \\(Test-Path $env:PYTHON\\)\\) { $env:PYTHON = \"C:\\\\ProgramData\\\\miniforge3\\\\python.exe\" }; cd D:\\\\Uni-Lab-OS; & $env:PYTHON -c \"from unilabos.devices.eit_hub.web.routers import agv; print\\('agv import ok'\\)\")",
+      "Read(//d/d/Uni-Lab-OS/unilabos/devices/eit_hub/web/ai_agent/domain/**)",
+      "Read(//d/d/Uni-Lab-OS/unilabos/devices/**)",
+      "Read(//c/Users/71811/.claude/**)"
     ]
   }
 }
