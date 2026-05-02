@@ -3,32 +3,29 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown,
   ChatDotRound,
-  Connection,
   Document,
-  EditPen,
-  Files,
-  MapLocation,
-  Operation,
-  Printer,
-  TakeawayBox,
-  Tools,
-  VideoCamera,
+  Key,
+  Menu,
 } from '@element-plus/icons-vue'
 import { setApiToken } from './api/chemicals'
 import { AiAgentLauncher } from './features/ai-agent'
+import { useAiAgent } from './features/ai-agent/state/useAiAgent'
+import { useViewportMode } from './composables/useViewportMode'
+import AppNavSidebar from './components/AppNavSidebar.vue'
 
 const route = useRoute()
+const { isMobile } = useViewportMode()
+const ai = useAiAgent()
 
 const title = computed(() => String(route.meta.title || 'EIT Hub'))
 const nowText = computed(() => new Date().toLocaleString('zh-CN', { hour12: false }))
 const tokenDialog = ref(false)
 const tokenInput = ref('')
 const agvMenuOpen = ref(false)
-const agvMenuExpanded = computed(() => agvMenuOpen.value === true)
 const synthesisMenuOpen = ref(false)
-const synthesisMenuExpanded = computed(() => synthesisMenuOpen.value === true)
+// 手机端汉堡抽屉的开合状态, 桌面端不使用此 ref
+const mobileNavOpen = ref(false)
 const synthesisGroupActive = computed(() => {
   // /synthesis 与其子路由 (如 /synthesis/cameras) 视为合成工站组高亮,
   // 但要排除独立的 /synthesis-task-editor 与 /synthesis-workflow 路由.
@@ -48,24 +45,18 @@ watch(
   (path) => {
     agvMenuOpen.value = path.startsWith('/agv') === true
     synthesisMenuOpen.value = path === '/synthesis' || path.startsWith('/synthesis/') === true
+    // 路由切换后自动收起手机抽屉, 避免遮挡内容
+    mobileNavOpen.value = false
   },
   { immediate: true },
 )
 
-function openTokenDialog() {
+function openTokenDialog (): void {
   tokenInput.value = localStorage.getItem('chem_mgr_token') || ''
   tokenDialog.value = true
 }
 
-function toggleAgvMenu() {
-  agvMenuOpen.value = agvMenuOpen.value === false
-}
-
-function toggleSynthesisMenu() {
-  synthesisMenuOpen.value = synthesisMenuOpen.value === false
-}
-
-function saveToken() {
+function saveToken (): void {
   const token = tokenInput.value.trim()
   if (token === '') {
     localStorage.removeItem('chem_mgr_token')
@@ -78,165 +69,89 @@ function saveToken() {
   }
   tokenDialog.value = false
 }
+
+function openMobileNav (): void {
+  mobileNavOpen.value = true
+}
+
+function onMobileNavClick (): void {
+  // 抽屉内菜单点击, 立即关闭抽屉
+  mobileNavOpen.value = false
+}
+
+function toggleAiPanel (): void {
+  ai.toggle()
+}
 </script>
 
 <template>
   <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand-block">
-        <h1 class="brand-title">EIT Hub</h1>
-        <p class="brand-subtitle">Uni-Lab OS Workstations</p>
-      </div>
+    <!-- 桌面端固定侧栏: 手机端通过 styles.css 的 .app-shell > .sidebar 隐藏, 不渲染时同样有效 -->
+    <AppNavSidebar
+      v-if="isMobile === false"
+      v-model:agv-menu-open="agvMenuOpen"
+      v-model:synthesis-menu-open="synthesisMenuOpen"
+      :synthesis-group-active="synthesisGroupActive"
+    />
 
-      <nav class="nav-list">
-        <RouterLink class="nav-link" to="/devices">
-          <el-icon><Connection /></el-icon>
-          <span>设备总览</span>
-        </RouterLink>
-        <div class="nav-group-control" :class="{ 'nav-group-active': synthesisGroupActive }">
-          <RouterLink class="nav-link nav-link-group-main" to="/synthesis" @click="synthesisMenuOpen = true">
-            <svg
-              class="nav-station-icon"
-              viewBox="224 176 576 704"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="44"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M408 240h208" />
-              <path d="M440 240v160" />
-              <path d="M584 240v160" />
-              <path
-                d="M440 400L272 704
-                   a72 72 0 0 0 64 108
-                   h352
-                   a72 72 0 0 0 64-108
-                   L584 400"
-              />
-              <line x1="360" y1="600" x2="664" y2="600" />
-            </svg>
-            <span>合成工站</span>
-          </RouterLink>
-          <button
-            class="nav-arrow-button"
-            type="button"
-            :aria-expanded="synthesisMenuExpanded"
-            aria-label="展开合成工站子菜单"
-            @click="toggleSynthesisMenu"
-          >
-            <el-icon class="nav-arrow" :class="{ 'nav-arrow-open': synthesisMenuExpanded }"><ArrowDown /></el-icon>
-          </button>
-        </div>
-        <div v-if="synthesisMenuExpanded" class="nav-sub-list">
-          <RouterLink class="nav-link nav-sub" to="/synthesis/cameras">
-            <el-icon><VideoCamera /></el-icon>
-            <span>现场监控</span>
-          </RouterLink>
-        </div>
-        <RouterLink class="nav-link" to="/analysis">
-          <svg
-            class="nav-station-icon"
-            viewBox="96 224 928 608"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="64"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path
-              d="M160 680
-                 H304
-                 C368 680 372 520 396 420
-                 C420 320 456 248 512 248
-                 C568 248 604 320 628 420
-                 C652 520 656 680 720 680
-                 H984"
-            />
-          </svg>
-          <span>分析工站</span>
-        </RouterLink>
-        <div class="nav-group-control" :class="{ 'nav-group-active': route.path.startsWith('/agv') === true }">
-          <RouterLink class="nav-link nav-link-group-main" to="/agv" @click="agvMenuOpen = true">
-            <svg
-              class="nav-station-icon"
-              viewBox="1 5 22 17"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <rect x="3.5" y="8" width="17" height="8" rx="1.6" />
-              <path d="M6.2 16a2.3 2.3 0 0 0 4.6 0" />
-              <path d="M13.2 16a2.3 2.3 0 0 0 4.6 0" />
-            </svg>
-            <span>AGV 运输车</span>
-          </RouterLink>
-          <button
-            class="nav-arrow-button"
-            type="button"
-            :aria-expanded="agvMenuExpanded"
-            aria-label="展开 AGV 子菜单"
-            @click="toggleAgvMenu"
-          >
-            <el-icon class="nav-arrow" :class="{ 'nav-arrow-open': agvMenuExpanded }"><ArrowDown /></el-icon>
-          </button>
-        </div>
-        <div v-if="agvMenuExpanded" class="nav-sub-list">
-          <RouterLink class="nav-link nav-sub" to="/agv/positions">
-            <el-icon><MapLocation /></el-icon>
-            <span>点位管理</span>
-          </RouterLink>
-          <RouterLink class="nav-link nav-sub" to="/agv/shelf">
-            <el-icon><TakeawayBox /></el-icon>
-            <span>货架状态</span>
-          </RouterLink>
-        </div>
-        <RouterLink class="nav-link" to="/chemicals">
-          <el-icon><Files /></el-icon>
-          <span>化学品库</span>
-        </RouterLink>
-        <RouterLink class="nav-link" to="/synthesis-task-editor">
-          <el-icon><EditPen /></el-icon>
-          <span>任务编辑</span>
-        </RouterLink>
-        <RouterLink class="nav-link" to="/synthesis-workflow">
-          <el-icon><Operation /></el-icon>
-          <span>工作流</span>
-        </RouterLink>
-        <RouterLink class="nav-link" to="/task-history">
-          <el-icon><Document /></el-icon>
-          <span>任务历史</span>
-        </RouterLink>
-        <RouterLink class="nav-link" to="/maintenance">
-          <el-icon><Tools /></el-icon>
-          <span>运维管理</span>
-        </RouterLink>
-        <RouterLink class="nav-link" to="/ai-agent-history">
-          <el-icon><ChatDotRound /></el-icon>
-          <span>AI 助手</span>
-        </RouterLink>
-        <RouterLink class="nav-link" to="/label-printer">
-          <el-icon><Printer /></el-icon>
-          <span>标签打印机</span>
-        </RouterLink>
-      </nav>
-    </aside>
+    <!-- 手机端汉堡抽屉: 内部沿用同一 AppNavSidebar 组件, 视觉与桌面侧栏完全一致 -->
+    <el-drawer
+      v-if="isMobile === true"
+      v-model="mobileNavOpen"
+      direction="ltr"
+      size="280px"
+      :with-header="false"
+      modal-class="mobile-nav-drawer-modal"
+      class="mobile-nav-drawer"
+    >
+      <AppNavSidebar
+        v-model:agv-menu-open="agvMenuOpen"
+        v-model:synthesis-menu-open="synthesisMenuOpen"
+        :synthesis-group-active="synthesisGroupActive"
+        @nav-click="onMobileNavClick"
+      />
+    </el-drawer>
 
     <section class="workspace">
+      <!-- 桌面端 topbar (手机端通过 .workspace > .topbar { display: none } 隐藏) -->
       <header class="topbar">
         <h2 class="topbar-title">{{ title }}</h2>
         <div class="topbar-meta">
           <el-icon><Document /></el-icon>
           <span>{{ nowText }}</span>
           <el-button text @click="openTokenDialog">访问令牌</el-button>
+        </div>
+      </header>
+
+      <!-- 手机端 mobile-topbar: 固定在 .workspace 顶部, 通过 styles.css 在桌面隐藏 -->
+      <header class="mobile-topbar">
+        <button
+          type="button"
+          class="mobile-topbar-btn mobile-topbar-btn-menu"
+          aria-label="打开导航"
+          @click="openMobileNav"
+        >
+          <el-icon><Menu /></el-icon>
+        </button>
+        <h2 class="mobile-topbar-title">{{ title }}</h2>
+        <div class="mobile-topbar-actions">
+          <button
+            type="button"
+            class="mobile-topbar-btn"
+            aria-label="访问令牌"
+            @click="openTokenDialog"
+          >
+            <el-icon><Key /></el-icon>
+          </button>
+          <button
+            type="button"
+            class="mobile-topbar-btn"
+            :class="{ 'mobile-topbar-btn-active': ai.state.open === true }"
+            aria-label="AI 助手"
+            @click="toggleAiPanel"
+          >
+            <el-icon><ChatDotRound /></el-icon>
+          </button>
         </div>
       </header>
 
@@ -269,3 +184,87 @@ function saveToken() {
     <AiAgentLauncher />
   </div>
 </template>
+
+<style scoped>
+/* mobile-topbar 仅在手机端可见, 桌面通过下方 @media 隐藏 */
+.mobile-topbar {
+  display: none;
+}
+
+@media (max-width: 767.98px) {
+  .topbar {
+    display: none;
+  }
+
+  .mobile-topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* 顶栏只覆盖普通页面内容, 弹窗和抽屉由全局层级规则管理. */
+    z-index: 1900;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--app-mobile-topbar-h);
+    padding: 0 12px;
+    background: #ffffff;
+    border-bottom: 1px solid #dce5f0;
+    box-shadow: 0 2px 8px rgba(18, 50, 90, 0.06);
+  }
+
+  .mobile-topbar-title {
+    flex: 1 1 auto;
+    margin: 0;
+    color: #12325a;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-topbar-actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  .mobile-topbar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    color: #12325a;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 22px;
+  }
+
+  .mobile-topbar-btn:hover {
+    background: #eaf3ff;
+  }
+
+  .mobile-topbar-btn:active {
+    background: #d6e5fa;
+  }
+
+  .mobile-topbar-btn-menu {
+    flex: 0 0 auto;
+  }
+
+  .mobile-topbar-btn-active {
+    color: #1a5fa8;
+    background: rgba(26, 95, 168, 0.12);
+  }
+
+  .mobile-topbar-btn .el-icon {
+    font-size: 22px;
+  }
+}
+</style>

@@ -1,4 +1,12 @@
+/* =====================================================================
+ * EIT Hub 全局样式
+ * 桌面端布局保持原始视觉, 手机端 (<= 767.98px) 通过单一断点收敛
+ * 全部布局/弹窗/表单/按钮/分页样式, 替代过去逐文件零散 @media 补丁
+ * ===================================================================== */
+
+/* ---------------- 设计 token ---------------- */
 :root {
+  /* 字体 / 颜色 */
   font-family:
     Inter, "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
   color: #172033;
@@ -7,6 +15,16 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* 布局 token (桌面/手机共用, 仅手机端切换数值) */
+  --app-sidebar-w: 236px;
+  --app-topbar-h: 64px;
+  --app-mobile-topbar-h: 56px;
+  --app-content-pad-desktop: 22px;
+  --app-content-pad-mobile: 12px;
+
+  /* 触屏可达性 */
+  --mobile-touch-min: 44px;
 }
 
 * {
@@ -34,9 +52,10 @@ select {
   font-family: inherit;
 }
 
+/* ---------------- 桌面端壳层 ---------------- */
 .app-shell {
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-columns: var(--app-sidebar-w) minmax(0, 1fr);
   width: 100%;
   height: 100vh;
   min-height: 0;
@@ -208,7 +227,7 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 64px;
+  min-height: var(--app-topbar-h);
   padding: 0 24px;
   background: #ffffff;
   border-bottom: 1px solid #dce5f0;
@@ -236,7 +255,7 @@ select {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 22px;
+  padding: var(--app-content-pad-desktop);
 }
 
 .view-stack {
@@ -336,6 +355,76 @@ select {
   color: #168a4f;
 }
 
+/* ---------------- ResponsiveTable 卡片样式 (全局) ---------------- */
+.responsive-card-list {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.responsive-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(18, 50, 90, 0.04);
+}
+
+.responsive-card-title {
+  color: #12325a;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.responsive-card-body {
+  display: grid;
+  gap: 6px;
+}
+
+.responsive-card-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.responsive-card-label {
+  color: #66758a;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.responsive-card-value {
+  color: #24344d;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.responsive-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eef2f7;
+}
+
+.responsive-card-empty {
+  padding: 32px 16px;
+  color: #94a2b8;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ---------------- Element Plus 主题统一 (桌面/手机共用) ---------------- */
 .el-card {
   border-color: #dce5f0;
   border-radius: 8px;
@@ -382,69 +471,330 @@ select {
   color: #34445d;
 }
 
-@media (max-width: 920px) {
+/* =====================================================================
+ * 手机端 (max-width: 767.98px)
+ * 用 :where() 写组件覆盖, 选择器特异性 = 0,
+ * 既能压住 Element Plus 默认样式, 又允许业务组件 scoped 样式局部覆盖
+ * ===================================================================== */
+@media (max-width: 767.98px) {
   body {
     overflow: auto;
   }
 
+  /* 壳层: 单列纵向, sidebar 不再占位 (由 App.vue 的 el-drawer 接管) */
   .app-shell {
+    display: block;
     grid-template-columns: 1fr;
+    width: 100%;
     height: auto;
     min-height: 100vh;
   }
 
-  .sidebar {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    padding: 12px;
-    border-right: none;
-    border-bottom: 1px solid rgba(18, 50, 90, 0.18);
-  }
-
-  .nav-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .nav-sub {
-    margin-left: 0;
-    padding-left: 12px;
+  /* 桌面 sidebar 在手机端隐藏; 抽屉内的 sidebar 通过 .mobile-nav-drawer 包裹层激活 */
+  .app-shell > .sidebar {
+    display: none;
   }
 
   .workspace {
     height: auto;
-    min-height: 0;
+    min-height: 100vh;
     overflow: visible;
+    padding-top: var(--app-mobile-topbar-h);
   }
 
-  .topbar {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-    padding: 14px 16px;
+  /* 桌面 topbar 隐藏, 手机端使用 mobile-topbar (App.vue 渲染) */
+  .workspace > .topbar {
+    display: none;
   }
 
   .content-scroll {
     overflow: visible;
+    padding: var(--app-content-pad-mobile);
+  }
+
+  .view-stack {
+    gap: 12px;
+  }
+
+  .panel-title {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .panel-title h2,
+  .panel-title h3 {
+    min-width: 0;
+  }
+
+  .panel {
     padding: 14px;
   }
 
+  /* 通用 grid 收敛: 自动按容器宽 fit, 替代各 view 写死的列数 */
   .metrics-grid {
-    grid-template-columns: repeat(2, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   }
 
   .two-column {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 560px) {
-  .nav-list,
-  .metrics-grid {
-    grid-template-columns: 1fr;
+  /* ---- 抽屉内菜单: 沿用桌面侧栏视觉, 适配窄宽 ---- */
+  .mobile-nav-drawer .sidebar {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    border-right: 0;
+    overflow: auto;
   }
 
-  .panel {
-    padding: 14px;
+  .mobile-nav-drawer-modal {
+    top: var(--app-mobile-topbar-h) !important;
+    height: calc(100dvh - var(--app-mobile-topbar-h)) !important;
+    z-index: 1800 !important;
+  }
+
+  .mobile-nav-drawer {
+    top: 0 !important;
+    height: 100% !important;
+  }
+
+  .mobile-nav-drawer.open {
+    transform: translateX(0) !important;
+  }
+
+  /* ---- Element Plus 组件全局收敛 ---- */
+
+  /* 弹窗自动全屏 (覆盖各组件 width="92%/640px/min(...)") */
+  /* 注: Element Plus 默认选择器具体性 = 10, 而 :where() = 0,
+     必须用 !important 才能压住默认尺寸/边距. 基础布局属性在桌面默认为空, 此处直接生效. */
+  .el-overlay-dialog {
+    padding: 0 !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .el-dialog {
+    --el-dialog-margin-top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .el-dialog__header {
+    flex: 0 0 auto;
+    margin-right: 0;
+    padding: 14px 16px;
+    border-bottom: 1px solid #dce5f0;
+  }
+
+  .el-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto !important;
+    padding: 14px 16px;
+  }
+
+  .el-dialog__footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    flex: 0 0 auto;
+    padding: 12px 16px;
+    background: #ffffff;
+    border-top: 1px solid #dce5f0;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  /* 抽屉手机端铺满 */
+  .el-drawer {
+    --el-drawer-padding-primary: 0;
+  }
+
+  .el-drawer.rtl,
+  .el-drawer.ltr {
+    width: min(85vw, 320px) !important;
+  }
+
+  .el-drawer.ttb,
+  .el-drawer.btt {
+    height: 100dvh !important;
+  }
+
+  /* 表单: 标签自动顶置, 解除 label-width 锁定 */
+  .el-form .el-form-item {
+    display: block;
+    margin-bottom: 14px;
+  }
+
+  .el-form .el-form-item__label {
+    float: none;
+    width: auto !important;
+    min-width: 0;
+    height: auto;
+    padding: 0 0 4px;
+    line-height: 1.5;
+    text-align: left;
+    justify-content: flex-start;
+  }
+
+  .el-form .el-form-item__content {
+    margin-left: 0 !important;
+    line-height: 1.5;
+  }
+
+  /* 数字/选择/输入控件铺满 */
+  .el-input,
+  .el-select,
+  .el-input-number,
+  .el-textarea,
+  .el-cascader,
+  .el-date-editor {
+    width: 100% !important;
+  }
+
+  .el-select__selected-item,
+  .el-select__selected-item span,
+  .el-select__placeholder,
+  .el-select__placeholder span {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .el-select__selected-item span,
+  .el-select__placeholder span {
+    display: block;
+  }
+
+  .el-popper {
+    max-width: calc(100vw - 24px) !important;
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .el-zoom-in-top-enter-from,
+  .el-zoom-in-top-leave-to {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .el-select__popper,
+  .el-dropdown__popper,
+  .el-picker__popper {
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  .el-select-dropdown__item,
+  .el-dropdown-menu__item {
+    display: flex;
+    align-items: center;
+    min-height: var(--mobile-touch-min);
+    height: auto;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    line-height: 1.4;
+    white-space: normal;
+  }
+
+  .el-select-dropdown__wrap {
+    max-height: min(50vh, 360px);
+  }
+
+  /* 按钮触屏可达性 */
+  .el-button {
+    min-height: var(--mobile-touch-min);
+  }
+
+  .el-button--small {
+    min-height: 36px;
+  }
+
+  /* Tab 头部允许溢出滚动 */
+  .el-tabs__nav-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .el-tabs__nav-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .el-tabs__nav-wrap::after {
+    height: 1px;
+  }
+
+  /* 分页: 隐藏 jumper / sizes / total, 仅保留 prev/pager/next */
+  .el-pagination .el-pagination__total,
+  .el-pagination .el-pagination__sizes,
+  .el-pagination .el-pagination__jump {
+    display: none !important;
+  }
+
+  .el-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  /* table-wrap 在手机端确保可横向滚动 (兜底, 即便没用 ResponsiveTable 也不爆出去) */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .el-descriptions__body .el-descriptions__table,
+  .el-descriptions__body tbody,
+  .el-descriptions__body tr {
+    display: block;
+    width: 100%;
+  }
+
+  .el-descriptions__body .el-descriptions__cell {
+    display: block;
+    width: 100% !important;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- ResponsiveTable 卡片在窄屏紧凑化 ---- */
+  .responsive-card {
+    padding: 12px;
+  }
+
+  .responsive-card-row {
+    grid-template-columns: 76px minmax(0, 1fr);
+    font-size: 12px;
+  }
+
+  .responsive-card-title {
+    font-size: 15px;
+  }
+
+  .responsive-card-actions {
+    justify-content: stretch;
+  }
+
+  .responsive-card-actions .el-button {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  /* el-message-box 在手机端铺满 */
+  .el-message-box {
+    width: calc(100vw - 24px) !important;
+    max-width: 420px !important;
   }
 }
