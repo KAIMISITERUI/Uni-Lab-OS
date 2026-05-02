@@ -265,6 +265,26 @@ function _handleSseEvent(
         display_payload: payload,
       })
     }
+    // AI 工具改写了任务编辑或上料表 Excel 后, 通知相关视图自动刷新.
+    const writeKindByTool: Record<string, string> = {
+      save_reaction_template: 'reaction_template',
+      submit_reaction_template: 'reaction_template',
+      save_batch_in_template: 'batch_in_template',
+      run_resource_check: 'batch_in_template',
+      print_reagent_labels: 'batch_in_template',
+      print_batch_in_table: 'batch_in_template',
+    }
+    const writeKind = writeKindByTool[String(data.name ?? '')]
+    if (
+      writeKind !== undefined
+      && data.error === undefined
+      && data.rejected !== true
+      && typeof window !== 'undefined'
+    ) {
+      window.dispatchEvent(
+        new CustomEvent('eit-hub:reload-task-editor', { detail: { kind: writeKind } }),
+      )
+    }
     return
   }
   if (event.event === 'pending_confirm') {
@@ -468,9 +488,18 @@ function stopStreaming(): void {
   }
   _streamStoppedByUser = true
   _abortActiveStream()
+  // 立即把 UI 切回 可输入 状态, 不等 _consumeStream 的 finally 走完.
+  // _consumeStream 在 abort 后仍会异步退出循环, 但 sending 已置 false 不再阻塞输入.
+  state.sending = false
+  // 把仍处于 streaming 状态的 assistant 行落定, 防止 UI 一直转圈.
+  for (const row of state.messages) {
+    if (row.status === 'streaming') {
+      row.status = 'committed'
+    }
+  }
 }
 
-async function confirmPending(): Promise<void> {
+async function confirmPending(editedArguments?: Record<string, unknown>): Promise<void> {
   if (state.pending === null || state.sessionId === null) {
     return
   }
@@ -485,7 +514,8 @@ async function confirmPending(): Promise<void> {
   try {
     const handle = await streamAiToolConfirm(sessionId, {
       message_id: messageId,
-      action: 'confirm',
+      action: editedArguments !== undefined ? 'edit' : 'approve',
+      edited_arguments: editedArguments,
     })
     _activeStream = handle
     if (_streamStoppedByUser === true) {

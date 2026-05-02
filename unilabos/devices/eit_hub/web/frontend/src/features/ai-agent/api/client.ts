@@ -94,6 +94,18 @@ async function* parseSseStream(
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
 
+  // abort 时主动 cancel reader, 让正在阻塞的 read() 立即解除, 不必等下一个 chunk.
+  const onAbort = () => {
+    reader.cancel().catch(() => {
+      // 忽略 cancel 错误.
+    })
+  }
+  if (signal.aborted === true) {
+    onAbort()
+  } else {
+    signal.addEventListener('abort', onAbort, { once: true })
+  }
+
   try {
     while (signal.aborted === false) {
       const { done, value } = await reader.read()
@@ -116,6 +128,7 @@ async function* parseSseStream(
       }
     }
   } finally {
+    signal.removeEventListener('abort', onAbort)
     try {
       await reader.cancel()
     } catch (_err) {
@@ -199,7 +212,12 @@ export async function streamAiSendMessage(
 
 export async function streamAiToolConfirm(
   sessionId: string,
-  payload: { message_id: number; action: 'confirm' | 'reject'; reject_reason?: string },
+  payload: {
+    message_id: number
+    action: 'approve' | 'reject' | 'edit'
+    reject_reason?: string
+    edited_arguments?: Record<string, unknown>
+  },
 ): Promise<StreamHandle> {
   return startSseRequest(
     `/api/ai-agent/sessions/${encodeURIComponent(sessionId)}/tool-confirm`,

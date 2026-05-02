@@ -119,3 +119,21 @@ export interface StreamHandle {
   events: AsyncGenerator<SseEvent, void, unknown>
   abort: () => void
 }
+
+// ask_user_choice 工具相关类型
+// 后端 ChoiceOption 模型: {label, value, description?}
+export interface AiChoiceOption {
+  label: string
+  value: string
+  description?: string | null
+}
+
+// AI 调 ask_user_choice 时传入的参数, 不含 selected
+export interface AskUserChoiceArgs {
+  question: string
+  options: AiChoiceOption[]
+  multi: boolean
+  allow_other: boolean
+  allow_skip: boolean
+  selected?: unknown
+}

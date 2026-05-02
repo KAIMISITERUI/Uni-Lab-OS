@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, ref, watch, type ComponentPublicInstance } from 'vue'
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+  type ComponentPublicInstance,
+} from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheck,
@@ -1634,6 +1643,24 @@ onActivated(() => {
   loadTemplate()
   loadBatchInTemplate()
   loadAnalysisMethods()
+})
+
+// 监听 AI 工具改写 Excel 后派发的事件, 自动刷新对应表格.
+function onAiToolWrite(event: Event) {
+  const detail = (event as CustomEvent).detail as { kind?: string } | undefined
+  if (detail?.kind === 'reaction_template') {
+    loadTemplate(false, { keepExperimentId: true })
+  } else if (detail?.kind === 'batch_in_template') {
+    loadBatchInTemplate()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('eit-hub:reload-task-editor', onAiToolWrite as EventListener)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('eit-hub:reload-task-editor', onAiToolWrite as EventListener)
 })
 
 watch(

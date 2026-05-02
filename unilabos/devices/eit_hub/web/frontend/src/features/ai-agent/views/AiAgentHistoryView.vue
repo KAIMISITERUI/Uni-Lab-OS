@@ -574,7 +574,6 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
                       class="ai-md-body"
                       v-html="renderMarkdown(row.content)"
                     ></div>
-                    <div v-if="row.status === 'streaming'" class="ai-cursor">▌</div>
                     <div v-if="row.content === '' && row.status !== 'streaming'" class="ai-msg-empty">(仅工具调用, 无文本回复)</div>
                   </div>
                 </div>
@@ -582,6 +581,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
                   <div
                     class="ai-tool-card"
                     :class="{
+                      'ai-tool-card-running': row.status === 'streaming',
                       'ai-tool-card-pending': row.status === 'pending_confirm',
                       'ai-tool-card-rejected': row.status === 'rejected',
                     }"
@@ -961,19 +961,6 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
   font-style: italic;
 }
 
-.ai-cursor {
-  display: inline-block;
-  margin-left: 2px;
-  color: #1a5fa8;
-  animation: ai-blink 1s steps(1) infinite;
-}
-
-@keyframes ai-blink {
-  50% {
-    opacity: 0;
-  }
-}
-
 .ai-md-body :deep(p) {
   margin: 0 0 6px;
 }
@@ -1014,21 +1001,31 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 .ai-tool-card {
   width: 100%;
   box-sizing: border-box;
-  padding: 10px 12px;
+  padding: 9px 11px 10px;
   background: #ffffff;
   border: 1px solid #dce5f0;
+  border-left: 4px solid #b9cff0;
   border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(18, 50, 90, 0.06);
   font-size: 12px;
 }
 
+.ai-tool-card-running {
+  background: #f7fbff;
+  border-color: #d8e8f8;
+  border-left-color: #1a5fa8;
+}
+
 .ai-tool-card-rejected {
-  border-color: #d6422b;
-  background: #fdeeea;
+  background: #fff5f3;
+  border-color: #efc4bc;
+  border-left-color: #c2412e;
 }
 
 .ai-tool-card-pending {
-  border-color: #f0a040;
-  background: #fff8eb;
+  background: #fffaf0;
+  border-color: #f2d59d;
+  border-left-color: #c77a00;
 }
 
 .ai-tool-card-header {
@@ -1043,11 +1040,32 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 }
 
 .ai-tool-card-status {
+  flex: 0 0 auto;
+  padding: 2px 7px;
   color: #66758a;
+  background: #eef4fb;
+  border-radius: 999px;
+  line-height: 1.4;
+}
+
+.ai-tool-card-running .ai-tool-card-status {
+  color: #1a5fa8;
+  background: #eaf3ff;
+}
+
+.ai-tool-card-pending .ai-tool-card-status {
+  color: #9a5b00;
+  background: #fff0cf;
+}
+
+.ai-tool-card-rejected .ai-tool-card-status {
+  color: #b3361d;
+  background: #fde5df;
 }
 
 .ai-tool-card-status-ok {
   color: #168a4f;
+  background: #e8f6ef;
 }
 
 .ai-tool-card-section {
@@ -1074,17 +1092,21 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 }
 
 .ai-pending-card {
-  background: #fff8eb;
-  border: 2px solid #f0a040;
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid #f2d59d;
+  border-left: 4px solid #c77a00;
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px 14px;
+  box-shadow: 0 8px 20px rgba(18, 50, 90, 0.08);
 }
 
 .ai-pending-title {
-  color: #b56b00;
+  color: #12325a;
   font-weight: 700;
   font-size: 13px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .ai-pending-meta {
@@ -1097,12 +1119,20 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
 }
 
 .ai-pending-section {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .ai-pending-actions {
   display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.ai-pending-actions :deep(.el-button) {
+  min-width: 88px;
+  margin-left: 0;
 }
 
 .ai-history-input-panel {

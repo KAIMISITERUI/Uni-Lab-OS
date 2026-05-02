@@ -2,7 +2,7 @@
 // AI 助手浮动入口: 右下角圆形按钮 + 抽屉聊天面板.
 // 跨路由不卸载, v-show 切换以保留输入草稿和滚动位置.
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   ArrowDown,
   ArrowUp,
@@ -16,8 +16,9 @@ import {
 } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AI_AGENT_MODEL_OPTIONS, type AiAgentModelId } from '../types'
+import { AI_AGENT_MODEL_OPTIONS, type AiAgentModelId, type AiChoiceOption } from '../types'
 import { useAiAgent } from '../state/useAiAgent'
+import AiChoiceCard from './AiChoiceCard.vue'
 
 const ai = useAiAgent()
 
@@ -54,7 +55,7 @@ const sessionMenuOpen = ref(false)
 const messageScroll = ref<HTMLDivElement | null>(null)
 const drawerReady = ref(false)
 const drawerInteracting = ref(false)
-const showToolCalls = ref(true)
+const showToolCalls = ref(false)
 // 与 useViewportMode 的 (max-width: 767.98px) 互补, 768 以上视为桌面布局.
 // 桌面布局下保留侧栏/悬浮窗双模式; 768 以下走"底部全屏 sheet"模式, 入口由 App.vue 的 mobile-topbar 接管, 不再渲染右下角 FAB.
 const DESKTOP_QUERY = '(min-width: 768px)'
@@ -671,20 +672,35 @@ async function onConfirmPending() {
   await ai.confirmPending()
 }
 
-async function onRejectPending() {
-  let reason = ''
-  try {
-    const result = await ElMessageBox.prompt('请说明拒绝原因 (可空):', '拒绝执行', {
-      inputType: 'textarea',
-      confirmButtonText: '提交拒绝',
-      cancelButtonText: '取消',
-      inputPlaceholder: '比如: 今天还没做完, 明天再标记.',
-    })
-    reason = (result.value || '').trim()
-  } catch (_err) {
+// 把 ask_user_choice 弹窗的答案 + 原参数 一起以 edit 方式提交.
+async function onChoiceConfirm(answer: string | string[]) {
+  if (ai.state.pending === null) {
     return
   }
-  await ai.rejectPending(reason)
+  const baseArgs = ai.state.pending.arguments ?? {}
+  const isMulti = Array.isArray(answer)
+  // 单选空字符串 / 多选空数组 表示 跳过, 注入 selected=null 让后端识别.
+  const selected = isMulti
+    ? (answer as string[])
+    : (answer as string).length > 0
+      ? answer
+      : null
+  await ai.confirmPending({ ...baseArgs, selected })
+}
+
+const pendingChoiceArgs = computed(() => {
+  const args = (ai.state.pending?.arguments ?? {}) as Record<string, unknown>
+  return {
+    question: typeof args.question === 'string' ? args.question : '',
+    options: Array.isArray(args.options) ? (args.options as AiChoiceOption[]) : [],
+    multi: args.multi === true,
+    allow_other: args.allow_other !== false,
+    allow_skip: args.allow_skip === true,
+  }
+})
+
+async function onRejectPending() {
+  await ai.rejectPending('')
 }
 
 async function onSwitchSession(sessionId: string) {
@@ -930,13 +946,13 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
                 class="ai-md-body"
                 v-html="renderMarkdown(row.content)"
               ></div>
-              <div v-if="row.status === 'streaming'" class="ai-cursor">▌</div>
             </div>
           </div>
           <div v-else-if="row.role === 'tool'" class="ai-msg ai-msg-tool">
             <div
               class="ai-tool-card"
               :class="{
+                'ai-tool-card-running': row.status === 'streaming',
                 'ai-tool-card-pending': row.status === 'pending_confirm',
                 'ai-tool-card-rejected': row.status === 'rejected',
               }"
@@ -964,25 +980,38 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
         </template>
 
         <!-- 待确认的控制类工具卡片 (置顶醒目) -->
-        <div v-if="ai.state.pending !== null" class="ai-pending-card">
-          <div class="ai-pending-title">⚠ 写操作待确认</div>
-          <div class="ai-pending-meta">
-            <div><strong>工具:</strong> {{ ai.state.pending.name }}</div>
-            <div v-if="ai.state.pending.description !== ''">
-              <strong>说明:</strong> {{ ai.state.pending.description }}
+        <template v-if="ai.state.pending !== null">
+          <AiChoiceCard
+            v-if="ai.state.pending.name === 'ask_user_choice'"
+            :question="pendingChoiceArgs.question"
+            :options="pendingChoiceArgs.options"
+            :multi="pendingChoiceArgs.multi"
+            :allow-other="pendingChoiceArgs.allow_other"
+            :allow-skip="pendingChoiceArgs.allow_skip"
+            :sending="ai.state.sending"
+            @confirm="onChoiceConfirm"
+            @cancel="onRejectPending"
+          />
+          <div v-else class="ai-pending-card">
+            <div class="ai-pending-title">写操作待确认</div>
+            <div class="ai-pending-meta">
+              <div><strong>工具:</strong> {{ ai.state.pending.name }}</div>
+              <div v-if="ai.state.pending.description !== ''">
+                <strong>说明:</strong> {{ ai.state.pending.description }}
+              </div>
+            </div>
+            <div class="ai-pending-section">
+              <div class="ai-tool-card-section-title">参数 (将提交至后端)</div>
+              <pre class="ai-tool-card-pre">{{ JSON.stringify(ai.state.pending.arguments, null, 2) }}</pre>
+            </div>
+            <div class="ai-pending-actions">
+              <el-button type="primary" :loading="ai.state.sending" @click="onConfirmPending">
+                确认执行
+              </el-button>
+              <el-button :disabled="ai.state.sending" @click="onRejectPending">拒绝</el-button>
             </div>
           </div>
-          <div class="ai-pending-section">
-            <div class="ai-tool-card-section-title">参数 (将提交至后端)</div>
-            <pre class="ai-tool-card-pre">{{ JSON.stringify(ai.state.pending.arguments, null, 2) }}</pre>
-          </div>
-          <div class="ai-pending-actions">
-            <el-button type="primary" :loading="ai.state.sending" @click="onConfirmPending">
-              确认执行
-            </el-button>
-            <el-button :disabled="ai.state.sending" @click="onRejectPending">拒绝并说明</el-button>
-          </div>
-        </div>
+        </template>
       </main>
 
       <!-- 输入区 -->
@@ -1003,12 +1032,12 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
           <span class="ai-input-tip">
             <span v-if="ai.state.sending"><el-icon class="is-loading"><Loading /></el-icon> 模型生成中...</span>
             <span v-else-if="ai.state.pending !== null">写操作等待你的判断</span>
-            <label v-else class="ai-tool-toggle">
+          </span>
+          <div class="ai-input-actions">
+            <label class="ai-tool-toggle">
               <input v-model="showToolCalls" type="checkbox" />
               <span>展示工具调用</span>
             </label>
-          </span>
-          <div class="ai-input-actions">
             <div class="ai-model-switch" aria-label="模型模式">
               <button
                 v-for="option in AI_AGENT_MODEL_OPTIONS"
@@ -1393,39 +1422,36 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   font-size: 12px;
 }
 
-.ai-cursor {
-  display: inline-block;
-  margin-left: 2px;
-  color: #1a5fa8;
-  animation: ai-blink 1s steps(1) infinite;
-}
-
-@keyframes ai-blink {
-  50% {
-    opacity: 0;
-  }
-}
-
 /* ===== 工具卡片 ===== */
 .ai-tool-card {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  padding: 8px 10px;
+  padding: 9px 11px 10px;
   background: #ffffff;
   border: 1px solid #dce5f0;
+  border-left: 4px solid #b9cff0;
   border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(18, 50, 90, 0.06);
   font-size: 12px;
 }
 
+.ai-tool-card-running {
+  background: #f7fbff;
+  border-color: #d8e8f8;
+  border-left-color: #1a5fa8;
+}
+
 .ai-tool-card-pending {
-  border-color: #f0a040;
-  background: #fff8eb;
+  background: #fffaf0;
+  border-color: #f2d59d;
+  border-left-color: #c77a00;
 }
 
 .ai-tool-card-rejected {
-  border-color: #d6422b;
-  background: #fdeeea;
+  background: #fff5f3;
+  border-color: #efc4bc;
+  border-left-color: #c2412e;
 }
 
 .ai-tool-card-header {
@@ -1440,11 +1466,32 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 }
 
 .ai-tool-card-status {
+  flex: 0 0 auto;
+  padding: 2px 7px;
   color: #66758a;
+  background: #eef4fb;
+  border-radius: 999px;
+  line-height: 1.4;
+}
+
+.ai-tool-card-running .ai-tool-card-status {
+  color: #1a5fa8;
+  background: #eaf3ff;
+}
+
+.ai-tool-card-pending .ai-tool-card-status {
+  color: #9a5b00;
+  background: #fff0cf;
+}
+
+.ai-tool-card-rejected .ai-tool-card-status {
+  color: #b3361d;
+  background: #fde5df;
 }
 
 .ai-tool-card-status-ok {
   color: #168a4f;
+  background: #e8f6ef;
 }
 
 .ai-tool-card-section {
@@ -1472,17 +1519,21 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 
 /* ===== 待确认卡片 (置顶醒目) ===== */
 .ai-pending-card {
-  background: #fff8eb;
-  border: 2px solid #f0a040;
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid #f2d59d;
+  border-left: 4px solid #c77a00;
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px 14px;
+  box-shadow: 0 8px 20px rgba(18, 50, 90, 0.08);
 }
 
 .ai-pending-title {
-  color: #b56b00;
+  color: #12325a;
   font-weight: 700;
   font-size: 13px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .ai-pending-meta {
@@ -1495,12 +1546,20 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 }
 
 .ai-pending-section {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .ai-pending-actions {
   display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.ai-pending-actions :deep(.el-button) {
+  min-width: 88px;
+  margin-left: 0;
 }
 
 /* ===== 输入区 ===== */
@@ -1556,6 +1615,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  font-size: 11px;
   color: #66758a;
   cursor: pointer;
   user-select: none;
