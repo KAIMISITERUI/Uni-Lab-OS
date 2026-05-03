@@ -16,8 +16,8 @@ import {
 } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AI_AGENT_MODEL_OPTIONS, type AiAgentModelId, type AiChoiceOption } from '../types'
-import { useAiAgent } from '../state/useAiAgent'
+import { type AiBaseModel, type AiChoiceOption, type AiThinkingLevel } from '../types'
+import { useAiAgent, type ChatMessageRow } from '../state/useAiAgent'
 import AiChoiceCard from './AiChoiceCard.vue'
 
 const ai = useAiAgent()
@@ -55,7 +55,6 @@ const sessionMenuOpen = ref(false)
 const messageScroll = ref<HTMLDivElement | null>(null)
 const drawerReady = ref(false)
 const drawerInteracting = ref(false)
-const showToolCalls = ref(false)
 // 与 useViewportMode 的 (max-width: 767.98px) 互补, 768 以上视为桌面布局.
 // 桌面布局下保留侧栏/悬浮窗双模式; 768 以下走"底部全屏 sheet"模式, 入口由 App.vue 的 mobile-topbar 接管, 不再渲染右下角 FAB.
 const DESKTOP_QUERY = '(min-width: 768px)'
@@ -141,11 +140,24 @@ const visibleMessages = computed(() => {
     if (row.role === 'system') {
       return false
     }
-    if (row.role === 'tool' && showToolCalls.value === false) {
-      return false
-    }
     return true
   })
+})
+
+// 是否显示左侧默认 "正在思考..." 占位徽章.
+// 触发条件: 正在等待模型 (sending=true) 且尾部不存在任何 streaming 行
+// (avoid 与流式 assistant 气泡 / 工具卡 "执行中" 徽章重复).
+// 覆盖场景: (1) 用户刚发送, 第一帧还未到; (2) 上一次 tool_result 已落库, 下一回合的首帧还未到.
+const showPendingPhase = computed(() => {
+  if (ai.state.sending !== true) {
+    return false
+  }
+  const list = visibleMessages.value
+  if (list.length === 0) {
+    return true
+  }
+  const last = list[list.length - 1]
+  return last.status !== 'streaming'
 })
 
 const drawerStyle = computed(() => {
@@ -767,17 +779,126 @@ function getToolDisplayLines(payload: Record<string, unknown> | null): string[] 
   }
 }
 
+// 把 row 上的阶段或状态映射为 ai-status-line 的颜色 class.
+// 状态点颜色按 "进行中类型 vs 终态" 分成 6 档, 与设计文档一致.
+function statusLineClass(row: ChatMessageRow): string {
+  if (row.role === 'assistant') {
+    if (row.phase === 'thinking') {
+      return 'ai-status-running-thinking'
+    }
+    if (row.phase === 'tool_calling') {
+      if (row.phase_kind === 'control') {
+        return 'ai-status-running-control'
+      }
+      // 没有 kind 时默认走 read 配色, 已知工具未注册的极少数情况兜底.
+      return 'ai-status-running-read'
+    }
+    return ''
+  }
+  // 工具行
+  if (row.status === 'streaming') {
+    if (row.tool_kind === 'control') {
+      return 'ai-status-running-control'
+    }
+    return 'ai-status-running-read'
+  }
+  if (row.status === 'pending_confirm') {
+    return 'ai-status-pending'
+  }
+  if (row.status === 'rejected') {
+    return 'ai-status-rejected'
+  }
+  if (row.error_state === true) {
+    return 'ai-status-error'
+  }
+  return 'ai-status-success'
+}
+
+// 把 row 上的阶段或状态映射为状态行展示文案.
+function statusLineText(row: ChatMessageRow): string {
+  if (row.role === 'assistant') {
+    if (row.phase === 'thinking') {
+      return '正在思考...'
+    }
+    if (row.phase === 'tool_calling') {
+      const name = row.phase_tool_name ?? ''
+      if (name !== '') {
+        return `正在调用 ${name}`
+      }
+      return '正在调用工具...'
+    }
+    return ''
+  }
+  const toolName = row.pending_tool_name ?? ''
+  const fallback = toolName !== '' ? toolName : '工具'
+  if (row.status === 'streaming') {
+    return `正在执行 ${fallback}`
+  }
+  if (row.status === 'pending_confirm') {
+    return `${fallback} 等待确认`
+  }
+  if (row.status === 'rejected') {
+    return `${fallback} 已拒绝`
+  }
+  if (row.error_state === true) {
+    return `${fallback} 执行失败`
+  }
+  return `${fallback} 已完成`
+}
+
+// tool 行参数或结果是否非空, 决定是否允许点击展开.
+function canExpandRow(row: ChatMessageRow): boolean {
+  if (row.role !== 'tool') {
+    return false
+  }
+  const hasArgs = row.pending_tool_args !== null
+    && typeof row.pending_tool_args === 'object'
+    && Object.keys(row.pending_tool_args).length > 0
+  const hasPayload = row.display_payload !== null
+  return hasArgs === true || hasPayload === true
+}
+
+function toggleRowExpand(row: ChatMessageRow): void {
+  if (canExpandRow(row) === false) {
+    return
+  }
+  row.expanded = row.expanded !== true
+}
+
 function dismissError() {
   ai.state.error = null
   ElMessage.info('已忽略错误提示')
 }
 
-function getModelLabel(modelId: string): string {
-  const option = AI_AGENT_MODEL_OPTIONS.find((item) => item.value === modelId)
-  return option?.label ?? modelId
+// 当前选中的 base_model. 在 baseModels 还没拉到时返回 null, 模板用 v-if 兜住.
+const currentBaseModel = computed<AiBaseModel | null>(() => {
+  return ai.state.baseModels.find((bm) => bm.id === ai.state.activeBaseModelId) ?? null
+})
+
+// 当前 base_model 的思考档位列表, 空数组表示该模型不带思考维 (右按钮隐藏).
+const currentThinkingLevels = computed<AiThinkingLevel[]>(() => {
+  return currentBaseModel.value?.thinking_levels ?? []
+})
+
+const currentLevel = computed<AiThinkingLevel | null>(() => {
+  if (ai.state.activeThinkingLevelId === null) {
+    return null
+  }
+  return currentThinkingLevels.value.find((lv) => lv.id === ai.state.activeThinkingLevelId) ?? null
+})
+
+const currentBaseModelLabel = computed(() => currentBaseModel.value?.label ?? '加载中...')
+const currentLevelLabel = computed(() => currentLevel.value?.label ?? '默认')
+
+function onBaseModelCommand(command: string | number | object): void {
+  void onSwitchBaseModel(String(command))
 }
 
-async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
+function onThinkingLevelCommand(command: string | number | object): void {
+  void onSwitchThinkingLevel(String(command))
+}
+
+async function onSwitchBaseModel(baseModelId: string): Promise<void> {
   if (ai.state.sending === true) {
     ElMessage.warning('模型生成中, 请等待本轮对话结束后再切换.')
     return
@@ -787,8 +908,32 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
     return
   }
   try {
-    await ai.switchModel(modelId)
-    ElMessage.success(`已切换为${getModelLabel(modelId)}模式, 下一次对话生效.`)
+    await ai.switchBaseModel(baseModelId)
+    const bm = ai.state.baseModels.find((item) => item.id === baseModelId)
+    const levelLabel = currentLevel.value?.label
+    if (levelLabel !== undefined) {
+      ElMessage.success(`已切换为 ${bm?.label ?? baseModelId} (${levelLabel}), 下一次对话生效.`)
+    } else {
+      ElMessage.success(`已切换为 ${bm?.label ?? baseModelId}, 下一次对话生效.`)
+    }
+  } catch (err) {
+    ElMessage.error((err as Error).message)
+  }
+}
+
+async function onSwitchThinkingLevel(levelId: string): Promise<void> {
+  if (ai.state.sending === true) {
+    ElMessage.warning('模型生成中, 请等待本轮对话结束后再切换.')
+    return
+  }
+  if (ai.state.pending !== null) {
+    ElMessage.warning('请先处理待确认的写操作, 再切换思考档位.')
+    return
+  }
+  try {
+    await ai.switchThinkingLevel(levelId)
+    const lv = currentThinkingLevels.value.find((item) => item.id === levelId)
+    ElMessage.success(`已切换思考档位为 ${lv?.label ?? levelId}, 下一次对话生效.`)
   } catch (err) {
     ElMessage.error((err as Error).message)
   }
@@ -925,8 +1070,9 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
         </button>
       </div>
 
-      <!-- 消息区 -->
+      <!-- 消息区: 外层 main 负责滚动, 内层 stream 承载消息行与右侧时间线伪元素. -->
       <main ref="messageScroll" class="ai-drawer-body">
+        <div class="ai-message-stream">
         <div v-if="visibleMessages.length === 0" class="ai-empty">
           <el-icon class="ai-empty-icon"><ChatDotRound /></el-icon>
           <div class="ai-empty-title">你好, 我是 EIT 助手</div>
@@ -936,48 +1082,63 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
         </div>
 
         <template v-for="row in visibleMessages" :key="row.local_id">
+          <!-- 用户消息: 蓝色气泡, 维持原样 -->
           <div v-if="row.role === 'user'" class="ai-msg ai-msg-user">
             <div class="ai-msg-bubble">{{ row.content }}</div>
           </div>
-          <div v-else-if="row.role === 'assistant'" class="ai-msg ai-msg-assistant">
-            <div class="ai-msg-bubble">
-              <div
-                v-if="row.content !== ''"
-                class="ai-md-body"
-                v-html="renderMarkdown(row.content)"
-              ></div>
+
+          <!-- AI 文本回答: 无框, 左侧浅灰静止圆点贴时间线, 与状态行对齐 -->
+          <div
+            v-else-if="row.role === 'assistant' && row.content !== ''"
+            class="ai-msg ai-msg-assistant"
+          >
+            <div class="ai-status-line ai-status-line-block ai-status-message">
+              <span class="ai-status-dot"></span>
+              <div class="ai-md-body" v-html="renderMarkdown(row.content)"></div>
             </div>
           </div>
+
+          <!-- AI 流式中段阶段提示 (思考 / 调用工具): 状态行 -->
+          <div
+            v-else-if="row.role === 'assistant' && row.phase !== null"
+            class="ai-msg ai-msg-assistant"
+          >
+            <div class="ai-status-line" :class="statusLineClass(row)">
+              <span class="ai-status-dot"></span>
+              <span class="ai-status-text">{{ statusLineText(row) }}</span>
+            </div>
+          </div>
+
+          <!-- 工具行: 状态行, 有参数或结果时点击展开 -->
           <div v-else-if="row.role === 'tool'" class="ai-msg ai-msg-tool">
             <div
-              class="ai-tool-card"
-              :class="{
-                'ai-tool-card-running': row.status === 'streaming',
-                'ai-tool-card-pending': row.status === 'pending_confirm',
-                'ai-tool-card-rejected': row.status === 'rejected',
-              }"
+              class="ai-status-line"
+              :class="[statusLineClass(row), canExpandRow(row) ? 'ai-status-line-clickable' : '']"
+              @click="toggleRowExpand(row)"
             >
-              <div class="ai-tool-card-header">
-                <span class="ai-tool-card-name">
-                  工具: {{ row.pending_tool_name || row.tool_call_id }}
-                </span>
-                <span v-if="row.status === 'streaming'" class="ai-tool-card-status">执行中…</span>
-                <span v-else-if="row.status === 'pending_confirm'" class="ai-tool-card-status">待确认</span>
-                <span v-else-if="row.status === 'rejected'" class="ai-tool-card-status">已拒绝</span>
-                <span v-else class="ai-tool-card-status ai-tool-card-status-ok">已执行</span>
+              <span class="ai-status-dot"></span>
+              <span class="ai-status-text">{{ statusLineText(row) }}</span>
+            </div>
+            <div v-if="row.expanded === true && canExpandRow(row)" class="ai-status-detail">
+              <div v-if="row.pending_tool_args" class="ai-status-detail-block">
+                <div class="ai-status-detail-title">参数</div>
+                <pre class="ai-status-detail-pre">{{ JSON.stringify(row.pending_tool_args, null, 2) }}</pre>
               </div>
-              <div v-if="row.pending_tool_args" class="ai-tool-card-section">
-                <div class="ai-tool-card-section-title">参数</div>
-                <pre class="ai-tool-card-pre">{{ JSON.stringify(row.pending_tool_args, null, 2) }}</pre>
-              </div>
-              <div v-if="row.status === 'committed' || row.status === 'rejected'" class="ai-tool-card-section">
-                <div class="ai-tool-card-section-title">结果</div>
-                <pre class="ai-tool-card-pre">
-{{ row.display_payload ? getToolDisplayLines(row.display_payload).join('\n') : row.content }}</pre>
+              <div v-if="row.display_payload" class="ai-status-detail-block">
+                <div class="ai-status-detail-title">结果</div>
+                <pre class="ai-status-detail-pre">{{ getToolDisplayLines(row.display_payload).join('\n') }}</pre>
               </div>
             </div>
           </div>
         </template>
+
+        <!-- 等待模型首帧 / 工具结果与下一回合之间的默认占位状态行 -->
+        <div v-if="showPendingPhase" class="ai-msg ai-msg-assistant">
+          <div class="ai-status-line ai-status-running-thinking">
+            <span class="ai-status-dot"></span>
+            <span class="ai-status-text">正在思考...</span>
+          </div>
+        </div>
 
         <!-- 待确认的控制类工具卡片 (置顶醒目) -->
         <template v-if="ai.state.pending !== null">
@@ -1001,8 +1162,8 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
               </div>
             </div>
             <div class="ai-pending-section">
-              <div class="ai-tool-card-section-title">参数 (将提交至后端)</div>
-              <pre class="ai-tool-card-pre">{{ JSON.stringify(ai.state.pending.arguments, null, 2) }}</pre>
+              <div class="ai-pending-section-title">参数 (将提交至后端)</div>
+              <pre class="ai-pending-pre">{{ JSON.stringify(ai.state.pending.arguments, null, 2) }}</pre>
             </div>
             <div class="ai-pending-actions">
               <el-button type="primary" :loading="ai.state.sending" @click="onConfirmPending">
@@ -1012,6 +1173,7 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
             </div>
           </div>
         </template>
+        </div>
       </main>
 
       <!-- 输入区 -->
@@ -1034,26 +1196,66 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
             <span v-else-if="ai.state.pending !== null">写操作等待你的判断</span>
           </span>
           <div class="ai-input-actions">
-            <label class="ai-tool-toggle">
-              <input v-model="showToolCalls" type="checkbox" />
-              <span>展示工具调用</span>
-            </label>
-            <div class="ai-model-switch" aria-label="模型模式">
+            <el-dropdown
+              trigger="click"
+              placement="top-end"
+              :disabled="ai.state.sending || ai.state.pending !== null || ai.state.modelSaving"
+              @command="onBaseModelCommand"
+            >
               <button
-                v-for="option in AI_AGENT_MODEL_OPTIONS"
-                :key="option.value"
                 type="button"
-                class="ai-model-option"
-                :class="{ 'ai-model-option-active': ai.state.modelId === option.value }"
+                class="ai-model-current"
                 :disabled="ai.state.sending || ai.state.pending !== null || ai.state.modelSaving"
-                @click="onSwitchModel(option.value)"
+                aria-label="切换模型"
               >
-                <el-icon v-if="ai.state.modelSaving === true && ai.state.modelId !== option.value" class="is-loading">
+                <el-icon v-if="ai.state.modelSaving === true" class="is-loading">
                   <Loading />
                 </el-icon>
-                <span>{{ option.label }}</span>
+                <span>{{ currentBaseModelLabel }}</span>
+                <el-icon><ArrowDown /></el-icon>
               </button>
-            </div>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="bm in ai.state.baseModels"
+                    :key="bm.id"
+                    :command="bm.id"
+                    :disabled="bm.id === ai.state.activeBaseModelId"
+                  >
+                    {{ bm.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-dropdown
+              v-if="currentThinkingLevels.length > 0"
+              trigger="click"
+              placement="top-end"
+              :disabled="ai.state.sending || ai.state.pending !== null || ai.state.modelSaving"
+              @command="onThinkingLevelCommand"
+            >
+              <button
+                type="button"
+                class="ai-model-current"
+                :disabled="ai.state.sending || ai.state.pending !== null || ai.state.modelSaving"
+                aria-label="切换思考档位"
+              >
+                <span>{{ currentLevelLabel }}</span>
+                <el-icon><ArrowDown /></el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="lv in currentThinkingLevels"
+                    :key="lv.id"
+                    :command="lv.id"
+                    :disabled="lv.id === ai.state.activeThinkingLevelId"
+                  >
+                    {{ lv.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button
               class="ai-send-button"
               type="primary"
@@ -1309,11 +1511,30 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 14px;
   background: #f8fafc;
+}
+
+/* 消息流容器: 撑满滚动视口高度, 承载左侧贯穿的时间线伪元素 */
+.ai-message-stream {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 14px 14px 14px 24px;
+}
+
+/* 左侧时间线: 与 padding-left 24px 配合, 圆点 (left:0, 半径4) 中心位于 left:4, 时间线对齐到 left:11, 视觉上圆点串在线上 */
+.ai-message-stream::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 11px;
+  width: 1px;
+  background: #e4e7eb;
+  pointer-events: none;
 }
 
 .ai-empty {
@@ -1357,7 +1578,9 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 }
 
 .ai-msg-tool {
-  justify-content: flex-start;
+  /* tool 行内可能同时承载状态行 + 展开详情, 改为 column 让两者垂直堆叠. */
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .ai-msg-bubble {
@@ -1375,14 +1598,165 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   border-bottom-right-radius: 4px;
 }
 
-.ai-msg-assistant .ai-msg-bubble {
+/* AI 文本回答: 无对话框, 直接贴左渲染 markdown */
+.ai-md-body {
   width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  background: #ffffff;
+  min-width: 0;
+  padding: 2px 0;
   color: #172033;
-  border: 1px solid #dce5f0;
-  border-bottom-left-radius: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+/* 行式状态: 圆点在左对齐时间线, 文字向右排开; 仅 tool 行可点击切换详情 */
+.ai-status-line {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: default;
+}
+
+/* 多行内容 (markdown 文本回答) 时让圆点贴顶, 与第一行文字基线对齐. */
+.ai-status-line-block {
+  align-items: start;
+}
+
+.ai-status-line-block .ai-status-dot {
+  margin-top: 8px;
+}
+
+/* AI 文本回答专用: 浅灰静止圆点, 与思考 / 工具状态点区分 */
+.ai-status-message .ai-status-dot {
+  background: #c0c4cc;
+}
+
+.ai-status-line-clickable {
+  cursor: pointer;
+}
+
+.ai-status-line-clickable:hover {
+  background: rgba(26, 95, 168, 0.04);
+  border-radius: 4px;
+}
+
+.ai-status-text {
+  color: #495467;
+  word-break: break-word;
+}
+
+.ai-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c0c4cc;
+  flex-shrink: 0;
+}
+
+/* 进行中状态点: 脉冲动画 + 阶段色 */
+.ai-status-running-thinking .ai-status-dot {
+  background: #5b8def;
+  animation: ai-status-pulse 1.3s ease-in-out infinite;
+}
+
+.ai-status-running-thinking .ai-status-text {
+  color: #2f5fcf;
+}
+
+.ai-status-running-read .ai-status-dot {
+  background: #f5a623;
+  animation: ai-status-pulse 1.3s ease-in-out infinite;
+}
+
+.ai-status-running-read .ai-status-text {
+  color: #b87410;
+}
+
+.ai-status-running-control .ai-status-dot {
+  background: #9b51e0;
+  animation: ai-status-pulse 1.3s ease-in-out infinite;
+}
+
+.ai-status-running-control .ai-status-text {
+  color: #6c2db6;
+}
+
+/* 终态状态点: 静止 */
+.ai-status-pending .ai-status-dot {
+  background: #f2c94c;
+}
+
+.ai-status-pending .ai-status-text {
+  color: #9a5b00;
+}
+
+.ai-status-success .ai-status-dot {
+  background: #27ae60;
+}
+
+.ai-status-error .ai-status-dot {
+  background: #eb5757;
+}
+
+.ai-status-error .ai-status-text {
+  color: #b3361d;
+}
+
+.ai-status-rejected .ai-status-dot {
+  background: #828282;
+}
+
+.ai-status-rejected .ai-status-text {
+  color: #66758a;
+}
+
+@keyframes ai-status-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.7);
+  }
+}
+
+/* 工具调用展开后的参数 / 结果, 无外框, 仅缩进展示 */
+.ai-status-detail {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 4px 0;
+}
+
+.ai-status-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-status-detail-title {
+  color: #66758a;
+  font-size: 11px;
+}
+
+.ai-status-detail-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: #f6f7f9;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow: auto;
+  font-size: 12px;
+  color: #495467;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ai-md-body :deep(p) {
@@ -1422,101 +1796,6 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   font-size: 12px;
 }
 
-/* ===== 工具卡片 ===== */
-.ai-tool-card {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  padding: 9px 11px 10px;
-  background: #ffffff;
-  border: 1px solid #dce5f0;
-  border-left: 4px solid #b9cff0;
-  border-radius: 8px;
-  box-shadow: 0 6px 16px rgba(18, 50, 90, 0.06);
-  font-size: 12px;
-}
-
-.ai-tool-card-running {
-  background: #f7fbff;
-  border-color: #d8e8f8;
-  border-left-color: #1a5fa8;
-}
-
-.ai-tool-card-pending {
-  background: #fffaf0;
-  border-color: #f2d59d;
-  border-left-color: #c77a00;
-}
-
-.ai-tool-card-rejected {
-  background: #fff5f3;
-  border-color: #efc4bc;
-  border-left-color: #c2412e;
-}
-
-.ai-tool-card-header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 6px;
-  color: #12325a;
-}
-
-.ai-tool-card-name {
-  font-weight: 600;
-}
-
-.ai-tool-card-status {
-  flex: 0 0 auto;
-  padding: 2px 7px;
-  color: #66758a;
-  background: #eef4fb;
-  border-radius: 999px;
-  line-height: 1.4;
-}
-
-.ai-tool-card-running .ai-tool-card-status {
-  color: #1a5fa8;
-  background: #eaf3ff;
-}
-
-.ai-tool-card-pending .ai-tool-card-status {
-  color: #9a5b00;
-  background: #fff0cf;
-}
-
-.ai-tool-card-rejected .ai-tool-card-status {
-  color: #b3361d;
-  background: #fde5df;
-}
-
-.ai-tool-card-status-ok {
-  color: #168a4f;
-  background: #e8f6ef;
-}
-
-.ai-tool-card-section {
-  margin-top: 4px;
-}
-
-.ai-tool-card-section-title {
-  color: #66758a;
-  font-size: 11px;
-  margin-bottom: 2px;
-}
-
-.ai-tool-card-pre {
-  background: #f4f7fb;
-  border: 1px solid #dce5f0;
-  border-radius: 4px;
-  padding: 6px;
-  margin: 0;
-  max-height: 200px;
-  overflow: auto;
-  font-size: 11px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 /* ===== 待确认卡片 (置顶醒目) ===== */
 .ai-pending-card {
   width: 100%;
@@ -1547,6 +1826,25 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
 
 .ai-pending-section {
   margin-bottom: 10px;
+}
+
+.ai-pending-section-title {
+  color: #66758a;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.ai-pending-pre {
+  background: #f4f7fb;
+  border: 1px solid #dce5f0;
+  border-radius: 4px;
+  padding: 6px;
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ai-pending-actions {
@@ -1611,35 +1909,17 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   white-space: nowrap;
 }
 
-.ai-tool-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: #66758a;
-  cursor: pointer;
-  user-select: none;
-}
-
-.ai-tool-toggle input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: #1a5fa8;
-  cursor: pointer;
-}
-
 .ai-input-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex: 0 0 auto;
 }
 
 .ai-send-button {
-  width: 34px;
-  min-width: 34px;
-  height: 32px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
   padding: 0;
 }
 
@@ -1651,42 +1931,40 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
   border-radius: 2px;
 }
 
-.ai-model-switch {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  background: #eef4fb;
-  border: 1px solid #dce5f0;
-  border-radius: 8px;
-}
-
-.ai-model-option {
+.ai-model-current {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-width: 44px;
-  height: 28px;
-  padding: 0 9px;
-  color: #66758a;
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
+  max-width: 172px;
+  min-width: 72px;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: #12325a;
+  background: #eef4fb;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
   cursor: pointer;
 }
 
-.ai-model-option:hover {
+.ai-model-current span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-model-current :deep(.el-icon) {
+  font-size: 13px;
+}
+
+.ai-model-current:hover {
   color: #12325a;
   background: #eaf3ff;
 }
 
-.ai-model-option-active {
-  color: #12325a;
-  background: #ffffff;
-  box-shadow: 0 1px 4px rgba(18, 50, 90, 0.14);
-}
-
-.ai-model-option:disabled {
+.ai-model-current:disabled {
   cursor: not-allowed;
   opacity: 0.7;
 }
@@ -1921,12 +2199,9 @@ async function onSwitchModel(modelId: AiAgentModelId): Promise<void> {
     height: var(--mobile-touch-min);
   }
 
-  .ai-launcher-mobile .ai-model-switch {
-    min-height: var(--mobile-touch-min);
-  }
-
-  .ai-launcher-mobile .ai-model-option {
+  .ai-launcher-mobile .ai-model-current {
     height: 38px;
+    max-width: 150px;
   }
 }
 </style>

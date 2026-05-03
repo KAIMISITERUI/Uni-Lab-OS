@@ -62,19 +62,16 @@ export async function fetchAiConfig(): Promise<AiConfigResponse> {
 }
 
 export async function updateAiConfig(payload: AiConfigUpdatePayload): Promise<AiConfigResponse> {
-  // axios 会过滤 undefined, 但保留 null - 而后端 None 表示"不修改". 所以我们只送 != undefined 的字段.
+  // axios 会过滤 undefined, 但保留 null. 后端用字段是否存在区分"不修改"和"清除".
   const body: Record<string, unknown> = {}
-  if (payload.api_key !== undefined) {
-    body.api_key = payload.api_key
+  if (payload.active_base_model_id !== undefined) {
+    body.active_base_model_id = payload.active_base_model_id
   }
-  if (payload.base_url !== undefined) {
-    body.base_url = payload.base_url
+  if (payload.active_thinking_level_id !== undefined) {
+    body.active_thinking_level_id = payload.active_thinking_level_id
   }
-  if (payload.model !== undefined) {
-    body.model = payload.model
-  }
-  if (payload.timeout_s !== undefined) {
-    body.timeout_s = payload.timeout_s
+  if (payload.providers !== undefined) {
+    body.providers = payload.providers
   }
   const { data } = await http.put<AiConfigResponse>('/api/ai-agent/config', body)
   return data

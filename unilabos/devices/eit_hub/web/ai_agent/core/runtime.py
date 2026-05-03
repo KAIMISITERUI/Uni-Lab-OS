@@ -260,6 +260,7 @@ class AgentRuntime:
                     tool_call_id=tc_id,
                     content=json.dumps({"error": error_text}, ensure_ascii=False),
                     status=STATUS_COMMITTED,
+                    pending_tool_name=tool_name,
                 )
                 events.append(SseEvent(event="tool_result", data={"tool_call_id": tc_id, "name": tool_name, "error": error_text}))
                 continue
@@ -279,6 +280,8 @@ class AgentRuntime:
                         tool_call_id=tc_id,
                         content=content,
                         status=STATUS_COMMITTED,
+                        pending_tool_name=tool_name,
+                        pending_tool_args=args,
                     )
                     self._audit_store.record_tool_event(
                         session_id=session_id,
@@ -298,6 +301,8 @@ class AgentRuntime:
                         tool_call_id=tc_id,
                         content=error_content,
                         status=STATUS_COMMITTED,
+                        pending_tool_name=tool_name,
+                        pending_tool_args=args,
                     )
                     self._audit_store.record_tool_event(
                         session_id=session_id,
@@ -438,6 +443,21 @@ class AgentRuntime:
             if frame.kind == "token":
                 accumulated_text_parts.append(frame.text or "")
                 sse_events.append(SseEvent(event="token", data={"text": frame.text or ""}))
+            elif frame.kind == "phase":
+                # 模型流式中段的阶段提示 (thinking / tool_calling), 仅用于前端动效, 不落库.
+                phase_value = frame.phase or ""
+                if phase_value != "":
+                    phase_data: JsonDict = {"phase": phase_value}
+                    tool_name = frame.tool_name or ""
+                    if tool_name != "":
+                        phase_data["tool_name"] = tool_name
+                        # 查询 ToolRegistry 取 read/control 用于前端区分颜色, 工具未注册时不附加.
+                        try:
+                            spec = self._tool_registry.get(tool_name)
+                            phase_data["kind"] = spec.permission.value
+                        except KeyError:
+                            pass
+                    sse_events.append(SseEvent(event="phase", data=phase_data))
             elif frame.kind == "error":
                 had_error = True
                 sse_events.append(SseEvent(event="error", data={"message": frame.error_message or "模型调用失败"}))

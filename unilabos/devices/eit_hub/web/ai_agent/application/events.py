@@ -19,7 +19,7 @@ class SseEvent:
     功能:
         SSE 单条事件的内部结构, to_sse_text 拼成 text/event-stream 文本.
     参数:
-        event: str, 事件名 token / tool_call / tool_result / pending_confirm / done / error.
+        event: str, 事件名 token / phase / tool_call / tool_result / pending_confirm / done / error.
         data: Dict, 事件荷载, 会被 json.dumps.
     """
 

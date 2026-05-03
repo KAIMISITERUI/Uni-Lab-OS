@@ -239,27 +239,26 @@ function onCancel(): void {
 }
 
 .ai-choice-option {
+  /* 选项默认无边框无背景, 仅依赖 radio/checkbox 指示器, 与 Claude Code 选项卡一致. */
   display: flex;
   align-items: flex-start;
   width: 100%;
   box-sizing: border-box;
-  padding: 9px 10px;
-  border: 1px solid #dce5f0;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease;
 }
 
 .ai-choice-option:hover {
-  border-color: #8ab6e8;
-  background: #f7fbff;
+  background: rgba(26, 95, 168, 0.04);
 }
 
 .ai-choice-option-active {
-  border-color: #1a5fa8;
+  /* 选中后才出现淡蓝背景, 取消选中即恢复透明. */
   background: #eef6ff;
-  box-shadow: 0 0 0 1px rgba(26, 95, 168, 0.1);
 }
 
 .ai-choice-option :deep(.el-radio),

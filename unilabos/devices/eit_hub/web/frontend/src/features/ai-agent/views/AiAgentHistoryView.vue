@@ -23,10 +23,12 @@ import {
   updateAiConfig,
 } from '../api/client'
 import {
-  AI_AGENT_MODEL_OPTIONS,
-  type AiAgentModelOption,
+  AI_AGENT_PROVIDER_OPTIONS,
+  type AiAgentProviderId,
+  type AiProviderCredentialsResponse,
   type AiConfigResponse,
   type AiSessionSummary,
+  type ConfigSourceName,
 } from '../types'
 import { useAiAgent } from '../state/useAiAgent'
 
@@ -303,56 +305,67 @@ const settingsSaving = ref(false)
 const settingsConfig = ref<AiConfigResponse | null>(null)
 
 interface SettingsForm {
-  // 受控输入框, 字符串以保留空字符串语义 (空字符串=清除字段)
+  // viewProvider 是当前编辑的 provider, 仅作为表单视图切换, 不再驱动 active_provider 持久化.
+  viewProvider: AiAgentProviderId
   api_key: string
   base_url: string
-  model: string
   timeout_s: string
   // 标记 api_key 是否被用户修改过, 未修改则不发送 (避免脱敏预览覆盖真实密钥)
   api_key_dirty: boolean
 }
 
 const settingsForm = reactive<SettingsForm>({
+  viewProvider: 'anthropic',
   api_key: '',
   base_url: '',
-  model: '',
   timeout_s: '',
   api_key_dirty: false,
 })
 
-function getConfigModelOptions(config: AiConfigResponse | null): AiAgentModelOption[] {
-  if (config !== null && config.model_options !== undefined && config.model_options.length > 0) {
-    return config.model_options
+const selectedProviderConfig = computed<AiProviderCredentialsResponse | null>(() => {
+  if (settingsConfig.value === null) {
+    return null
   }
-  return AI_AGENT_MODEL_OPTIONS.map((item) => ({ label: item.label, value: item.value }))
+  return settingsConfig.value.providers?.[settingsForm.viewProvider] ?? null
+})
+
+function getProviderOptions(config: AiConfigResponse | null) {
+  if (config !== null && config.provider_options !== undefined && config.provider_options.length > 0) {
+    return config.provider_options
+  }
+  return AI_AGENT_PROVIDER_OPTIONS.map((item) => ({ label: item.label, value: item.value }))
 }
 
-function normalizeConfigModel(value: string | null | undefined, config: AiConfigResponse | null): string {
-  const options = getConfigModelOptions(config)
-  const matched = options.find((item) => item.value === value)
-  if (matched !== undefined) {
-    return matched.value
+function apiKeyPlaceholder(): string {
+  if (selectedProviderConfig.value?.env.has_api_key === true) {
+    return '留空使用环境变量, 或输入密钥覆盖'
   }
-  return options[0]?.value ?? 'deepseek-v4-flash'
+  return '请输入当前 provider 的 API Key'
 }
 
-function modelDisplayName(modelId: string): string {
-  const option = getConfigModelOptions(settingsConfig.value).find((item) => item.value === modelId)
-  if (option === undefined) {
-    return modelId
+function _resetProviderFields(config: AiConfigResponse): void {
+  const providerConfig = config.providers?.[settingsForm.viewProvider]
+  if (providerConfig === undefined) {
+    settingsForm.api_key = ''
+    settingsForm.base_url = ''
+    settingsForm.timeout_s = ''
+    settingsForm.api_key_dirty = false
+    return
   }
-  return `${option.label} (${option.value})`
-}
-
-function _resetSettingsForm(config: AiConfigResponse): void {
-  settingsForm.api_key = config.ui.api_key_preview ?? ''
-  settingsForm.base_url = config.ui.base_url ?? ''
-  settingsForm.model = normalizeConfigModel(config.ui.model ?? config.effective.model, config)
+  settingsForm.api_key = providerConfig.ui.api_key_preview ?? ''
+  settingsForm.base_url = providerConfig.ui.base_url ?? ''
   settingsForm.timeout_s =
-    config.ui.timeout_s !== null && config.ui.timeout_s !== undefined
-      ? String(config.ui.timeout_s)
+    providerConfig.ui.timeout_s !== null && providerConfig.ui.timeout_s !== undefined
+      ? String(providerConfig.ui.timeout_s)
       : ''
   settingsForm.api_key_dirty = false
+}
+
+function onProviderChange() {
+  if (settingsConfig.value === null) {
+    return
+  }
+  _resetProviderFields(settingsConfig.value)
 }
 
 async function onOpenSettings() {
@@ -361,7 +374,7 @@ async function onOpenSettings() {
   try {
     const config = await fetchAiConfig()
     settingsConfig.value = config
-    _resetSettingsForm(config)
+    _resetProviderFields(config)
   } catch (err) {
     ElMessage.error((err as Error).message)
   } finally {
@@ -375,15 +388,14 @@ async function onSaveSettings() {
   }
   settingsSaving.value = true
   try {
-    const payload: { api_key?: string; base_url?: string; model?: string; timeout_s?: number | null } = {}
+    const credentials: { api_key?: string | null; base_url?: string | null; timeout_s?: number | null } = {}
     if (settingsForm.api_key_dirty === true) {
-      payload.api_key = settingsForm.api_key.trim()
+      credentials.api_key = settingsForm.api_key.trim()
     }
-    payload.base_url = settingsForm.base_url.trim()
-    payload.model = normalizeConfigModel(settingsForm.model, settingsConfig.value)
+    credentials.base_url = settingsForm.base_url.trim()
     const timeoutText = settingsForm.timeout_s.trim()
     if (timeoutText === '') {
-      payload.timeout_s = null
+      credentials.timeout_s = null
     } else {
       const parsed = Number(timeoutText)
       if (Number.isFinite(parsed) === false || parsed <= 0) {
@@ -391,13 +403,15 @@ async function onSaveSettings() {
         settingsSaving.value = false
         return
       }
-      payload.timeout_s = parsed
+      credentials.timeout_s = parsed
     }
-    const updated = await updateAiConfig(payload)
+    const updated = await updateAiConfig({
+      providers: { [settingsForm.viewProvider]: credentials },
+    })
     settingsConfig.value = updated
-    _resetSettingsForm(updated)
+    _resetProviderFields(updated)
     await ai.refreshConfig()
-    ElMessage.success('配置已保存, 下一次对话生效.')
+    ElMessage.success('凭证已保存, 下一次对话生效.')
   } catch (err) {
     ElMessage.error((err as Error).message)
   } finally {
@@ -415,7 +429,7 @@ function onApiKeyInput() {
   settingsForm.api_key_dirty = true
 }
 
-function sourceLabel(source: 'ui' | 'env' | 'default' | 'none'): string {
+function sourceLabel(source: ConfigSourceName): string {
   if (source === 'ui') {
     return 'UI 设置'
   }
@@ -428,7 +442,7 @@ function sourceLabel(source: 'ui' | 'env' | 'default' | 'none'): string {
   return '未设置'
 }
 
-function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
+function sourceTagType(source: ConfigSourceName): string {
   if (source === 'ui') {
     return 'success'
   }
@@ -672,7 +686,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
     <!-- 配置 dialog -->
     <el-dialog
       v-model="settingsOpen"
-      title="AI 助手配置 (DeepSeek)"
+      title="AI 助手配置"
       width="560px"
       :close-on-click-modal="false"
     >
@@ -681,42 +695,55 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
         加载中...
       </div>
       <template v-else>
-        <div v-if="settingsConfig !== null" class="ai-config-effective">
-          <div class="ai-config-section-title">当前生效配置</div>
+        <div class="ai-config-hint" style="margin-bottom: 12px;">
+          模型与思考档位请在对话窗底部下拉切换, 此处只配置各 provider 的凭证.
+        </div>
+
+        <el-form label-width="120px" class="ai-config-form">
+          <el-form-item label="选择 provider">
+            <el-radio-group
+              v-model="settingsForm.viewProvider"
+              class="ai-config-model-group"
+              @change="onProviderChange"
+            >
+              <el-radio-button
+                v-for="option in getProviderOptions(settingsConfig)"
+                :key="option.value"
+                :label="option.value"
+              >
+                <span class="ai-config-model-label">{{ option.label }}</span>
+              </el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </el-form>
+
+        <div v-if="selectedProviderConfig !== null" class="ai-config-effective">
+          <div class="ai-config-section-title">当前生效凭证</div>
           <div class="ai-config-effective-grid">
             <div class="ai-config-effective-row">
               <span class="ai-config-label">API Key</span>
               <span class="ai-config-value">
-                {{ settingsConfig.effective.api_key_preview ?? '未设置 (无法发送对话)' }}
-                <el-tag size="small" :type="sourceTagType(settingsConfig.effective.source.api_key)">
-                  {{ sourceLabel(settingsConfig.effective.source.api_key) }}
+                {{ selectedProviderConfig.effective.api_key_preview ?? '未设置 (无法发送对话)' }}
+                <el-tag size="small" :type="sourceTagType(selectedProviderConfig.effective.source.api_key)">
+                  {{ sourceLabel(selectedProviderConfig.effective.source.api_key) }}
                 </el-tag>
               </span>
             </div>
             <div class="ai-config-effective-row">
               <span class="ai-config-label">Base URL</span>
               <span class="ai-config-value">
-                {{ settingsConfig.effective.base_url }}
-                <el-tag size="small" :type="sourceTagType(settingsConfig.effective.source.base_url)">
-                  {{ sourceLabel(settingsConfig.effective.source.base_url) }}
-                </el-tag>
-              </span>
-            </div>
-            <div class="ai-config-effective-row">
-              <span class="ai-config-label">模型</span>
-              <span class="ai-config-value">
-                {{ modelDisplayName(settingsConfig.effective.model) }}
-                <el-tag size="small" :type="sourceTagType(settingsConfig.effective.source.model)">
-                  {{ sourceLabel(settingsConfig.effective.source.model) }}
+                {{ selectedProviderConfig.effective.base_url }}
+                <el-tag size="small" :type="sourceTagType(selectedProviderConfig.effective.source.base_url)">
+                  {{ sourceLabel(selectedProviderConfig.effective.source.base_url) }}
                 </el-tag>
               </span>
             </div>
             <div class="ai-config-effective-row">
               <span class="ai-config-label">Timeout</span>
               <span class="ai-config-value">
-                {{ settingsConfig.effective.timeout_s }} s
-                <el-tag size="small" :type="sourceTagType(settingsConfig.effective.source.timeout_s)">
-                  {{ sourceLabel(settingsConfig.effective.source.timeout_s) }}
+                {{ selectedProviderConfig.effective.timeout_s }} s
+                <el-tag size="small" :type="sourceTagType(selectedProviderConfig.effective.source.timeout_s)">
+                  {{ sourceLabel(selectedProviderConfig.effective.source.timeout_s) }}
                 </el-tag>
               </span>
             </div>
@@ -732,11 +759,7 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
               v-model="settingsForm.api_key"
               type="password"
               show-password
-              :placeholder="
-                settingsConfig?.env.has_api_key === true
-                  ? '留空使用环境变量, 或输入 sk-xxx 覆盖'
-                  : '请输入 sk-xxx (DeepSeek 平台获取)'
-              "
+              :placeholder="apiKeyPlaceholder()"
               @input="onApiKeyInput"
             />
             <div class="ai-config-form-hint">
@@ -748,25 +771,13 @@ function sourceTagType(source: 'ui' | 'env' | 'default' | 'none'): string {
           <el-form-item label="Base URL">
             <el-input
               v-model="settingsForm.base_url"
-              :placeholder="`留空使用 ${settingsConfig?.defaults.base_url ?? 'https://api.deepseek.com'}`"
+              :placeholder="`留空使用 ${selectedProviderConfig?.defaults.base_url ?? ''}`"
             />
-          </el-form-item>
-          <el-form-item label="模型">
-            <el-radio-group v-model="settingsForm.model" class="ai-config-model-group">
-              <el-radio-button
-                v-for="option in getConfigModelOptions(settingsConfig)"
-                :key="option.value"
-                :label="option.value"
-              >
-                <span class="ai-config-model-label">{{ option.label }}</span>
-                <span class="ai-config-model-id">{{ option.value }}</span>
-              </el-radio-button>
-            </el-radio-group>
           </el-form-item>
           <el-form-item label="Timeout (秒)">
             <el-input
               v-model="settingsForm.timeout_s"
-              :placeholder="`留空使用 ${settingsConfig?.defaults.timeout_s ?? 120} 秒`"
+              :placeholder="`留空使用 ${selectedProviderConfig?.defaults.timeout_s ?? 120} 秒`"
             />
           </el-form-item>
         </el-form>
