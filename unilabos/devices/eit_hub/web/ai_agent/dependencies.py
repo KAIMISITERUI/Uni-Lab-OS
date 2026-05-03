@@ -17,10 +17,12 @@ from .domain.memory import AgentMemoryService
 from .domain.skills import SkillService
 from .domain.store import AiAgentStore
 from .domain.tools import ToolRegistry, build_tool_registry
-from .infra.config_store import AiAgentConfigStore
+from .infra.anthropic_client import AnthropicClient, AnthropicSettings
+from .infra.config_store import AiAgentConfigStore, resolve_active_selection
 from .infra.checkpoint import build_checkpointer
-from .infra.deepseek_client import DeepseekClient, DeepseekSettings
-from .infra.model_provider import DeepSeekModelProvider
+from .infra.model_catalog import PROVIDER_ANTHROPIC
+from .infra.model_provider import ClientModelProvider, ModelProvider
+from .infra.openai_compatible_client import OpenAICompatibleClient, OpenAICompatibleSettings
 
 
 @lru_cache(maxsize=1)
@@ -51,7 +53,7 @@ def get_ai_agent_store() -> AiAgentStore:
 def _get_shared_ai_agent_config_store() -> AiAgentConfigStore:
     """
     功能:
-        创建并缓存 AI 助手配置存储 (UI 持久化的 DeepSeek 接入参数).
+        创建并缓存 AI 助手配置存储 (UI 持久化的多 provider 接入参数).
     返回:
         AiAgentConfigStore, 单例实例.
     """
@@ -187,16 +189,36 @@ def _get_shared_ai_agent_checkpointer():
     return build_checkpointer()
 
 
-def _build_deepseek_client() -> DeepseekClient:
+def _build_model_provider() -> ModelProvider:
     """
     功能:
-        分层加载 DeepSeek 配置: UI store 优先, 字段缺失时回退环境变量, 然后构造客户端.
+        根据当前生效的 base_model + thinking_level 构造模型 provider.
         Key 缺失时 Settings.load 抛 ValueError, 由路由层翻译为 503.
     返回:
-        DeepseekClient, 客户端实例.
+        ModelProvider, 模型 provider.
     """
-    settings = DeepseekSettings.load(store=_get_shared_ai_agent_config_store())
-    return DeepseekClient(settings)
+    config_store = _get_shared_ai_agent_config_store()
+    selection = resolve_active_selection(config_store.load())
+    base_model = selection.base_model
+    level = selection.thinking_level
+    # 档位可以 override 实际 API 模型名 (如 DeepSeek 快速/推理), 否则沿用 base_model.model.
+    effective_model = base_model.model
+    if level is not None and level.model_override is not None:
+        effective_model = level.model_override
+    if base_model.provider_id == PROVIDER_ANTHROPIC:
+        settings = AnthropicSettings.load(
+            model=effective_model,
+            thinking_budget=level.thinking_budget if level is not None else None,
+            store=config_store,
+        )
+        return ClientModelProvider(AnthropicClient(settings))
+    settings = OpenAICompatibleSettings.load(
+        provider_id=base_model.provider_id,
+        model=effective_model,
+        reasoning_effort=level.reasoning_effort if level is not None else None,
+        store=config_store,
+    )
+    return ClientModelProvider(OpenAICompatibleClient(settings))
 
 
 def get_ai_agent_runtime() -> AgentRuntime:
@@ -208,7 +230,7 @@ def get_ai_agent_runtime() -> AgentRuntime:
     """
     return AgentRuntime(
         store=_get_shared_ai_agent_store(),
-        model_provider=DeepSeekModelProvider(_build_deepseek_client()),
+        model_provider=_build_model_provider(),
         tool_registry=_get_shared_tool_registry(),
         memory_service=_get_shared_ai_agent_memory_service(),
         skill_service=_get_shared_ai_agent_skill_service(),

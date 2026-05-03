@@ -48,23 +48,38 @@ class SendMessagePayload(BaseModel):
     content: str
 
 
-class AiConfigUpdatePayload(BaseModel):
+class AiProviderCredentialsUpdate(BaseModel):
     """
     功能:
-        更新 AI 助手 DeepSeek 接入配置. 字段为 None 表示不修改, 空字符串表示清除该字段 (回退 env).
+        单个 provider 凭证的更新片段. 字段缺省表示不修改, null 或空字符串清除该字段 (回退 env / 默认).
     参数:
-        api_key: Optional[str], API Key, None 不修改, "" 清除.
-        base_url: Optional[str], 接口前缀, None 不修改, "" 清除.
-        model: Optional[str], 模型 ID, None 不修改, "" 清除.
-        timeout_s: Optional[float], 超时秒, None 不修改, 0 或负数清除.
+        api_key: Optional[str], API Key, 缺省不修改, null 或 "" 清除.
+        base_url: Optional[str], 接口前缀, 缺省不修改, null 或 "" 清除.
+        timeout_s: Optional[float], 超时秒, 缺省不修改, null / 0 / 负数清除.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     api_key: Optional[str] = None
     base_url: Optional[str] = None
-    model: Optional[str] = None
     timeout_s: Optional[float] = None
+
+
+class AiConfigUpdatePayload(BaseModel):
+    """
+    功能:
+        更新 AI 助手下拉两段式选择和各 provider 凭证. 字段缺省表示不修改.
+    参数:
+        active_base_model_id: Optional[str], 下拉左按钮选中的 base_model ID, 缺省不修改, null 或 "" 清除 (回退 env / 默认).
+        active_thinking_level_id: Optional[str], 下拉右按钮选中的 thinking_level ID, 缺省不修改, null 或 "" 清除 (回退 base_model 默认档).
+        providers: Optional[Dict[str, AiProviderCredentialsUpdate]], 各 provider 的凭证更新片段; 缺省不修改, key 必须是已登记 provider ID.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    active_base_model_id: Optional[str] = None
+    active_thinking_level_id: Optional[str] = None
+    providers: Optional[Dict[str, AiProviderCredentialsUpdate]] = None
 
 
 class ToolConfirmPayload(BaseModel):

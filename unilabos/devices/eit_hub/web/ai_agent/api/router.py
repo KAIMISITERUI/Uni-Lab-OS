@@ -8,8 +8,7 @@
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -24,8 +23,23 @@ from ..dependencies import (
     get_ai_agent_tool_registry,
 )
 from ..domain.store import AiAgentStore
-from ..infra.config_store import AiAgentConfig
-from ..infra.deepseek_client import DEFAULT_BASE_URL, DEFAULT_MODEL, MODEL_OPTIONS
+from ..infra.config_store import (
+    AiAgentConfig,
+    AiProviderConfig,
+    load_env_provider_config,
+    resolve_active_selection,
+    resolve_provider_credentials,
+)
+from ..infra.model_catalog import (
+    ALL_BASE_MODELS,
+    BASE_MODEL_INDEX,
+    PROVIDER_CATALOG,
+    PROVIDER_OPTIONS,
+    allowed_provider_values,
+    get_base_model,
+    get_provider_catalog,
+    serialize_base_model,
+)
 from .schemas import (
     AiConfigUpdatePayload,
     CreateSessionResponse,
@@ -78,121 +92,195 @@ def _mask_api_key(api_key: Optional[str]) -> Optional[str]:
     return f"{text[:4]}{'*' * (len(text) - 8)}{text[-4:]}"
 
 
-def _allowed_model_values() -> Set[str]:
+def _mask_provider_credentials(config: AiProviderConfig) -> JsonDict:
     """
     功能:
-        返回 UI 允许保存的 AI 助手模型 ID 集合.
+        将 provider 凭证转换为可回显结构, API Key 仅返回脱敏预览.
+    参数:
+        config: AiProviderConfig, provider 凭证 UI 配置.
     返回:
-        set[str], 支持的模型 ID.
+        Dict[str, Any], 可回显配置.
     """
-    return {str(item["value"]) for item in MODEL_OPTIONS}
+    return {
+        "has_api_key": config.api_key is not None,
+        "api_key_preview": _mask_api_key(config.api_key),
+        "base_url": config.base_url,
+        "timeout_s": config.timeout_s,
+    }
+
+
+def _provider_config_payload(provider_id: str, ui_config: AiAgentConfig) -> JsonDict:
+    """
+    功能:
+        构造单个 provider 的凭证 UI/env/effective/defaults 回显结构.
+    参数:
+        provider_id: str, provider ID.
+        ui_config: AiAgentConfig, UI 持久化配置.
+    返回:
+        Dict[str, Any], provider 凭证回显.
+    """
+    catalog = get_provider_catalog(provider_id)
+    env_config = load_env_provider_config(provider_id)
+    effective = resolve_provider_credentials(provider_id, ui_config)
+    return {
+        "label": catalog.label,
+        "ui": _mask_provider_credentials(ui_config.get_provider_config(provider_id)),
+        "env": _mask_provider_credentials(env_config),
+        "effective": {
+            "has_api_key": effective.api_key != "",
+            "api_key_preview": _mask_api_key(effective.api_key) if effective.api_key != "" else None,
+            "base_url": effective.base_url,
+            "timeout_s": effective.timeout_s,
+            "source": dict(effective.source),
+        },
+        "defaults": {
+            "base_url": catalog.default_base_url,
+            "timeout_s": 120.0,
+        },
+    }
 
 
 @router.get("/config")
 def get_ai_config() -> JsonDict:
     """
     功能:
-        返回 AI 助手当前配置 (UI 持久化部分 + env 默认值), API Key 仅返回脱敏预览.
-        前端用此响应回显输入框, 不会拿到原始密钥.
+        返回 AI 助手当前两段式选择 + 各 provider 凭证回显. API Key 仅返回脱敏预览.
+        前端据此渲染下拉选项与设置弹窗, 不会拿到原始密钥.
     返回:
-        Dict[str, Any], 含 ui (UI 设置) / env (环境变量) / effective (最终生效) 三段信息.
+        Dict[str, Any], 含 active_base_model_id / active_thinking_level_id / base_models / providers.
     """
     config_store = get_ai_agent_config_store()
     ui_config = config_store.load()
-
-    env_api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    env_base_url = os.getenv("DEEPSEEK_BASE_URL", "").strip()
-    env_model = os.getenv("DEEPSEEK_MODEL", "").strip()
-    env_timeout_text = os.getenv("DEEPSEEK_TIMEOUT_S", "").strip()
-    try:
-        env_timeout: Optional[float] = float(env_timeout_text) if env_timeout_text != "" else None
-    except ValueError:
-        env_timeout = None
-
-    effective_api_key = ui_config.api_key or env_api_key or ""
-    effective_base_url = ui_config.base_url or env_base_url or DEFAULT_BASE_URL
-    effective_model = ui_config.model or env_model or DEFAULT_MODEL
-    effective_timeout = ui_config.timeout_s if ui_config.timeout_s is not None else (
-        env_timeout if env_timeout is not None else 120.0
-    )
-
-    return {
-        "ui": {
-            "has_api_key": ui_config.api_key is not None,
-            "api_key_preview": _mask_api_key(ui_config.api_key),
-            "base_url": ui_config.base_url,
-            "model": ui_config.model,
-            "timeout_s": ui_config.timeout_s,
-        },
-        "env": {
-            "has_api_key": env_api_key != "",
-            "api_key_preview": _mask_api_key(env_api_key) if env_api_key != "" else None,
-            "base_url": env_base_url or None,
-            "model": env_model or None,
-            "timeout_s": env_timeout,
-        },
-        "effective": {
-            "has_api_key": effective_api_key != "",
-            "api_key_preview": _mask_api_key(effective_api_key) if effective_api_key != "" else None,
-            "base_url": effective_base_url,
-            "model": effective_model,
-            "timeout_s": effective_timeout,
-            "source": {
-                "api_key": "ui" if ui_config.api_key is not None else ("env" if env_api_key != "" else "none"),
-                "base_url": "ui" if ui_config.base_url is not None else ("env" if env_base_url != "" else "default"),
-                "model": "ui" if ui_config.model is not None else ("env" if env_model != "" else "default"),
-                "timeout_s": "ui" if ui_config.timeout_s is not None else ("env" if env_timeout is not None else "default"),
-            },
-        },
-        "defaults": {
-            "base_url": DEFAULT_BASE_URL,
-            "model": DEFAULT_MODEL,
-            "timeout_s": 120.0,
-        },
-        "model_options": [dict(item) for item in MODEL_OPTIONS],
+    selection = resolve_active_selection(ui_config)
+    providers = {
+        provider_id: _provider_config_payload(provider_id, ui_config)
+        for provider_id in PROVIDER_CATALOG.keys()
     }
+    return {
+        "active_base_model_id": selection.base_model.id,
+        "active_thinking_level_id": selection.thinking_level.id if selection.thinking_level is not None else None,
+        "active_source": {
+            "base_model": selection.base_model_source,
+            "thinking_level": selection.thinking_level_source,
+        },
+        "base_models": [serialize_base_model(bm) for bm in ALL_BASE_MODELS],
+        "provider_options": [dict(item) for item in PROVIDER_OPTIONS],
+        "providers": providers,
+    }
+
+
+def _normalize_credential_text(value: Optional[str]) -> Optional[str]:
+    """
+    功能:
+        把凭证字段规整为非空字符串或 None, 空白值统一返回 None (表示清除该字段).
+    参数:
+        value: Optional[str], 原始字符串.
+    返回:
+        Optional[str], 非空文本或 None.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if text == "":
+        return None
+    return text
 
 
 @router.put("/config")
 def update_ai_config(payload: AiConfigUpdatePayload = Body(...)) -> JsonDict:
     """
     功能:
-        更新 UI 持久化的 AI 助手配置. None 字段保持原值, "" / 0 / 负数表示清除该字段 (回退 env).
+        更新 UI 持久化的 AI 助手配置. 缺省字段保持原值, null / "" / 0 / 负数表示清除该字段 (回退 env).
     参数:
-        payload: AiConfigUpdatePayload, 待更新的字段.
+        payload: AiConfigUpdatePayload, 待更新的字段, 含 active_base_model_id / active_thinking_level_id / providers.
     返回:
         Dict[str, Any], 与 GET /config 同结构, 用于回显.
     """
     config_store = get_ai_agent_config_store()
     current = config_store.load()
 
-    next_api_key = current.api_key
-    if payload.api_key is not None:
-        cleaned = payload.api_key.strip()
-        next_api_key = cleaned if cleaned != "" else None
+    fields_set = payload.model_fields_set
 
-    next_base_url = current.base_url
-    if payload.base_url is not None:
-        cleaned = payload.base_url.strip()
-        next_base_url = cleaned if cleaned != "" else None
+    # 解析下次的 active_base_model_id (用于校验 thinking_level_id 与新 base_model 的合法性).
+    next_base_model_id = current.active_base_model_id
+    if "active_base_model_id" in fields_set:
+        cleaned = (payload.active_base_model_id or "").strip()
+        if cleaned != "" and cleaned not in BASE_MODEL_INDEX:
+            allowed = ", ".join(sorted(BASE_MODEL_INDEX.keys()))
+            raise _json_error(f"base_model 必须选择: {allowed}.")
+        next_base_model_id = cleaned if cleaned != "" else None
 
-    next_model = current.model
-    if payload.model is not None:
-        cleaned = payload.model.strip()
-        if cleaned != "" and cleaned not in _allowed_model_values():
-            raise _json_error("模型必须选择 deepseek-v4-flash 或 deepseek-v4-pro.")
-        next_model = cleaned if cleaned != "" else None
+    # 解析下次的 active_thinking_level_id, 校验是否在新 base_model 的 thinking_levels 内.
+    level_explicitly_set = "active_thinking_level_id" in fields_set
+    base_model_changed = (
+        "active_base_model_id" in fields_set
+        and next_base_model_id != current.active_base_model_id
+    )
+    if level_explicitly_set is True:
+        cleaned = (payload.active_thinking_level_id or "").strip()
+        next_level_id = cleaned if cleaned != "" else None
+    elif base_model_changed is True:
+        # base_model 切换且未显式指定档位时, 清空旧档位让其退到新 base_model 的 default.
+        next_level_id = None
+    else:
+        next_level_id = current.active_thinking_level_id
 
-    next_timeout = current.timeout_s
-    if payload.timeout_s is not None:
-        next_timeout = payload.timeout_s if payload.timeout_s > 0 else None
+    if next_level_id is not None:
+        # 校验时以"最终生效的 base_model"为准: UI -> env -> default.
+        effective_bm_id = next_base_model_id
+        if effective_bm_id is None:
+            effective_bm_id = resolve_active_selection(
+                AiAgentConfig(
+                    active_base_model_id=None,
+                    active_thinking_level_id=None,
+                    providers=current.providers,
+                )
+            ).base_model.id
+        base_model = get_base_model(effective_bm_id)
+        valid_ids = {level.id for level in base_model.thinking_levels}
+        if len(valid_ids) == 0:
+            # 该 base_model 无思考维, level_id 必须清除.
+            next_level_id = None
+        elif next_level_id not in valid_ids:
+            if level_explicitly_set is True:
+                allowed = ", ".join(sorted(valid_ids))
+                raise _json_error(f"{base_model.label} 的思考档位必须选择: {allowed}.")
+            # 不是显式设的, 静默退到默认.
+            next_level_id = None
+
+    # 合并 providers 凭证更新.
+    provider_configs = dict(current.providers)
+    if "providers" in fields_set and payload.providers is not None:
+        for provider_id, update in payload.providers.items():
+            if provider_id not in allowed_provider_values():
+                allowed = ", ".join(sorted(allowed_provider_values()))
+                raise _json_error(f"provider 必须选择: {allowed}.")
+            update_fields = update.model_fields_set
+            base_creds = current.get_provider_config(provider_id)
+            next_api_key = base_creds.api_key
+            if "api_key" in update_fields:
+                next_api_key = _normalize_credential_text(update.api_key)
+            next_base_url = base_creds.base_url
+            if "base_url" in update_fields:
+                next_base_url = _normalize_credential_text(update.base_url)
+            next_timeout = base_creds.timeout_s
+            if "timeout_s" in update_fields:
+                next_timeout = (
+                    update.timeout_s
+                    if update.timeout_s is not None and update.timeout_s > 0
+                    else None
+                )
+            provider_configs[provider_id] = AiProviderConfig(
+                api_key=next_api_key,
+                base_url=next_base_url,
+                timeout_s=next_timeout,
+            )
 
     config_store.save(
         AiAgentConfig(
-            api_key=next_api_key,
-            base_url=next_base_url,
-            model=next_model,
-            timeout_s=next_timeout,
+            active_base_model_id=next_base_model_id,
+            active_thinking_level_id=next_level_id,
+            providers=provider_configs,
         )
     )
     return get_ai_config()
