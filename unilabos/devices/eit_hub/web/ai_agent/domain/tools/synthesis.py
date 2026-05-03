@@ -190,7 +190,9 @@ class SaveReactionTemplateInput(BaseModel):
         description=(
             "完整反应模板 payload. 必须包含 params(25 项参数), headers, rows, "
             "可选 gc_ms_yield. 字段含义和取值范围以 experiment-method-fill skill 的 "
-            "field-spec.md 为准."
+            "field-spec.md 为准. "
+            "不允许传空对象 {}: 此工具是覆盖式写入, 必须把完整 payload 显式传入. "
+            "如果只是想用磁盘当前内容上传任务, 改用 submit_reaction_template (无参)."
         )
     )
 
@@ -340,13 +342,14 @@ def _handle_save_batch_in_template(model: BaseModel) -> JsonDict:
     返回:
         Dict[str, Any], 保存后重新读取的上料表结构.
     """
-    from ....excel_codec import DEFAULT_BATCH_IN_TEMPLATE, write_batch_in_template
+    from ....excel_codec import BATCH_IN_HEADERS, DEFAULT_BATCH_IN_TEMPLATE, write_batch_in_template
 
     args = model.model_dump()
     rows = args.get("rows")
     if isinstance(rows, list) is False:
         raise ValueError("rows 必须是列表")
-    payload: JsonDict = {"rows": rows}
+    # headers 是常量, 由后端固化注入, AI schema 不暴露 headers 字段以避免重复传递.
+    payload: JsonDict = {"headers": list(BATCH_IN_HEADERS), "rows": rows}
     return write_batch_in_template(payload, DEFAULT_BATCH_IN_TEMPLATE)
 
 
@@ -377,9 +380,10 @@ def _maybe_save_batch_in(rows: Optional[List[List[Any]]]) -> Optional[JsonDict]:
     """
     if rows is None:
         return None
-    from ....excel_codec import DEFAULT_BATCH_IN_TEMPLATE, write_batch_in_template
+    from ....excel_codec import BATCH_IN_HEADERS, DEFAULT_BATCH_IN_TEMPLATE, write_batch_in_template
 
-    return write_batch_in_template({"rows": rows}, DEFAULT_BATCH_IN_TEMPLATE)
+    # headers 由后端固化注入, 与 _handle_save_batch_in_template 保持一致.
+    return write_batch_in_template({"headers": list(BATCH_IN_HEADERS), "rows": rows}, DEFAULT_BATCH_IN_TEMPLATE)
 
 
 def _handle_print_reagent_labels(model: BaseModel) -> JsonDict:

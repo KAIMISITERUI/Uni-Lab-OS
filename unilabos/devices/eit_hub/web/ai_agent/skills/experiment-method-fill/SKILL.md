@@ -18,7 +18,7 @@ description: Use when the user wants to fill an EIT Hub synthesis task editor fr
 
 ## 核心交互原则
 
-**所有需要用户做选择的地方一律用 `ask_user_choice` 工具弹窗**, 不要在对话里写选择题文字. ask_user_choice 支持 单选 / 多选 / 跳过 / Other 自定义, options 必须是 `[{label, value, description?}]` 结构.
+**所有需要用户做选择的地方一律用 `ask_user_choice` 工具弹窗**, 不要在对话里写选择题文字. 用户已明确给出且符合规则的字段直接采用, 不要重复弹窗确认. ask_user_choice 支持 单选 / 多选 / 跳过 / Other 自定义, options 必须是 `[{label, value, description?}]` 结构.
 
 **最终方案预览改为在网页表格上预览**, 不要在对话框 echo 完整表格让用户口头同意. 流程:
 1. AI 收集完所有字段 → 调 `save_reaction_template` 写入 Excel → 网页表格自动刷新.
@@ -31,11 +31,11 @@ description: Use when the user wants to fill an EIT Hub synthesis task editor fr
 
 1. 调 `read_reaction_template` 看当前界面状态, 避免覆盖用户已填项.
 2. 解析用户需求, 缺失字段优先用 `ask_user_choice` 弹窗询问, 不要在对话里手写选择题. 默认值表里的字段允许直接用默认值, 不必每个都问.
-3. 试剂表: 用 `ask_user_choice` 单选询问实验数 (12/24/36/48 + 跳过=否), 然后再生成行.
-4. 化学品中文名(内标, 稀释液, 闪滤液, 试剂表每行 reagent)必须先调 `search_chemical(keyword=...)` 查库:
+3. 试剂表: 如果用户已明确实验数且属于 12/24/36/48, 直接采用该行数, 不要再弹实验数量选择. 只有实验数缺失, 模糊或不在允许值中时, 才用 `ask_user_choice` 单选询问实验数. 一般反应体系都需要反应溶剂, 反应溶剂应作为试剂表中的一项填写. 如果用户没有说明反应溶剂, 必须用 `ask_user_choice` 提醒并询问是否添加, 不要把反应溶剂填到稀释液字段. 如果反应溶剂需要写入但现有试剂列已满, 必须在 headers 末尾自动追加一组 `试剂`, `试剂量`, 并给每一行 rows 同步追加溶剂名和用量. 不要输出列满后要求用户自行补表的提示.
+4. 化学品中文名(内标, 稀释液, 闪滤液, 试剂表每行 reagent)必须先调 `search_chemical(keyword=...)` 查库. 稀释液特指反应结束后加入的液体, 不是反应溶剂:
    - 命中多条 -> 用 `ask_user_choice` 让用户从匹配项中选(options 是 `[{label: 中文名, value: 中文名, description: CAS号+SMILES}]`).
    - 0 命中 -> `ask_user_choice` 询问处理方式: 跳过该试剂 / 让我换名字 / 我去化学品库新增, 不要硬填.
-5. 用户选定的分析仪器: 用 `ask_user_choice(multi=True)` 让用户多选 GC_MS / UPLC_QTOF / HPLC. 然后**对每台已选仪器**再调 `list_analysis_methods(instrument=...)` + `ask_user_choice` 让用户从下拉中单选方法名.
+5. 分析仪器: 用户明确说 GC 或 GC-MS 时直接映射为 `GC_MS`, 明确说 UPLC 或 UPLC-QTOF 时直接映射为 `UPLC_QTOF`, 明确说 HPLC 时直接映射为 `HPLC`; 已明确且映射唯一时不要再弹分析仪器多选. 只有分析仪器缺失或表述模糊时, 才用 `ask_user_choice(multi=True)` 让用户多选 GC_MS / UPLC_QTOF / HPLC. 然后**对每台已选仪器**再调 `list_analysis_methods(instrument=...)` + `ask_user_choice` 让用户从下拉中单选方法名.
 6. 数据分析中目标产物 SMILES 由你按 `product-smiles-rules.md` 推断, 当量默认 1, 名称按反应类型(酯化产物/缩合产物/偶联产物等), 预期 RT 默认空.
 
 阶段 B: 写入网页, 用户网页修改
@@ -50,6 +50,8 @@ description: Use when the user wants to fill an EIT Hub synthesis task editor fr
 9. 等用户在对话里回复 "确认上传" / "OK" / "可以" / "上传任务" 等明确同意词. 不要催促, 不要在对话里 echo 表格.
 
 阶段 C: 上传与核算
+
+**硬性分工**: 用户在网页改完模板回复任意确认词("确认上传" / "OK" / "可以" / "上传任务" / "进行物料核算" / "上传并核算" 等同义) 时, 一律调 `submit_reaction_template()` (无参), 禁止再调 `save_reaction_template`. `save_reaction_template` 只在阶段 B 第 7 步首次写入或用户要求"重新覆盖磁盘"时使用, 且必须带完整 `template` payload. 不允许用 `save_reaction_template({})` 来"保留磁盘内容".
 
 10. 用户确认 → 调 `submit_reaction_template()` (CONTROL, 不带 template). 拿到 task_id 后用 `ask_user_choice` 询问是否进行物料核算.
 11. 用户同意核算 → 调 `run_resource_check(auto_generate_batch_file=True)` (CONTROL). 上料表自动刷新到网页.
@@ -79,7 +81,7 @@ description: Use when the user wants to fill an EIT Hub synthesis task editor fr
 ## 硬性原则
 
 - 不绕过校验: 化学品名先查后写, 分析方法名先查后选.
-- 不替用户决策: 默认值表中没有的字段, 必须用 ask_user_choice 询问.
+- 不替用户决策: 默认值表中没有且用户未明确给出的字段, 必须用 ask_user_choice 询问; 用户已明确且合法的字段直接采用, 不重复确认.
 - 不省略网页预览: save_reaction_template 后必须等用户在网页改完并回复确认上传, 才能 submit.
 - 不合并控制: save / submit / run_resource_check / save_batch_in_template / print_reagent_labels / print_batch_in_table 各自独立确认.
 - 不在对话里写选择题文字: 一律用 ask_user_choice 弹窗.

@@ -1,6 +1,6 @@
 # 全流程 ask_user_choice 调用范例与兜底分支
 
-所有需要用户决策的地方都用 `ask_user_choice` 工具弹窗, 不要在对话里写选择题文字. 本文给出典型场景的调用范例, 严格按这个 schema 写参数.
+所有需要用户决策的地方都用 `ask_user_choice` 工具弹窗, 不要在对话里写选择题文字. 用户已明确给出且符合规则的字段直接采用, 不要重复弹窗确认. 本文给出典型场景的调用范例, 严格按这个 schema 写参数.
 
 ## 通用调用 schema
 
@@ -18,7 +18,9 @@ selected 字段 AI 不要填, 由前端弹窗注入. 工具返回 `{answer, is_o
 
 ## 阶段 A 范例
 
-### A1 实验数
+### A1 实验数缺失, 模糊或非法
+
+如果用户已明确给出 12/24/36/48 个反应, 直接采用该实验数, 不要弹窗确认. 只有实验数缺失, 模糊或不在允许值中时, 才调用:
 
 ```
 ask_user_choice(
@@ -83,7 +85,38 @@ ask_user_choice(
 
 收到 rename 后再问 "请告诉我新的名字 (用 ask_user_choice 暂不支持自由文本, 请直接在对话里告诉我)" → 等用户文字回复. 注: 自由文本输入仍走对话, 选择类才走 ask_user_choice.
 
-### A5 内标种类(默认 1,3,5-三异丙基苯, 允许跳过)
+### A5 用户未说明反应溶剂
+
+一般反应体系都需要反应溶剂. 如果用户没有说明反应溶剂, 必须提醒并询问是否添加. 反应溶剂作为试剂表中的一项填写, 不是稀释液. 如果现有试剂列已满, 必须自动追加一组 `试剂`, `试剂量`, 不要让用户自行补列.
+
+```
+ask_user_choice(
+  question="一般反应体系需要反应溶剂, 是否添加反应溶剂?",
+  options=[
+    {label:"添加反应溶剂", value:"add_solvent", description:"我会继续询问溶剂名称和用量, 并写入试剂表."},
+    {label:"不添加", value:"no_solvent", description:"确认该反应无需反应溶剂."},
+  ],
+  multi=False, allow_other=False, allow_skip=False,
+)
+```
+
+用户选 add_solvent 后, 在对话里询问溶剂名称和用量. 溶剂名称必须先调 `search_chemical(keyword=...)` 查库, 命中后作为试剂表 reagent 写入. 如果没有空余试剂列, 固定行为是: 在 headers 末尾追加 `试剂`, `试剂量`, 并把溶剂名和用量写入每行对应新增列, 保持 `len(row) == len(headers)`.
+
+### A5.1 试剂列已满但必须写入反应溶剂
+
+当反应体系已有必要成分占满所有试剂列, 但还需要写入反应溶剂时, 不要提示用户自行补列. 必须扩展 payload:
+
+```
+headers = [...headers, "试剂", "试剂量"]
+rows = [
+  [...row, "<溶剂名>", "<溶剂用量>"]
+  for row in rows
+]
+```
+
+示例: 用户给出 `1,4-二氧六环/H2O(4/1) 1 mL/反应`, 且现有试剂列已满时, 追加一组列, 每行新增值为 `1,4-二氧六环/H2O(4/1)` 和 `1 mL`.
+
+### A6 内标种类(默认 1,3,5-三异丙基苯, 允许跳过)
 
 ```
 ask_user_choice(
@@ -97,7 +130,9 @@ ask_user_choice(
 
 注意: Other 选项需要用户输入名字后再走 search_chemical 校验.
 
-### A6 分析仪器(多选)
+### A7 分析仪器缺失或模糊(多选)
+
+用户明确说 GC 或 GC-MS 时直接映射为 `GC_MS`; 明确说 UPLC 或 UPLC-QTOF 时直接映射为 `UPLC_QTOF`; 明确说 HPLC 时直接映射为 `HPLC`. 已明确且映射唯一时直接采用, 不要弹分析仪器选择. 只有分析仪器缺失或表述模糊时, 才调用:
 
 ```
 ask_user_choice(
@@ -111,7 +146,7 @@ ask_user_choice(
 )
 ```
 
-### A7 分析方法(对每台已选仪器)
+### A8 分析方法(对每台已选仪器)
 
 调 `list_analysis_methods(instrument="hplc")` 拿到 methods, 然后:
 
@@ -125,7 +160,7 @@ ask_user_choice(
 )
 ```
 
-### A8 闪滤实验编号(允许跳过=测全部)
+### A9 闪滤实验编号(允许跳过=测全部)
 
 ```
 ask_user_choice(
@@ -246,7 +281,7 @@ ask_user_choice(
   options=[
     {label:"我去补料后重试", value:"replenish_retry"},
     {label:"调整试剂量后重新核算", value:"adjust"},
-    {label:"暂时忽略, 后续手动处理", value:"ignore"},
+    {label:"暂时忽略, 后续自行处理", value:"ignore"},
   ],
   multi=False, allow_other=False, allow_skip=False,
 )
